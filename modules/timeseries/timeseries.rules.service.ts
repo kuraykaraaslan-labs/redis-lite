@@ -16,6 +16,7 @@ import type { Database } from '@/modules/database/database.service';
 
 import { CompactionPolicySchema } from './timeseries.dto';
 import type { CreateRuleInput, DeleteRuleInput } from './timeseries.dto';
+import TimeseriesIndex from './timeseries.index';
 import TimeseriesMessages from './timeseries.messages';
 import TimeseriesStore from './timeseries.store';
 import type { TimeSeries } from './timeseries.structure';
@@ -49,8 +50,12 @@ export default class TimeseriesRulesService {
     return OK;
   }
 
-  /** After RENAME / RENAMENX moved `series` from `from` to `to`: its source and destinations now name `to`. */
+  /**
+   * After RENAME / RENAMENX moved `series` from `from` to `to`: its source and destinations now name `to`, and the label
+   * index files it under `to`.
+   */
   static renamed(db: Database, from: string, to: string, series: TimeSeries): void {
+    TimeseriesIndex.renamed(db, from, to, series);
     if (series.srcKey !== null) {
       const rule = TimeseriesStore.peekSeries(db, series.srcKey)?.rules.find((r) => r.destKey === from);
       if (rule) rule.destKey = to;

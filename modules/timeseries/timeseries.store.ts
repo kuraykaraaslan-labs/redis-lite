@@ -21,6 +21,7 @@ import TimeseriesAggregator from './timeseries.aggregator';
 import { CompactionPolicySchema } from './timeseries.dto';
 import { ChunkEncodingEnum, DuplicatePolicyEnum } from './timeseries.enums';
 import type { DuplicatePolicy } from './timeseries.enums';
+import TimeseriesIndex from './timeseries.index';
 import TimeseriesMessages from './timeseries.messages';
 import { TimeSeries } from './timeseries.structure';
 import type { CompactionRule, RangeQuery, Sample, SeriesOptions, SeriesSettings } from './timeseries.types';
@@ -111,16 +112,6 @@ export default class TimeseriesStore {
     return v?.type === 'timeseries' ? v.value : undefined;
   }
 
-  /** Every series of the database, by key name (the label index of TS.MGET / TS.MRANGE / TS.QUERYINDEX). */
-  static all(db: Database): Array<[string, TimeSeries]> {
-    const out: Array<[string, TimeSeries]> = [];
-    for (const key of db.keys()) {
-      const series = TimeseriesStore.peekSeries(db, key);
-      if (series) out.push([key, series]);
-    }
-    return out.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  }
-
   /** The live compaction rules of a source. */
   static validRules(db: Database, key: string, series: TimeSeries): CompactionRule[] {
     return series.rules.filter((r) => TimeseriesStore.peekSeries(db, r.destKey)?.srcKey === key);
@@ -173,6 +164,7 @@ export default class TimeseriesStore {
     const series = new TimeSeries(S.settings(ctx, options));
     for (const [label, value] of options.labels ?? []) series.labels.set(label, value);
     ctx.db.set(key, { type: 'timeseries', value: series });
+    TimeseriesIndex.added(ctx.db, key, series);
     const raw = ctx.server.config.get('ts-compaction-policy') ?? '';
     const policy = CompactionPolicySchema.safeParse(raw);
     // CONFIG SET validates the policy; a value given at startup is not, so a bad one is reported and skipped here
@@ -185,6 +177,7 @@ export default class TimeseriesStore {
       dest.labels = new Map(series.labels);
       dest.srcKey = key;
       ctx.db.set(destKey, { type: 'timeseries', value: dest });
+      TimeseriesIndex.added(ctx.db, destKey, dest);
       S.touch(ctx, destKey);
       series.rules.push({ destKey, aggregator: rule.aggregator, bucketDuration: rule.bucketDuration, alignTimestamp: rule.alignTimestamp, since: null });
     }

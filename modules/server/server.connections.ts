@@ -65,6 +65,7 @@ export class ServerConnections {
     client.closed = true;
     server.clients.delete(client);
     this.clientsById.delete(client.id);
+    client.watched.clear();
     if (client.tracking) TrackingService.disable(server.tracking, client);
     if (client.blocked) server.blocking.unblock(client.blocked);
     server.pubsub.forget(client);
@@ -106,5 +107,6 @@ export class ServerConnections {
     }
     server.clients.clear();
     this.clientsById.clear();
+    server.keyspace.watches.clear();
   }
 }

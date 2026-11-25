@@ -79,7 +79,7 @@ export function specKeys(extract: ((args: string[]) => string[]) | undefined, ar
 
 /**
  * Redis processCommand() and call(): the checks a command passes before it runs (existence, arity, auth, MULTI, ACL,
- * OOM, MISCONF, subscriber context), queueing inside MULTI, then the run itself with its side effects (WATCH versions,
+ * OOM, MISCONF, subscriber context), queueing inside MULTI, then the run itself with its side effects (WATCH invalidation,
  * propagation, keyspace events, tracking, stats, slowlog). An AppError thrown by a handler becomes its error reply.
  */
 export class ServerDispatcher {

@@ -6,6 +6,8 @@ import { encode, RespPush } from '@/libs/resp';
 
 import type { AclUser } from '@/modules/acl/acl.structure';
 
+import { WatchedKeys } from './server.watch';
+
 export interface Waiter {
   client: Client;
   /** `${db}:${key}` of every key the client waits on. */
@@ -45,8 +47,8 @@ export class Client {
   /** MULTI state: null when not in a transaction. */
   multi: string[][] | null = null;
   multiError = false;
-  /** WATCHed `${db}:${key}` → version at WATCH time. */
-  readonly watched = new Map<string, number>();
+  /** WATCHed keys and whether one of them changed since (registered in the server's ServerWatches). */
+  readonly watched = new WatchedKeys();
 
   readonly channels = new Set<string>();
   readonly patterns = new Set<string>();

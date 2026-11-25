@@ -162,7 +162,15 @@ export class TimeSeries {
   srcKey: string | null = null;
   private count = 0;
 
-  constructor(public settings: SeriesSettings) {}
+  /**
+   * Series constructed so far in this process. The label index compares it with the count it last accounted for: a
+   * series built outside the module's own creation path (RESTORE, COPY, loading an RDB) makes it rescan.
+   */
+  static created = 0;
+
+  constructor(public settings: SeriesSettings) {
+    TimeSeries.created++;
+  }
 
   // ──────────────────────────────────────────────
   // Private Helpers

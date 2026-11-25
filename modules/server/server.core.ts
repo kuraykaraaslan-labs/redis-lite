@@ -46,8 +46,8 @@ const MEMORY_MODEL_CONFIGS = /max-listpack|max-intset|max-ziplist|stream-node|li
  *
  * This class owns the shared state and the lifecycle (listen, close, SHUTDOWN, config side effects). The work is done by
  * stateful components, one per responsibility, which the public methods below delegate to: `connections` (sockets and
- * I/O), `dispatcher` (checks and execution), `blocking` (blocked clients), `pubsub` (fan-out), `keyspace` (WATCH
- * versions, key changes, notifications), `access` (ACL wiring), `observer` (stats, SLOWLOG, MONITOR) and `memoryModel`.
+ * I/O), `dispatcher` (checks and execution), `blocking` (blocked clients), `pubsub` (fan-out), `keyspace` (WATCHed
+ * keys, key changes, notifications), `access` (ACL wiring), `observer` (stats, SLOWLOG, MONITOR) and `memoryModel`.
  */
 export class RedisLiteServer {
   // ──────────────────────────────────────────────
@@ -420,8 +420,9 @@ export class RedisLiteServer {
     this.keyspace.touch(dbIndex, key);
   }
 
-  keyVersion(dbIndex: number, key: string): number {
-    return this.keyspace.keyVersion(dbIndex, key);
+  /** WATCH: registers `key` of `dbIndex` in the client's watched keys; a later change marks the client dirty. */
+  watchKey(client: Client, dbIndex: number, key: string): void {
+    client.watched.add(this.keyspace.watches, dbIndex, key);
   }
 
   /** Evicts one key (maxmemory): delete, propagate DEL / UNLINK, `evicted` event, WATCH and tracking invalidation. */

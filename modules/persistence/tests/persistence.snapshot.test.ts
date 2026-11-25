@@ -58,7 +58,8 @@ describe('RDB', () => {
     const info = h.p.info();
     expect(info).toContain('rdb_bgsave_in_progress:0');
     expect(info).toContain('rdb_last_bgsave_status:ok');
-    expect(info).toContain('rdb_last_bgsave_time_sec:0');
+    // Elapsed whole seconds: 0 on an idle machine, more under heavy load (as in Redis).
+    expect(info.some((line) => /^rdb_last_bgsave_time_sec:\d+$/.test(line))).toBe(true);
     expect(info).toContain('rdb_saves:1');
     expect(info).toContain('aof_rewrites:1');
     expect(info).toContain('rdb_changes_since_last_save:0');

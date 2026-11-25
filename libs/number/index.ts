@@ -24,6 +24,30 @@ export function intReply(n: bigint): number | bigint {
   return n >= BigInt(Number.MIN_SAFE_INTEGER) && n <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(n) : n;
 }
 
+/** The sum `addInt64` computed (a number when it is a safe integer, else a bigint), or why there is none. */
+export type Int64Sum = number | bigint | 'not-integer' | 'overflow';
+
+/** Longest decimal text (sign included) that is always a safe integer: 15 characters stay below 10^15 < 2^53. */
+const SAFE_DIGITS = 15;
+const SAFE_DELTA = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * INCRBY / HINCRBY: `stored` (an int64 as text; undefined = 0) plus `delta`. `not-integer` when `stored` is not a
+ * strict int64, `overflow` when the sum leaves the int64 range. Small counters take a float64 fast path (exact: both
+ * operands and the sum are checked to be safe integers); anything else is computed with bigints.
+ */
+export function addInt64(stored: string | undefined, delta: bigint): Int64Sum {
+  if (stored === undefined || (stored.length <= SAFE_DIGITS && INTEGER_RE.test(stored))) {
+    if (delta <= SAFE_DELTA && delta >= -SAFE_DELTA) {
+      const sum = (stored === undefined ? 0 : Number(stored)) + Number(delta);
+      if (Number.isSafeInteger(sum)) return sum;
+    }
+  } else if (!isInt64(stored)) return 'not-integer';
+  const result = (stored === undefined ? 0n : BigInt(stored)) + delta;
+  if (result < INT64_MIN || result > INT64_MAX) return 'overflow';
+  return intReply(result);
+}
+
 /** Strict Redis integer (no spaces, no `+`, no leading zeros) within the JS safe-integer range. */
 export function isInteger(value: string): boolean {
   return INTEGER_RE.test(value) && Number.isSafeInteger(Number(value));

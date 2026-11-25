@@ -35,6 +35,8 @@ export class Propagator {
   private noTransaction = false;
   private paused = 0;
   private readonly sinks: PropagationSink[] = [];
+  /** Per sink: whether it currently takes ops (an AOF sink while appendonly is off does not). Undefined = always. */
+  private readonly sinkActive: Array<(() => boolean) | undefined> = [];
 
   constructor(private readonly options: PropagatorOptions) {}
 
@@ -44,6 +46,19 @@ export class Propagator {
 
   private lazy(name: string): boolean {
     return this.options.config.get(name) === 'yes';
+  }
+
+  /**
+   * Whether anything would receive the ops of a command recorded now. When nothing would (no AOF, no replica), recording
+   * is skipped entirely: computing a command's propagated form costs a rewrite and allocations on every write.
+   */
+  private get wanted(): boolean {
+    const active = this.sinkActive;
+    for (let i = 0; i < active.length; i++) {
+      const isActive = active[i];
+      if (!isActive || isActive()) return true;
+    }
+    return false;
   }
 
   private push(ops: PropagatedOp[]): void {
@@ -68,12 +83,19 @@ export class Propagator {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** Adds a sink (AOF, replication). Returns a function that removes it. */
-  addSink(sink: PropagationSink): () => void {
+  /**
+   * Adds a sink (AOF, replication). `active`: whether the sink takes ops right now; while no sink is active nothing is
+   * recorded (a sink that ignores ops in some state, like the AOF while appendonly is off, passes it). Returns a function
+   * that removes the sink.
+   */
+  addSink(sink: PropagationSink, active?: () => boolean): () => void {
     this.sinks.push(sink);
+    this.sinkActive.push(active);
     return () => {
       const i = this.sinks.indexOf(sink);
-      if (i >= 0) this.sinks.splice(i, 1);
+      if (i < 0) return;
+      this.sinks.splice(i, 1);
+      this.sinkActive.splice(i, 1);
     };
   }
 
@@ -116,7 +138,7 @@ export class Propagator {
    * only when it did, or when propagation is forced). Returns the ops added.
    */
   record(dbIndex: number, argv: readonly string[], reply: Reply, dirty: number, hints: RecordHints = {}): PropagatedOp[] {
-    if (this.paused) return [];
+    if (this.paused || !this.wanted) return [];
     if (dirty <= 0 && !PersistenceService.isForcedPropagation(argv)) return [];
     const database = this.options.databases[dbIndex];
     if (!database) return [];
@@ -133,7 +155,7 @@ export class Propagator {
 
   /** Redis alsoPropagate(): adds an op to the current unit (or propagates it at once outside a unit). */
   also(dbIndex: number, argv: string[], target: PropagationTarget = 'all'): void {
-    if (this.paused) return;
+    if (this.paused || !this.wanted) return;
     this.push([this.op(dbIndex, argv, target)]);
   }
 
@@ -143,7 +165,7 @@ export class Propagator {
    * unit), so a write on an expired key propagates as MULTI, DEL, <write>, EXEC. UNCERTAIN for 8.x.
    */
   expired(dbIndex: number, key: string): void {
-    if (this.paused) return;
+    if (this.paused || !this.wanted) return;
     this.push([PersistenceService.expiredKeyOp(dbIndex, key, this.lazy('lazyfree-lazy-expire'))]);
   }
 }

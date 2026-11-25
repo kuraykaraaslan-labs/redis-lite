@@ -185,6 +185,14 @@ export function parseMemory(value: string): bigint | null {
 
 export class ServerConfig {
   private readonly values = new Map<string, string>(Object.entries(CONFIG_DEFAULTS));
+  /**
+   * Hot-path caches, by the name as the caller spells it (no canonicalisation, no number parsing per read). Only names
+   * that are already canonical or a known alias are cached, so user-supplied spellings cannot grow them past the config
+   * table. Every write goes through `set`, which empties them (CONFIG SET, config file load, startup options).
+   */
+  private readonly getCache = new Map<string, string>();
+  private readonly numCache = new Map<string, number>();
+  private lfuCache: boolean | null = null;
 
   constructor(fixed: Record<string, string>) {
     for (const [k, v] of Object.entries(fixed)) this.values.set(ServerConfig.canonical(k), v);
@@ -201,11 +209,21 @@ export class ServerConfig {
   }
 
   get(name: string): string | undefined {
-    return this.values.get(ServerConfig.canonical(name));
+    const cache = this.getCache;
+    const hit = cache.get(name);
+    if (hit !== undefined) return hit;
+    const canonical = ServerConfig.canonical(name);
+    const value = this.values.get(canonical);
+    if (value !== undefined && (canonical === name || ALIASES[name] !== undefined)) cache.set(name, value);
+    return value;
   }
 
   num(name: string): number {
-    return Number(this.get(name) ?? '0');
+    const hit = this.numCache.get(name);
+    if (hit !== undefined) return hit;
+    const value = Number(this.get(name) ?? '0');
+    if (this.getCache.has(name)) this.numCache.set(name, value);
+    return value;
   }
 
   has(name: string): boolean {
@@ -254,6 +272,9 @@ export class ServerConfig {
 
   set(name: string, value: string): void {
     this.values.set(ServerConfig.canonical(name), value);
+    this.getCache.clear();
+    this.numCache.clear();
+    this.lfuCache = null;
   }
 
   entries(): Array<[string, string]> {
@@ -261,6 +282,6 @@ export class ServerConfig {
   }
 
   get lfu(): boolean {
-    return (this.get('maxmemory-policy') ?? '').includes('lfu');
+    return (this.lfuCache ??= (this.get('maxmemory-policy') ?? '').includes('lfu'));
   }
 }

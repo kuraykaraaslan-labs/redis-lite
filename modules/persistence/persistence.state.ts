@@ -59,7 +59,11 @@ export abstract class PersistenceState {
 
   constructor(protected readonly host: PersistenceHost) {
     this.propagator = new Propagator({ databases: host.databases, config: host.config });
-    this.propagator.addSink((ops) => this.feedOps(ops));
+    // the AOF takes ops only while it is on (feedOps drops them otherwise): with AOF off nothing is recorded at all
+    this.propagator.addSink(
+      (ops) => this.feedOps(ops),
+      () => this.aofState === 'on' && !this.loading,
+    );
   }
 
   // ──────────────────────────────────────────────

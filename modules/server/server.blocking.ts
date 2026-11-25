@@ -130,7 +130,9 @@ export class ServerBlocking {
   }
 
   /** A key changed: clients waiting on it are served after the current command. */
-  keyChanged(dbKey: string): void {
+  keyChanged(dbIndex: number, key: string): void {
+    if (!this.waiters.size) return;
+    const dbKey = `${dbIndex}:${key}`;
     if (this.waiters.has(dbKey)) this.readyKeys.add(dbKey);
   }
 

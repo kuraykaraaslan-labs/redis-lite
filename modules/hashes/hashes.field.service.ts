@@ -1,5 +1,5 @@
 import { AppError } from '@/libs/app-error';
-import { INT64_MAX, INT64_MIN, formatFloat, intReply, isInt64, toFloat } from '@/libs/number';
+import { addInt64, formatFloat, toFloat } from '@/libs/number';
 import { OK, RespMap } from '@/libs/resp';
 import type { Status } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
@@ -56,12 +56,11 @@ export default class HashesFieldService {
 
   static hIncrBy(ctx: CommandContext, { key, field, delta }: HIncrByInput): number | bigint {
     const h = HashStore.readForWrite(ctx, key);
-    const cur = h.get(field);
-    if (cur !== undefined && !isInt64(cur)) throw new AppError(HashesMessages.HASH_NOT_INTEGER);
-    const result = (cur === undefined ? 0n : BigInt(cur)) + delta;
-    if (result < INT64_MIN || result > INT64_MAX) throw new AppError(RespMessages.INCR_OVERFLOW);
-    h.set(field, result.toString());
-    return intReply(result);
+    const result = addInt64(h.get(field), delta);
+    if (result === 'not-integer') throw new AppError(HashesMessages.HASH_NOT_INTEGER);
+    if (result === 'overflow') throw new AppError(RespMessages.INCR_OVERFLOW);
+    h.set(field, String(result));
+    return result;
   }
 
   static hIncrByFloat(ctx: CommandContext, { key, field, increment }: HIncrByFloatInput): string {

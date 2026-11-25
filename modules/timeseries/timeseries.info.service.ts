@@ -9,6 +9,7 @@ import type { Reply } from '@/libs/resp';
 import type { CommandContext } from '@/modules/command/command.types';
 
 import type { AlterInput, KeyFlagInput } from './timeseries.dto';
+import TimeseriesIndex from './timeseries.index';
 import TimeseriesReply from './timeseries.reply';
 import TimeseriesStore from './timeseries.store';
 
@@ -69,7 +70,10 @@ export default class TimeseriesInfoService {
       s.ignoreMaxTimeDiff = options.ignore.maxTimeDiff;
       s.ignoreMaxValDiff = options.ignore.maxValDiff;
     }
-    if (options.labels !== null) series.labels = new Map(options.labels);
+    if (options.labels !== null) {
+      series.labels = new Map(options.labels);
+      TimeseriesIndex.relabeled(ctx.db, key, series);
+    }
     if (options.retention !== undefined) series.trim();
     return OK;
   }

@@ -5,7 +5,6 @@ import type { Reply } from '@/libs/resp';
 import type { AclDenial } from '@/modules/acl/acl.types';
 import { Block, NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
-import type { Client } from '@/modules/server/server.service';
 
 import TransactionsMessages from './transactions.messages';
 
@@ -23,19 +22,6 @@ export default class TransactionsExecService {
   };
 
   // ──────────────────────────────────────────────
-  // Private Helpers
-  // ──────────────────────────────────────────────
-
-  /** A WATCHed key changed since WATCH (its version moved). */
-  private static watchDirty(ctx: CommandContext, client: Client): boolean {
-    for (const [k, version] of client.watched) {
-      const sep = k.indexOf(':');
-      if (ctx.server.keyVersion(Number(k.slice(0, sep)), k.slice(sep + 1)) !== version) return true;
-    }
-    return false;
-  }
-
-  // ──────────────────────────────────────────────
   // Public Methods
   // ──────────────────────────────────────────────
 
@@ -45,7 +31,7 @@ export default class TransactionsExecService {
     const queued = client.multi;
     if (!queued) return new RespError(TransactionsMessages.EXEC_WITHOUT_MULTI);
     const aborted = client.multiError;
-    const dirty = TransactionsExecService.watchDirty(ctx, client);
+    const dirty = client.watched.dirty;
     client.multi = null;
     client.multiError = false;
     client.watched.clear();

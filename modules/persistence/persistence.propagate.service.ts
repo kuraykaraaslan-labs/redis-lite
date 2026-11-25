@@ -37,6 +37,19 @@ export default class PersistencePropagateService {
   private static readonly SPOP_BATCH = 1024;
 
   // ──────────────────────────────────────────────
+  // Private Helpers: shared
+  // ──────────────────────────────────────────────
+
+  /** The command as typed, in its database. */
+  private static verbatim(argv: readonly string[], db: number): PropagatedOp[] {
+    return [PropagateBaseRules.op(db, [...argv])];
+  }
+
+  private static exists(ctx: PropagateContext, key: string): boolean {
+    return ctx.database.peek(key) !== undefined;
+  }
+
+  // ──────────────────────────────────────────────
   // Private Helpers: strings / keys
   // ──────────────────────────────────────────────
 
@@ -136,15 +149,11 @@ export default class PersistencePropagateService {
     const db = ctx.db;
     if (P.NEVER.has(name)) return [];
     if (reply instanceof RespError) return [];
-    const verbatim = (): PropagatedOp[] => [op(db, [...argv])];
-    const exists = (key: string): boolean => ctx.database.peek(key) !== undefined;
-    const expireOf = (key: string): number | undefined => ctx.database.getExpire(key);
     const lazyExpire = Boolean(ctx.lazyfreeLazyExpire);
-    const lazyServer = Boolean(ctx.lazyfreeLazyServerDel);
 
     switch (name) {
       case 'function':
-        return argv.length > 1 && P.FUNCTION_WRITES.has(lc(argv[1])) ? verbatim() : [];
+        return argv.length > 1 && P.FUNCTION_WRITES.has(lc(argv[1])) ? P.verbatim(argv, db) : [];
       case 'publish':
       case 'spublish':
         return [op(db, [...argv], 'repl')];
@@ -156,8 +165,8 @@ export default class PersistencePropagateService {
       case 'psetex': {
         // setGenericCommand rewrites to SET key value PXAT <ms>.
         const key = argv[1];
-        const at = expireOf(key);
-        if (at === undefined) return exists(key) ? [op(db, ['SET', key, argv[3]])] : [delOp(db, key, lazyExpire)];
+        const at = ctx.database.getExpire(key);
+        if (at === undefined) return P.exists(ctx, key) ? [op(db, ['SET', key, argv[3]])] : [delOp(db, key, lazyExpire)];
         return [op(db, ['SET', key, argv[3], 'PXAT', String(at)])];
       }
       case 'getset':
@@ -179,9 +188,9 @@ export default class PersistencePropagateService {
         // expireGenericCommand: a time in the past deletes the key (DEL / UNLINK per lazyfree-lazy-expire); otherwise
         // argv[0] becomes PEXPIREAT and argv[2] the absolute ms; NX/XX/GT/LT stay (rewriteClientCommandArgument).
         const key = argv[1];
-        if (!exists(key)) return [delOp(db, key, lazyExpire)];
-        if (name === 'pexpireat') return verbatim();
-        const at = expireOf(key);
+        if (!P.exists(ctx, key)) return [delOp(db, key, lazyExpire)];
+        if (name === 'pexpireat') return P.verbatim(argv, db);
+        const at = ctx.database.getExpire(key);
         return [op(db, ['PEXPIREAT', key, at === undefined ? argv[2] : String(at), ...argv.slice(3)])];
       }
       case 'restore':
@@ -212,7 +221,7 @@ export default class PersistencePropagateService {
         const members = items(reply).map(str);
         if (!members.length) return [];
         // Whole set popped: spopWithCountCommand propagates DEL / UNLINK (lazyfree-lazy-server-del).
-        if (!exists(key)) return [delOp(db, key, lazyServer)];
+        if (!P.exists(ctx, key)) return [delOp(db, key, Boolean(ctx.lazyfreeLazyServerDel))];
         const out: PropagatedOp[] = [];
         for (let i = 0; i < members.length; i += P.SPOP_BATCH) out.push(op(db, ['SREM', key, ...members.slice(i, i + P.SPOP_BATCH)]));
         return out;
@@ -278,7 +287,7 @@ export default class PersistencePropagateService {
         return PropagateTimeseriesRules.incrBy(argv, reply, ctx);
 
       default:
-        return verbatim();
+        return P.verbatim(argv, db);
     }
   }
 

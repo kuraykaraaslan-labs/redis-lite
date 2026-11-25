@@ -12,6 +12,7 @@ import type { RedisValue } from '@/modules/database/database.types';
 
 import type { RedisLiteServer } from './server.core';
 import type { KeyState } from './server.types';
+import { ServerWatches } from './server.watch';
 
 /** Element count of a value (stream entries, list / set / hash / zset elements, time series samples, string bytes). */
 function valueSize(v: RedisValue | undefined): number {
@@ -39,30 +40,19 @@ export interface CommandOutcome {
 }
 
 /**
- * Key change tracking: the per-key versions WATCH compares, what happens when a key is modified, expires, is evicted or
+ * Key change tracking: the WATCHed keys a change invalidates (ServerWatches), what happens when a key is modified, expires, is evicted or
  * its database is flushed / swapped, and the keyspace notifications those changes publish.
  */
 export class ServerKeyspace {
-  private readonly versions = new Map<string, number>();
+  /** The clients WATCHing each key; only watched keys have an entry. */
+  readonly watches = new ServerWatches();
   private notifyCache: { raw: string; flags: NotifyFlags | null } = { raw: '', flags: null };
 
   constructor(private readonly server: RedisLiteServer) {}
 
   // ──────────────────────────────────────────────
-  // Private Helpers
+  // Public Methods: changes
   // ──────────────────────────────────────────────
-
-  private bump(dbKey: string): void {
-    this.versions.set(dbKey, (this.versions.get(dbKey) ?? 0) + 1);
-  }
-
-  // ──────────────────────────────────────────────
-  // Public Methods: versions and changes
-  // ──────────────────────────────────────────────
-
-  keyVersion(dbIndex: number, key: string): number {
-    return this.versions.get(`${dbIndex}:${key}`) ?? 0;
-  }
 
   /** Marks a key modified: invalidates WATCH and wakes clients blocked on it. */
   touch(dbIndex: number, key: string): void {
@@ -73,16 +63,15 @@ export class ServerKeyspace {
     const value = server.databases[dbIndex]?.peek(key);
     if (value) server.memoryModel.markAllocated(dbIndex);
     if (value) DatabaseService.updateEncoding(value, server.config, value.type === 'hash' && HashesService.hashHasFieldTtl(value.value));
-    const k = `${dbIndex}:${key}`;
-    this.bump(k);
-    server.blocking.keyChanged(k);
+    this.watches.touched(dbIndex, key);
+    server.blocking.keyChanged(dbIndex, key);
   }
 
   /** A key expired (on access or by the active cycle): DEL / UNLINK propagation, `expired` event, invalidation. */
   onExpired(dbIndex: number, key: string): void {
     const server = this.server;
     server.stats.expired++;
-    this.bump(`${dbIndex}:${key}`);
+    this.watches.touched(dbIndex, key);
     server.persistence.propagator.expired(dbIndex, key);
     this.notify(dbIndex, [{ cls: 'x', event: 'expired', key }]);
     TrackingService.invalidate(server.tracking, key, null);
@@ -95,7 +84,7 @@ export class ServerKeyspace {
     if (!db.remove(key)) return;
     server.persistence.propagator.also(dbIndex, [server.config.get('lazyfree-lazy-eviction') === 'yes' ? 'UNLINK' : 'DEL', key]);
     this.notify(dbIndex, [{ cls: 'e', event: 'evicted', key }]);
-    this.bump(`${dbIndex}:${key}`);
+    this.watches.touched(dbIndex, key);
     TrackingService.invalidate(server.tracking, key, null);
   }
 
@@ -115,18 +104,8 @@ export class ServerKeyspace {
     const server = this.server;
     // the peak is sampled on demand; take a sample before a database is emptied
     if (other === undefined && server.databases[dbIndex]?.storedKeys) server.memoryReport();
-    const prefix = `${dbIndex}:`;
-    const bumped = new Set<string>();
-    for (const c of server.clients) {
-      for (const k of c.watched.keys()) {
-        if (!k.startsWith(prefix) || bumped.has(k)) continue;
-        const key = k.slice(prefix.length);
-        const exists = server.databases[dbIndex].peek(key) !== undefined || (other !== undefined && server.databases[other].peek(key) !== undefined);
-        if (!exists) continue;
-        bumped.add(k);
-        this.bump(k);
-      }
-    }
+    const databases = server.databases;
+    this.watches.touchedWhere(dbIndex, (key) => databases[dbIndex].peek(key) !== undefined || (other !== undefined && databases[other].peek(key) !== undefined));
   }
 
   /**

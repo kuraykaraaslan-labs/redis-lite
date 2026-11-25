@@ -1,5 +1,5 @@
 import { AppError } from '@/libs/app-error';
-import { INT64_MAX, INT64_MIN, formatFloat, intReply, isInt64, toFloat } from '@/libs/number';
+import { addInt64, formatFloat, toFloat } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
 
 import type { CommandContext } from '@/modules/command/command.types';
@@ -10,12 +10,11 @@ import type { IncrByFloatInput, IncrByInput } from './strings.dto';
 export default class StringsCounterService {
   /** Adds `delta` to the int64 stored at `key` (0 when missing) and returns the result. */
   static incrBy(ctx: CommandContext, { key, delta }: IncrByInput): number | bigint {
-    const current = ctx.db.get(key, 'string');
-    if (current !== undefined && !isInt64(current)) throw new AppError(RespMessages.NOT_INTEGER);
-    const result = (current === undefined ? 0n : BigInt(current)) + delta;
-    if (result < INT64_MIN || result > INT64_MAX) throw new AppError(RespMessages.INCR_OVERFLOW);
-    ctx.db.set(key, { type: 'string', value: result.toString() }, true);
-    return intReply(result);
+    const result = addInt64(ctx.db.get(key, 'string'), delta);
+    if (result === 'not-integer') throw new AppError(RespMessages.NOT_INTEGER);
+    if (result === 'overflow') throw new AppError(RespMessages.INCR_OVERFLOW);
+    ctx.db.set(key, { type: 'string', value: String(result) }, true);
+    return result;
   }
 
   /** INCRBYFLOAT on the value read before the arguments were parsed (Redis's precedence, see the commands layer). */

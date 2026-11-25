@@ -37,11 +37,20 @@ class Sock {
     });
   }
 
-  /** Writes raw bytes and returns everything received within `ms`. */
+  /**
+   * Writes raw bytes and returns everything received: waits at least `ms`, then until no new bytes arrived for `ms`
+   * (capped at 3 s), so a loaded machine does not cut a reply short.
+   */
   async write(data: string, ms = 80): Promise<string> {
     this.buffer = '';
     this.socket.write(data, 'latin1');
     await sleep(ms);
+    const deadline = Date.now() + 3000;
+    let seen = -1;
+    while ((this.buffer.length === 0 || this.buffer.length !== seen) && !this.closed && Date.now() < deadline) {
+      seen = this.buffer.length;
+      await sleep(ms);
+    }
     const out = this.buffer;
     this.buffer = '';
     return out;

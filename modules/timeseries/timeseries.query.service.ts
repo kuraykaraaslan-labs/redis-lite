@@ -14,6 +14,7 @@ import type { CommandContext } from '@/modules/command/command.types';
 
 import TimeseriesAggregator from './timeseries.aggregator';
 import type { MGetInput, MRangeInput, QueryIndexInput } from './timeseries.dto';
+import TimeseriesIndex from './timeseries.index';
 import TimeseriesReply from './timeseries.reply';
 import TimeseriesStore from './timeseries.store';
 import type { TimeSeries } from './timeseries.structure';
@@ -24,17 +25,9 @@ export default class TimeseriesQueryService {
   // Private Helpers
   // ──────────────────────────────────────────────
 
-  private static matches(series: TimeSeries, matchers: LabelMatcher[]): boolean {
-    return matchers.every(({ label, negate, values }) => {
-      const value = series.labels.get(label);
-      if (!values.length) return negate ? value !== undefined : value === undefined;
-      const hit = value !== undefined && values.includes(value);
-      return negate ? !hit : hit;
-    });
-  }
-
+  /** The matching series of the current database, by key name (answered from the label index). */
   private static select(ctx: CommandContext, matchers: LabelMatcher[]): Array<[string, TimeSeries]> {
-    return TimeseriesStore.all(ctx.db).filter(([, series]) => TimeseriesQueryService.matches(series, matchers));
+    return TimeseriesIndex.select(ctx, matchers);
   }
 
   /** GROUPBY … REDUCE: one row per value of the label, samples reduced per timestamp. */

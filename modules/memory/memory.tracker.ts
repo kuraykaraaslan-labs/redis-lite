@@ -18,6 +18,13 @@ import type { DbSizes, DbSnapshot } from './memory.types';
 
 /** Per-server stateful component: cached key sizes and per-database totals. */
 export class MemoryTracker {
+  /**
+   * Pending re-sizes kept per database before falling back to a full re-size: past this many (and past the database's
+   * key count), remembering every changed key costs more than re-sizing everything, and a server that never reads
+   * used_memory (no maxmemory, no INFO) would otherwise keep every key it ever touched.
+   */
+  private static readonly STALE_LIMIT = 4096;
+
   private readonly dbs: DbSizes[];
 
   constructor(
@@ -45,6 +52,14 @@ export class MemoryTracker {
       d.sizes.delete(key);
     }
     d.stale.add(key);
+    if (d.stale.size > MemoryTracker.STALE_LIMIT && d.stale.size > this.databases[dbIndex].storedKeys) this.changed(dbIndex, null);
+  }
+
+  /** Keys waiting to be re-sized, all databases (bounded; see STALE_LIMIT). */
+  get pendingKeys(): number {
+    let n = 0;
+    for (const d of this.dbs) n += d.stale.size;
+    return n;
   }
 
   /** Every key of every database must be re-sized (a config that changes the memory model). */
