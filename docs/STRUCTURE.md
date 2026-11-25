@@ -21,7 +21,7 @@ libs/                    thin infrastructure, no Redis semantics of its own
                          Int64Schema, FloatSchema(With), ExpireTimeSchema(s), BlockTimeoutSchema, ScanCursorSchema,
                          ScanOptionsSchema, and the option-loop helpers parseArg / Parsed<T> / reject / firstIssue
     tests/               unit tests of the primitives (no server)
-  resp/                  RESP2/RESP3 codec and reply types; messages.ts = error texts shared by several modules or
+  resp/                  RESP2/RESP3 codec (reply.ts types, encoder.ts, parser.ts) and reply types; messages.ts = error texts shared by several modules or
                          by the libs/schemas primitives (protocol errors included)
   number/, glob/         pure Redis number recognition/formatting (no error replies), Redis glob matching
 modules/<module>/        one folder per command group or subsystem (see the mapping below)
@@ -49,7 +49,7 @@ texts, `<module>.messages.ts`. The table lists the rest.
 | `strings` | the [worked example](#the-module-recipe-worked-example-modulesstrings) (also owns LCS and SUBSTR) | | `src/commands/strings.ts` (+ LCS / SUBSTR from `bitmaps.ts`) |
 | `bitmaps` | sub-services `bit` (GETBIT, SETBIT, BITCOUNT, BITPOS), `op` (BITOP), `field` (BITFIELD) | `bitmaps.structure.ts`, `bitmaps.types.ts`, `bitmaps.enums.ts` | `src/commands/bitmaps.ts` |
 | `hashes` | sub-services `field` (HSET, HGET…), `getset` (HGETDEL, HGETEX, HSETEX), `iteration` (HSCAN, HRANDFIELD), `ttl` (HEXPIRE / HTTL families, HPERSIST) | `hashes.structure.ts` (HashStore: field TTLs), `hashes.types.ts`, `hashes.enums.ts` | `src/commands/hashes.ts` |
-| `lists` | sub-services `push`, `index`, `move` (incl. blocking pops) | `lists.structure.ts`, `lists.enums.ts` | `src/commands/lists.ts` |
+| `lists` | sub-services `push`, `index`, `move` (incl. blocking pops) | `lists.structure.ts`, `lists.deque.structure.ts` (ring-buffer deque behind every list value, tracks listpack bytes), `lists.types.ts`, `lists.enums.ts` | `src/commands/lists.ts` |
 | `sets` | sub-services `member`, `random` (SPOP, SRANDMEMBER), `algebra` (SUNION, SINTER, SDIFF, SINTERCARD), `scan` (SSCAN) | `sets.structure.ts`, `sets.enums.ts` | `src/commands/sets.ts` |
 | `zsets` | sub-services `write`, `query`, `range`, `pop`, `combine` | `zsets.structure.ts` (sorted set), `zsets.types.ts`, `zsets.enums.ts` | `src/commands/zsets.ts`, `src/store/zset.ts` |
 | `streams` | sub-services `append`, `range`, `read`, `group`, `pending`, `info` | `streams.structure.ts` (stream, ids), `streams.types.ts`, `streams.enums.ts` | `src/commands/streams.ts`, `src/store/stream.ts` |

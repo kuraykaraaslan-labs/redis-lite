@@ -1,3 +1,4 @@
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
 import { idToString, Stream } from '@/modules/streams/streams.structure';
 import { ZSet } from '@/modules/zsets/zsets.structure';
 import type { RedisValue } from '@/modules/database/database.types';
@@ -159,10 +160,10 @@ export default class PersistenceObjectDecoderCodec {
         const n = io.readLen(r);
         const list: string[] = [];
         for (let i = 0; i < n; i++) list.push(io.readStr(r));
-        return { value: { type: 'list', value: list } };
+        return { value: { type: 'list', value: ListDeque.from(list) } };
       }
       case RDB_TYPE.LIST_ZIPLIST:
-        return { value: { type: 'list', value: lp.ziplistDecode(io.readStringBuf(r)).map(lp.entryToString) } };
+        return { value: { type: 'list', value: ListDeque.from(lp.ziplistDecode(io.readStringBuf(r)).map(lp.entryToString)) } };
       case RDB_TYPE.LIST_QUICKLIST:
       case RDB_TYPE.LIST_QUICKLIST_2: {
         const n = io.readLen(r);
@@ -178,7 +179,7 @@ export default class PersistenceObjectDecoderCodec {
           else if (container === QUICKLIST_CONTAINER.PACKED) list.push(...lp.listpackStrings(blob));
           else throw bad();
         }
-        return { value: { type: 'list', value: list } };
+        return { value: { type: 'list', value: ListDeque.from(list) } };
       }
       case RDB_TYPE.SET: {
         const n = io.readLen(r);

@@ -36,7 +36,7 @@ export default class MemoryUsageService {
   }
 
   /** The ql_* fields DEBUG OBJECT prints for a quicklist-encoded list (compression not modelled: ql_compressed = depth != 0). */
-  static debugQuicklistInfo(list: readonly string[], fill: number, compressDepth = 0): QuicklistDebugInfo {
+  static debugQuicklistInfo(list: Iterable<string> & { readonly length: number }, fill: number, compressDepth = 0): QuicklistDebugInfo {
     const nodes = MemoryQuicklistModel.quicklistNodes(list, fill);
     return {
       nodes: nodes.length,

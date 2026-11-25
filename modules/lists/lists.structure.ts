@@ -4,6 +4,7 @@ import { RespMessages } from '@/libs/resp/messages';
 
 import type { CommandContext } from '@/modules/command/command.types';
 
+import { ListDeque } from './lists.deque.structure';
 import type { ListSide } from './lists.enums';
 import type { ListValue } from './lists.types';
 
@@ -29,7 +30,7 @@ export default class ListStore {
 
   /** A new, empty list value. */
   static create(): ListValue {
-    return [];
+    return new ListDeque();
   }
 
   /** The list at `key`; undefined when missing; WRONGTYPE otherwise. */

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
 import { ZSet } from '@/modules/zsets/zsets.structure';
 
 import { RDB_TYPE } from '../persistence.enums';
@@ -115,7 +116,7 @@ describe('intset / ziplist / zipmap', () => {
     expect(list.value).toEqual({ type: 'list', value: ['a', '12', '-5', '1000', '1000000', '1000000000', '-9223372036854775808', 'hello'] });
 
     const quick = decodeObject(RDB_TYPE.LIST_QUICKLIST, Buffer.concat([Buffer.from([2, zl.length]), zl, Buffer.from([zl.length]), zl]));
-    expect((quick.value.value as string[]).length).toBe(16);
+    expect((quick.value.value as ListDeque).length).toBe(16);
   });
 
   it('decodes legacy intset / zipmap / ZSET v1 / ziplist zset and hash objects', () => {

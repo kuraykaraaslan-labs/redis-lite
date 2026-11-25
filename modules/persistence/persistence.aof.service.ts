@@ -32,7 +32,7 @@ export default class PersistenceAofService {
         out.push(encode(['SET', key, v.value]));
         break;
       case 'list':
-        A.pushBatched(out, ['RPUSH', key], v.value, 1);
+        A.pushBatched(out, ['RPUSH', key], v.value.toArray(), 1);
         break;
       case 'set':
         A.pushBatched(out, ['SADD', key], [...v.value], 1);

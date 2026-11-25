@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
 import type { RedisValue } from '@/modules/database/database.types';
 
 import MemoryService from '../memory.service';
@@ -13,7 +14,7 @@ describe('MEMORY STATS / INFO memory', () => {
   const records: KeyRecord[] = [
     { key: 'a', value: str('1'), encoding: 'int', hasExpire: false },
     { key: 'b', value: str('hello'), encoding: 'embstr', hasExpire: true },
-    { key: 'c', value: { type: 'list', value: ['x', 'y'] }, encoding: 'listpack', hasExpire: false },
+    { key: 'c', value: { type: 'list', value: ListDeque.from(['x', 'y']) }, encoding: 'listpack', hasExpire: false },
   ];
 
   it('per-db overhead', () => {

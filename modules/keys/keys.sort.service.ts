@@ -4,6 +4,7 @@ import type { Reply } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
 
 import type { SortInput } from './keys.dto';
 import KeysMessages from './keys.messages';
@@ -87,7 +88,7 @@ export default class KeysSortService {
       : elements;
     if (store !== null) {
       const values = out.map((x) => x ?? '');
-      if (values.length) ctx.db.set(store, { type: 'list', value: values });
+      if (values.length) ctx.db.set(store, { type: 'list', value: ListDeque.from(values) });
       else ctx.db.remove(store);
       ctx.server.touch(ctx.client.dbIndex, store);
       return values.length;

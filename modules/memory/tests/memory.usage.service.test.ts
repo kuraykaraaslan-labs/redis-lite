@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
 import PersistenceService from '@/modules/persistence/persistence.service';
 import { Stream } from '@/modules/streams/streams.structure';
 import { ZSet } from '@/modules/zsets/zsets.structure';
@@ -50,7 +51,7 @@ describe('MEMORY USAGE aggregates', () => {
 
   it('listpack list', () => {
     const list = ['a', 'b', '1'];
-    const v: RedisValue = { type: 'list', value: list };
+    const v: RedisValue = { type: 'list', value: ListDeque.from(list) };
     expect(objectSize('k', v, 'listpack', base)).toBe(kv + jemallocSize(listpackBytes(list)));
     expect(listpackBytes(list)).toBe(7 + 3 + 3 + 2);
     expect(objectSize('k', v, 'listpack', base)).toBe(32 + 16);
@@ -62,7 +63,7 @@ describe('MEMORY USAGE aggregates', () => {
     expect(nodes.length).toBeGreaterThan(5);
     expect(nodes.reduce((n, q) => n + q.count, 0)).toBe(5000);
     for (const n of nodes) expect(n.bytes).toBeLessThanOrEqual(8192);
-    const v: RedisValue = { type: 'list', value: list };
+    const v: RedisValue = { type: 'list', value: ListDeque.from(list) };
     const all = objectSize('k', v, 'quicklist', { samples: 0, hasExpire: false });
     const exact = kv + SIZES.quicklist + nodes.reduce((n, q) => n + SIZES.quicklistNode + jemallocSize(q.bytes), 0);
     expect(all).toBe(exact);
@@ -226,6 +227,6 @@ describe('serializedLength', () => {
   it('is the RDB object body length', () => {
     expect(serializedLength(str('bar'))).toBe(4); // len byte + 3
     expect(serializedLength(str('12345'))).toBe(3); // int16 encoding: 1 + 2
-    expect(serializedLength({ type: 'list', value: ['a', 'b'] })).toBeGreaterThan(0);
+    expect(serializedLength({ type: 'list', value: ListDeque.from(['a', 'b']) })).toBeGreaterThan(0);
   });
 });

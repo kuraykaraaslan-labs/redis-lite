@@ -1,3 +1,4 @@
+import type { ListDeque } from '@/modules/lists/lists.deque.structure';
 import type { Stream } from '@/modules/streams/streams.structure';
 import type { TimeSeries } from '@/modules/timeseries/timeseries.structure';
 import type { ZSet } from '@/modules/zsets/zsets.structure';
@@ -10,7 +11,7 @@ export type RedisValue =
   /** `raw`: the value went through APPEND/SETRANGE/SETBIT/…, which Redis always leaves raw-encoded. */
   | { type: 'string'; value: string; raw?: boolean }
   | { type: 'hash'; value: Map<string, string> }
-  | { type: 'list'; value: string[] }
+  | { type: 'list'; value: ListDeque }
   | { type: 'set'; value: Set<string> }
   | { type: 'zset'; value: ZSet }
   | { type: 'stream'; value: Stream }
@@ -21,7 +22,7 @@ export type RedisValue =
 export interface ValueMap {
   string: string;
   hash: Map<string, string>;
-  list: string[];
+  list: ListDeque;
   set: Set<string>;
   zset: ZSet;
   stream: Stream;

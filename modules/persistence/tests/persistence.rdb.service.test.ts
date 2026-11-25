@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
+
 import { RDB_VERSION } from '../persistence.enums';
 import PersistenceService from '../persistence.service';
 import type { RdbDatabase } from '../persistence.types';
@@ -12,7 +14,7 @@ describe('RDB files', () => {
     const db0: RdbDatabase = new Map();
     db0.set('str', { value: { type: 'string', value: 'hello' } });
     db0.set('num', { value: { type: 'string', value: '42' }, expireAt: 1900000000000 });
-    db0.set('list', { value: { type: 'list', value: ['a', 'b', 'c'] } });
+    db0.set('list', { value: { type: 'list', value: ListDeque.from(['a', 'b', 'c']) } });
     db0.set('hash', { value: { type: 'hash', value: new Map([['a', '1']]) }, fieldExpires: new Map([['a', 1900000000000]]) });
     db0.set('lfu', { value: { type: 'string', value: 'x' }, idle: 5, freq: 7 });
     const db2: RdbDatabase = new Map();

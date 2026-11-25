@@ -63,7 +63,7 @@ export default class PersistenceObjectEncoderCodec {
    * at a time: listpack encoding until it would exceed the limit, then the listpack becomes the
    * first quicklist node and further elements go to the tail node or a new node.
    */
-  private static splitQuicklist(list: readonly string[], fill: number): QuicklistNode[] {
+  private static splitQuicklist(list: Iterable<string>, fill: number): QuicklistNode[] {
     const E = PersistenceObjectEncoderCodec;
     const lpEntryBytes = PersistenceListpackCodec.entryBytes;
     const LP_HDR_SIZE = PersistenceListpackCodec.LP_HDR_SIZE;
@@ -102,7 +102,7 @@ export default class PersistenceObjectEncoderCodec {
   // Private Helpers: per-type bodies
   // ──────────────────────────────────────────────
 
-  private static encodeList(w: RdbWriter, list: readonly string[], o: RdbOptions): number {
+  private static encodeList(w: RdbWriter, list: Iterable<string>, o: RdbOptions): number {
     const io = PersistenceRdbIoCodec;
     const nodes = PersistenceObjectEncoderCodec.splitQuicklist(list, o.listMaxListpackSize);
     io.writeLen(w, nodes.length);

@@ -69,7 +69,7 @@ export default class DatabaseEncodingService {
       case 'list': {
         const limit = self.listLimit(config);
         if (v.value.length > limit.entries) return 'quicklist';
-        if (limit.bytes !== Infinity && self.listpackSize(v.value) > limit.bytes) return 'quicklist';
+        if (limit.bytes !== Infinity && v.value.listpackBytes > limit.bytes) return 'quicklist';
         return 'listpack';
       }
       case 'set': {
@@ -168,7 +168,7 @@ export default class DatabaseEncodingService {
       // Redis turns a quicklist back into a listpack once it fits in half of the limit.
       const limit = self.listLimit(config);
       const halfEntries = limit.entries === Infinity ? Infinity : limit.entries / 2;
-      const fits = v.value.length <= halfEntries && (limit.bytes === Infinity || self.listpackSize(v.value) <= limit.bytes / 2);
+      const fits = v.value.length <= halfEntries && (limit.bytes === Infinity || v.value.listpackBytes <= limit.bytes / 2);
       if (fits) self.sticky.set(holder, 'listpack');
       return;
     }

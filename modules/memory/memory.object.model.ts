@@ -1,3 +1,4 @@
+import type { ListDeque } from '@/modules/lists/lists.deque.structure';
 import PersistenceService from '@/modules/persistence/persistence.service';
 import type { ListpackEntry } from '@/modules/persistence/persistence.types';
 import { Stream } from '@/modules/streams/streams.structure';
@@ -59,7 +60,7 @@ export default class MemoryObjectModel {
     return M.kvobjAllocSize(key, hasExpire) + M.rawStringAlloc(value.length, !raw);
   }
 
-  private static listSize(kv: number, list: string[], encoding: string, limit: number, fill: number): number {
+  private static listSize(kv: number, list: ListDeque, encoding: string, limit: number, fill: number): number {
     const M = MemoryAllocModel;
     if (encoding !== 'quicklist') return kv + M.jemallocSize(PersistenceService.listpackBytes(list));
     const nodes = MemoryQuicklistModel.quicklistNodes(list, fill);

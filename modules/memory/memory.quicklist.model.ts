@@ -40,7 +40,7 @@ export default class MemoryQuicklistModel {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  static quicklistNodes(list: readonly string[], fill: number): QuicklistNodeInfo[] {
+  static quicklistNodes(list: Iterable<string>, fill: number): QuicklistNodeInfo[] {
     const Q = MemoryQuicklistModel;
     const nodes: QuicklistNodeInfo[] = [];
     const lpEntry = (s: string): number => PersistenceService.listpackBytes([s]) - 7;

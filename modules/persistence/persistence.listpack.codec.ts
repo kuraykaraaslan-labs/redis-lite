@@ -79,7 +79,7 @@ export default class PersistenceListpackCodec {
   }
 
   /** Serialized size of a listpack holding `entries` (header + entries + terminator). */
-  static listpackBytes(entries: readonly ListpackEntry[]): number {
+  static listpackBytes(entries: Iterable<ListpackEntry>): number {
     let total = PersistenceListpackCodec.LP_HDR_SIZE + 1;
     for (const e of entries) total += PersistenceListpackCodec.entryBytes(e);
     return total;

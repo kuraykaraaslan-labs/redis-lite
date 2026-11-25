@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
 import { Stream } from '@/modules/streams/streams.structure';
 
 import { RDB_TYPE } from '../persistence.enums';
@@ -10,15 +11,15 @@ const { decodeObject, dumpPayload, encodeObject, listpackDecode, restorePayloadE
 
 describe('object round-trips', () => {
   it('lists: single listpack node, multiple nodes, plain nodes', () => {
-    roundTrip({ type: 'list', value: ['a', '1', '-200', binaryString(30, 1)] }, RDB_TYPE.LIST_QUICKLIST_2);
-    const small = encodeObject({ type: 'list', value: ['a', 'b'] }).body;
+    roundTrip({ type: 'list', value: ListDeque.from(['a', '1', '-200', binaryString(30, 1)]) }, RDB_TYPE.LIST_QUICKLIST_2);
+    const small = encodeObject({ type: 'list', value: ListDeque.from(['a', 'b']) }).body;
     expect(small[0]).toBe(1); // one node
     expect(small[1]).toBe(2); // PACKED
     const big = Array.from({ length: 5000 }, (_, i) => `element-${i}`);
-    const enc = encodeObject({ type: 'list', value: big });
+    const enc = encodeObject({ type: 'list', value: ListDeque.from(big) });
     expect(enc.body[0]).toBeGreaterThan(1);
-    roundTrip({ type: 'list', value: big }, RDB_TYPE.LIST_QUICKLIST_2);
-    roundTrip({ type: 'list', value: ['x', 'y'.repeat(9000), 'z'] }, RDB_TYPE.LIST_QUICKLIST_2);
+    roundTrip({ type: 'list', value: ListDeque.from(big) }, RDB_TYPE.LIST_QUICKLIST_2);
+    roundTrip({ type: 'list', value: ListDeque.from(['x', 'y'.repeat(9000), 'z']) }, RDB_TYPE.LIST_QUICKLIST_2);
   });
 
   it('sets: intset, listpack, hashtable', () => {

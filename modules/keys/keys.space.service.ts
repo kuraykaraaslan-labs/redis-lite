@@ -6,6 +6,7 @@ import type { Reply } from '@/libs/resp';
 import type { CommandContext } from '@/modules/command/command.types';
 import type { Database } from '@/modules/database/database.service';
 import DatabaseService from '@/modules/database/database.service';
+import { ListDeque } from '@/modules/lists/lists.deque.structure';
 import { Stream } from '@/modules/streams/streams.structure';
 import TimeseriesService from '@/modules/timeseries/timeseries.service';
 import { TSDB_TYPE_NAME } from '@/modules/timeseries/timeseries.structure';
@@ -29,7 +30,7 @@ export default class KeysSpaceService {
       case 'hash':
         return { type: 'hash', value: new Map(v.value) };
       case 'list':
-        return { type: 'list', value: [...v.value] };
+        return { type: 'list', value: ListDeque.from(v.value) };
       case 'set':
         return { type: 'set', value: new Set(v.value) };
       case 'zset': {
