@@ -285,11 +285,13 @@ Commands run one at a time across all connections, the way Redis runs them. This
 
 ```bash
 npm install
-npm test            # Vitest: unit, per-command-group and ioredis/BullMQ end-to-end suites
+npm test            # Vitest: per-module suites (modules/*/tests) and end-to-end suites (tests/)
 npm run typecheck
 npm run build       # → dist/
 npx tsx bench/bench.ts
 ```
+
+Code layout (modules, libs, the module recipe and the conventions every change follows): [docs/STRUCTURE.md](docs/STRUCTURE.md).
 
 ## License
 

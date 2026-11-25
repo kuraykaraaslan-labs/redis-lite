@@ -4,7 +4,7 @@
  */
 import Redis from 'ioredis';
 
-import { RedisLite } from '../src/index';
+import { RedisLite } from '@/index';
 
 interface Case {
   name: string;
