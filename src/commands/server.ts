@@ -1,39 +1,30 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
+import { renameSync, writeFileSync } from 'node:fs';
 import { arch, release, totalmem, type as osType } from 'node:os';
 
 import { CommandError } from '../errors';
 import { RespMessages, unknownSubcommand } from '../messages';
 import type { Reply } from '../resp';
-import { OK, RespMap, RespSet, RespVerbatim, Status } from '../resp';
+import { OK, RespDouble, RespMap, RespSet, RespVerbatim, Status } from '../resp';
+import { ACL_MESSAGES, aclDenialMessage, genPass } from '../server/acl';
 import { ServerConfig } from '../server/config';
 import type { RedisValue } from '../store/database';
+import { objectEncoding } from '../store/encoding';
+import { debugQuicklistInfo, infoMemory, memoryStats, memoryUsage, serializedLength } from '../store/memory';
+import type { MemoryReport, MemoryStatValue } from '../store/memory';
 import { matchGlob, parseInteger } from '../util';
-import { REDIS_VERSION, defaultPassword, helpReply, subcommandSyntaxError } from './connection';
+import { REDIS_VERSION, helpReply, subcommandSyntaxError } from './connection';
+import { hashFieldExpires } from './hashes';
+import { rdbOptions } from './keys-extra';
 import type { CommandMeta } from './meta';
 import {
-  ACL_CATEGORIES, allCommandMeta, allCommandsDeep, arityOk, commandDocsReply, commandHasKeys, commandInfoReply, getCommandMeta, keysFromSpecs,
-  lookupCommand,
+  allCommandMeta, allCommandsDeep, arityOk, commandDocsReply, commandHasKeys, commandInfoReply, getCommandMeta, keysFromSpecs, lookupCommand,
 } from './meta';
 import { HELP_TEXT } from './meta-table';
 import type { CommandContext, CommandSpec, HandlerResult } from './types';
 import { Block, NO_REPLY } from './types';
 
 // ---- INFO ----------------------------------------------------------------------------------------------------------
-
-/** Redis bytesToHuman(). */
-function human(n: number): string {
-  const units = ['B', 'K', 'M', 'G', 'T', 'P'];
-  if (n < 1024) return `${n}B`;
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(2)}${units[i]}`;
-}
-
-let peakMemory = 0;
 
 /** Sections in Redis order; `def` = part of the default set. */
 const INFO_SECTIONS: Array<[name: string, title: string, def: boolean]> = [
@@ -107,30 +98,14 @@ function infoSection(ctx: CommandContext, name: string): string[] {
       ];
     }
     case 'memory': {
-      const mem = process.memoryUsage();
-      const used = mem.heapUsed;
-      peakMemory = Math.max(peakMemory, used);
-      const maxmemory = cfg.num('maxmemory');
-      const total = totalmem();
-      return [
-        `used_memory:${used}`,
-        `used_memory_human:${human(used)}`,
-        `used_memory_rss:${mem.rss}`,
-        `used_memory_rss_human:${human(mem.rss)}`,
-        `used_memory_peak:${peakMemory}`,
-        `used_memory_peak_human:${human(peakMemory)}`,
-        `used_memory_peak_perc:${((used / peakMemory) * 100).toFixed(2)}%`,
-        `used_memory_lua:${31 * 1024}`,
-        `used_memory_scripts:0`,
-        `total_system_memory:${total}`,
-        `total_system_memory_human:${human(total)}`,
-        `maxmemory:${maxmemory}`,
-        `maxmemory_human:${human(maxmemory)}`,
-        `maxmemory_policy:${cfg.get('maxmemory-policy') ?? 'noeviction'}`,
-        `mem_fragmentation_ratio:${(mem.rss / Math.max(used, 1)).toFixed(2)}`,
-        'mem_allocator:libc',
-        'lazyfree_pending_objects:0',
-      ];
+      const report = s.memoryReport();
+      return infoMemory(report, {
+        peakTime: s.memoryPeakTime,
+        totalSystemMemory: totalmem(),
+        cachedScripts: s.scripts.size,
+        maxmemory: cfg.num('maxmemory'),
+        maxmemoryPolicy: cfg.get('maxmemory-policy') ?? 'noeviction',
+      }).map(([k, v]) => `${k}:${v}`);
     }
     case 'persistence':
       return [
@@ -224,10 +199,10 @@ function infoSection(ctx: CommandContext, name: string): string[] {
         'client_output_buffer_limit_disconnections:0',
         'reply_buffer_shrinks:0',
         'reply_buffer_expands:0',
-        'acl_access_denied_auth:0',
-        'acl_access_denied_cmd:0',
-        'acl_access_denied_key:0',
-        'acl_access_denied_channel:0',
+        `acl_access_denied_auth:${s.aclStats.auth}`,
+        `acl_access_denied_cmd:${s.aclStats.command}`,
+        `acl_access_denied_key:${s.aclStats.key}`,
+        `acl_access_denied_channel:${s.aclStats.channel}`,
       ];
     }
     case 'replication':
@@ -235,7 +210,7 @@ function infoSection(ctx: CommandContext, name: string): string[] {
         'role:master',
         'connected_slaves:0',
         'master_failover_state:no-failover',
-        `master_replid:${s.runId}`,
+        `master_replid:${s.replId}`,
         'master_replid2:0000000000000000000000000000000000000000',
         'master_repl_offset:0',
         'second_repl_offset:-1',
@@ -356,7 +331,10 @@ function configSet(ctx: CommandContext, pairs: string[]): Reply {
     }
   }
   if (failure) throw new CommandError(`ERR CONFIG SET failed (possibly related to argument '${failure[0]}') - ${failure[1]}`);
-  for (const [name, value] of values) cfg.set(name, value);
+  for (const [name, value] of values) {
+    cfg.set(name, value);
+    ctx.server.applyConfig(name, value);
+  }
   return OK;
 }
 
@@ -441,70 +419,76 @@ function command(_ctx: CommandContext, args: string[]): Reply {
 const NO_ACL_FILE =
   'ERR This Redis instance is not configured to use an ACL file. You may want to specify users via the ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a Redis configuration file set) in order to store users in the Redis configuration.';
 
-/** ACL: a single `default` user with every permission (nopass unless requirepass is set). */
+/** ACL SAVE: write a temp file and rename it over the ACL file (ACLSaveToFile). */
+function aclSave(ctx: CommandContext, file: string): Reply {
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(tmp, Buffer.from(ctx.server.acl.toFile(), 'latin1'));
+    renameSync(tmp, file);
+  } catch (e) {
+    ctx.server.log('warn', `Saving ACL file: ${(e as Error).message}`);
+    throw new CommandError('ERR There was an error trying to save the ACLs. Please check the server logs for more information');
+  }
+  return OK;
+}
+
+/** ACL (aclCommand in acl.c). */
 function acl(ctx: CommandContext, args: string[]): Reply {
   const sub = args[0].toLowerCase();
-  const password = defaultPassword(ctx);
-  const hash = password ? createHash('sha256').update(Buffer.from(password, 'latin1')).digest('hex') : '';
-  switch (sub) {
-    case 'whoami':
-      return 'default';
-    case 'users':
-      return ['default'];
-    case 'list':
-      return [password ? `user default on sanitize-payload #${hash} ~* &* +@all` : 'user default on nopass sanitize-payload ~* &* +@all'];
-    case 'cat': {
-      if (args.length === 1) return [...ACL_CATEGORIES];
-      if (args.length > 2) throw subcommandSyntaxError(args[0], 'acl');
-      const cat = args[1].toLowerCase();
-      if (!(ACL_CATEGORIES as readonly string[]).includes(cat)) throw new CommandError(`ERR Unknown category '${args[1].slice(0, 128)}'`);
-      return allCommandsDeep()
-        .filter((m) => m.acl.includes(cat))
-        .map((m) => m.fullname);
-    }
-    case 'getuser':
-      if (args[1] !== 'default') return null;
-      return RespMap.from([
-        'flags', new RespSet(password ? ['on', 'sanitize-payload'] : ['on', 'nopass', 'sanitize-payload']),
-        'passwords', password ? [hash] : [],
-        'commands', '+@all',
-        'keys', '~*',
-        'channels', '&*',
-        'selectors', [],
-      ]);
-    case 'dryrun': {
-      if (args[1] !== 'default') throw new CommandError(`ERR User '${args[1]}' not found`);
-      const argv = args.slice(2);
-      const { meta } = lookupCommand(argv);
-      if (!meta) throw new CommandError(`ERR Command '${argv[0]}' not found`);
-      if (!arityOk(meta.arity, argv.length)) throw new CommandError(`ERR wrong number of arguments for '${meta.fullname}' command`);
-      return OK;
-    }
-    case 'log':
-      if (args.length > 2) throw subcommandSyntaxError(args[0], 'acl');
-      if (args.length === 2 && args[1].toLowerCase() === 'reset') return OK;
-      if (args.length === 2) parseInteger(args[1]);
-      return [];
-    case 'genpass': {
-      const bits = args.length > 1 ? parseInteger(args[1]) : 256;
-      if (bits <= 0 || bits > 4096)
-        throw new CommandError('ERR ACL GENPASS argument must be the number of bits for the output password, a positive number up to 4096');
-      const chars = Math.floor((bits + 3) / 4);
-      return randomBytes(Math.ceil(chars / 2)).toString('hex').slice(0, chars);
-    }
-    case 'deluser':
-      if (args.slice(1).includes('default')) throw new CommandError("ERR The 'default' user cannot be removed");
-      return 0;
-    case 'load':
-    case 'save':
-      throw new CommandError(NO_ACL_FILE);
-    case 'setuser':
-      throw new CommandError('ERR ACL users are not supported by redis-lite (single default user only)');
-    case 'help':
-      return helpReply('acl', HELP_TEXT.acl);
-    default:
-      throw new CommandError(unknownSubcommand(args[0], 'acl'));
+  const argc = args.length + 1;
+  const s = ctx.server;
+  const engine = s.acl;
+  if (sub === 'setuser' && argc >= 3) {
+    engine.setUser(args[1], args.slice(2));
+    const u = engine.user(args[1]);
+    if (u) s.killRevokedSubscribers(u, ctx.client);
+    return OK;
   }
+  if (sub === 'deluser' && argc >= 3) {
+    const names = args.slice(1);
+    if (names.includes('default')) throw new CommandError(ACL_MESSAGES.DEFAULT_UNDELETABLE);
+    const users = [...new Set(names)].map((n) => engine.user(n)).filter((u) => u !== undefined);
+    const deleted = engine.deleteUser(names);
+    for (const u of users) s.killUserClients(u, ctx.client);
+    return deleted;
+  }
+  if (sub === 'getuser' && argc === 3) return engine.getUserReply(args[1]);
+  if (sub === 'list' && argc === 2) return engine.list();
+  if (sub === 'users' && argc === 2) return engine.users();
+  if (sub === 'whoami' && argc === 2) return ctx.client.user ? ctx.client.user.name : null;
+  const aclfile = s.config.get('aclfile') ?? '';
+  if (!aclfile && (sub === 'load' || sub === 'save')) throw new CommandError(NO_ACL_FILE);
+  if (sub === 'load' && argc === 2) {
+    s.loadAclFile(aclfile, ctx.client);
+    return OK;
+  }
+  if (sub === 'save' && argc === 2) return aclSave(ctx, aclfile);
+  if (sub === 'cat' && argc === 2) return engine.categories();
+  if (sub === 'cat' && argc === 3) return engine.commandsInCategory(args[1]);
+  if (sub === 'log' && (argc === 2 || argc === 3)) {
+    let count = 10;
+    if (argc === 3) {
+      if (args[1].toLowerCase() === 'reset') {
+        engine.resetLog();
+        return OK;
+      }
+      count = Math.max(0, parseInteger(args[1]));
+    }
+    return engine.logReply(count);
+  }
+  if (sub === 'dryrun' && argc >= 4) {
+    const user = engine.user(args[1]);
+    if (!user) throw new CommandError(ACL_MESSAGES.userNotFound(args[1]));
+    const argv = args.slice(2);
+    const { meta } = lookupCommand(argv);
+    if (!meta) throw new CommandError(ACL_MESSAGES.commandNotFound(argv[0]));
+    if (!arityOk(meta.arity, argv.length)) throw new CommandError(`ERR wrong number of arguments for '${meta.fullname}' command`);
+    const denial = s.aclCheckUser(user, argv, meta);
+    return denial ? aclDenialMessage(denial, user.name, true) : OK;
+  }
+  if (sub === 'genpass' && (argc === 2 || argc === 3)) return genPass(argc === 3 ? parseInteger(args[1]) : 256);
+  if (sub === 'help' && argc === 2) return helpReply('acl', HELP_TEXT.acl);
+  throw subcommandSyntaxError(args[0], 'acl');
 }
 
 // ---- FLUSHDB / FLUSHALL / SAVE -------------------------------------------------------------------------------------
@@ -582,99 +566,79 @@ function latency(ctx: CommandContext, args: string[]): Reply {
   }
 }
 
-/** Rough MEMORY USAGE estimate (dictEntry + key sds + robj + value), in the spirit of objectComputeSize(). */
-function memoryUsage(key: string, v: RedisValue, samples: number): number {
-  const sds = (s: string): number => s.length + (s.length < 32 ? 2 : s.length < 256 ? 3 : 5);
-  const sample = <T>(items: Iterable<T>, size: number, cost: (item: T) => number): number => {
-    let n = 0;
-    let sum = 0;
-    for (const item of items) {
-      if (n >= samples) break;
-      sum += cost(item);
-      n++;
-    }
-    return n ? Math.round((sum / n) * size) : 0;
+/** Options of the memory model that follow the live config. */
+function memoryOpts(ctx: CommandContext, key: string, v: RedisValue, samples: number) {
+  const cfg = ctx.server.config;
+  return {
+    samples,
+    hasExpire: ctx.db.getExpire(key) !== undefined,
+    fieldTtls: v.type === 'hash' ? hashFieldExpires(v.value) : undefined,
+    listMaxListpackSize: cfg.num('list-max-listpack-size'),
+    streamNodeMaxEntries: cfg.num('stream-node-max-entries'),
+    streamNodeMaxBytes: cfg.num('stream-node-max-bytes'),
   };
-  let value: number;
-  switch (v.type) {
-    case 'string':
-      value = /^-?\d{1,19}$/.test(v.value) && v.value.length < 20 ? 0 : sds(v.value);
-      break;
-    case 'hash':
-      value = 64 + sample(v.value.entries(), v.value.size, ([f, x]) => sds(f) + sds(x) + 24);
-      break;
-    case 'list':
-      value = 48 + sample(v.value, v.value.length, (x) => x.length + 2);
-      break;
-    case 'set':
-      value = 64 + sample(v.value, v.value.size, (x) => sds(x) + 24);
-      break;
-    case 'zset':
-      value = 96 + v.value.size * 48;
-      break;
-    case 'stream':
-      value = 256 + v.value.length * 32;
-      break;
+}
+
+function encodingOf(ctx: CommandContext, v: RedisValue): string {
+  return objectEncoding(v, ctx.server.config, v.type === 'hash' && hashFieldExpires(v.value) !== undefined);
+}
+
+function statValue(v: MemoryStatValue): Reply {
+  if (typeof v === 'number') return v;
+  if (Array.isArray(v)) return new RespMap(v.map(([k, n]) => [k, n]));
+  return new RespDouble(v.double);
+}
+
+const DOCTOR_EMPTY =
+  "Hi Sam, this instance is empty or is using very little memory, my issues detector can't be used in these conditions. Please, leave for your mission on Earth and fill it with some data. The new Sam and I will be back to our programming as soon as I finished rebooting.\n";
+const DOCTOR_OK = "Hi Sam, I can't find any memory issue in your instance. I can only account for what occurs on this base.\n";
+
+/** getMemoryDoctorReport() over the memory model. */
+function memoryDoctor(ctx: CommandContext, r: MemoryReport): string {
+  if (r.usedMemory < 5 * 1024 * 1024) return DOCTOR_EMPTY;
+  const issues: string[] = [];
+  if (Math.fround(r.peak / r.usedMemory) > 1.5) {
+    issues.push(
+      ' * Peak memory: In the past this instance used more than 150% the memory that is currently using. The allocator is normally not able to release memory after a peak, so you can expect to see a big fragmentation ratio, however this is actually harmless and is only due to the memory peak, and if the Redis instance Resident Set Size (RSS) is currently bigger than expected, the memory will be used as soon as you fill the Redis instance with more data. If the memory peak was only occasional and you want to try to reclaim memory, please try the MEMORY PURGE command, otherwise the only other option is to shutdown and restart the instance.\n\n',
+    );
   }
-  return 24 + sds(key) + 16 + value;
+  const clients = ctx.server.clients.size;
+  if (clients && r.clientsNormal / clients > 1024 * 200) {
+    issues.push(
+      ' * Big client buffers: The clients output buffers in this instance are greater than 200K per client (on average). This may result from different causes, like Pub/Sub clients subscribed to channels bot not receiving data fast enough, so that data piles on the Redis instance output buffer, or clients sending commands with large replies or very large sequences of commands in the same pipeline. Please use the CLIENT LIST command in order to investigate the issue if it causes problems in your instance, or to understand better why certain clients are using a big amount of memory.\n\n',
+    );
+  }
+  if (ctx.server.scripts.size > 1000) {
+    issues.push(
+      " * Many scripts: There seem to be many cached scripts in this instance (more than 1000). This may be because scripts are generated and `EVAL`ed, instead of being parameterized (with KEYS and ARGV), `SCRIPT LOAD`ed and `EVALSHA`ed. Unless `SCRIPT FLUSH` is called periodically, the scripts' caches may end up consuming most of your memory.\n\n",
+    );
+  }
+  if (!issues.length) return DOCTOR_OK;
+  return `Sam, I detected a few issues in this Redis instance memory implants:\n\n${issues.join('')}I'm here to keep you safe, Sam. I want to help you.\n`;
 }
 
 function memory(ctx: CommandContext, args: string[]): Reply {
   const sub = args[0].toLowerCase();
-  switch (sub) {
-    case 'usage': {
-      let samples = 5;
-      for (let j = 2; j < args.length; j++) {
-        if (args[j].toLowerCase() === 'samples' && j + 1 < args.length) {
-          samples = parseInteger(args[j + 1]);
-          if (samples < 0) throw new CommandError(RespMessages.SYNTAX);
-          if (samples === 0) samples = Number.MAX_SAFE_INTEGER;
-          j++;
-        } else throw new CommandError(RespMessages.SYNTAX);
-      }
-      const v = ctx.db.peek(args[1]);
-      return v ? memoryUsage(args[1], v, samples) : null;
+  const argc = args.length + 1;
+  if (sub === 'usage' && argc >= 3) {
+    let samples = 5;
+    for (let j = 2; j < args.length; j++) {
+      if (args[j].toLowerCase() === 'samples' && j + 1 < args.length) {
+        samples = parseInteger(args[j + 1]);
+        if (samples < 0) throw new CommandError(RespMessages.SYNTAX);
+        j++;
+      } else throw new CommandError(RespMessages.SYNTAX);
     }
-    case 'doctor': {
-      const empty = ctx.server.databases.every((db) => db.keys().length === 0);
-      return new RespVerbatim(
-        empty
-          ? "Hi Sam, this instance is empty or is using very little memory, my issues detector can't be used in these conditions. Please, leave for your mission on Earth and fill it with some data. The new Sam and I will be back to our programming as soon as I finished rebooting."
-          : "Hi Sam, I can't find any memory issue in your instance. I can only account for what occurs on this base.",
-      );
-    }
-    case 'stats': {
-      const mem = process.memoryUsage();
-      const keys = ctx.server.databases.reduce((n, db) => n + db.keys().length, 0);
-      return RespMap.from([
-        'peak.allocated', Math.max(peakMemory, mem.heapUsed),
-        'total.allocated', mem.heapUsed,
-        'startup.allocated', 0,
-        'replication.backlog', 0,
-        'clients.slaves', 0,
-        'clients.normal', ctx.server.clients.size * 1024,
-        'cluster.links', 0,
-        'aof.buffer', 0,
-        'lua.caches', 0,
-        'functions.caches', 0,
-        'overhead.total', 0,
-        'keys.count', keys,
-        'keys.bytes-per-key', keys ? Math.floor(mem.heapUsed / keys) : 0,
-        'dataset.bytes', mem.heapUsed,
-        'dataset.percentage', '100',
-        'peak.percentage', '100',
-        'fragmentation', (mem.rss / Math.max(mem.heapUsed, 1)).toFixed(2),
-      ]);
-    }
-    case 'malloc-stats':
-      return 'Stats not supported for the current allocator';
-    case 'purge':
-      return OK;
-    case 'help':
-      return helpReply('memory', HELP_TEXT.memory);
-    default:
-      throw new CommandError(unknownSubcommand(args[0], 'memory'));
+    const v = ctx.db.peek(args[1]);
+    // SAMPLES 0 = every element
+    return v ? memoryUsage(args[1], v, encodingOf(ctx, v), memoryOpts(ctx, args[1], v, samples)) : null;
   }
+  if (sub === 'doctor' && argc === 2) return new RespVerbatim(memoryDoctor(ctx, ctx.server.memoryReport()));
+  if (sub === 'stats' && argc === 2) return new RespMap(memoryStats(ctx.server.memoryReport()).map(([k, v]) => [k, statValue(v)]));
+  if (sub === 'malloc-stats' && argc === 2) return new Status('Stats not supported for the current allocator');
+  if (sub === 'purge' && argc === 2) return OK;
+  if (sub === 'help' && argc === 2) return helpReply('memory', HELP_TEXT.memory);
+  throw subcommandSyntaxError(args[0], 'memory');
 }
 
 // ---- WAIT / WAITAOF ------------------------------------------------------------------------------------------------
@@ -791,6 +755,195 @@ function blockingSleep(ms: number): void {
   if (ms > 0) Atomics.wait(sleepCell, 0, 0, ms);
 }
 
+const DEBUG_HELP = [
+  'CHANGE-REPL-ID',
+  '    Change the replication IDs of the instance.',
+  '    Dangerous: should be used only for testing the replication subsystem.',
+  'LISTPACK <key>',
+  '    Show low level info about the listpack encoding of <key>.',
+  'LOADAOF',
+  '    Flush the AOF buffers on disk and reload the AOF in memory.',
+  'LOG <message>',
+  '    Write <message> to the server log.',
+  'OBJECT <key> [fast]',
+  '    Show low level info about the <key> and associated value.',
+  '    Some fields of the default behavior may be time consuming to fetch,',
+  '    and `fast` can be passed to avoid fetching them.',
+  'POPULATE <count> [<prefix>] [<size>]',
+  '    Create <count> string keys named key:<num>. If <prefix> is specified then',
+  '    it is used instead of the \'key\' prefix. These are not propagated to',
+  '    replicas. Cluster slots are not respected so keys not belonging to the',
+  '    current node can be created in cluster mode.',
+  'QUICKLIST <key> [<0|1>]',
+  '    Show low level info about the quicklist encoding of <key>.',
+  '    The optional argument (0 by default) sets the level of detail',
+  'QUICKLIST-PACKED-THRESHOLD <size>',
+  '    Sets the threshold for elements to be inserted as plain vs packed nodes',
+  '    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.',
+  'RELOAD [option ...]',
+  '    Save the RDB on disk and reload it back to memory. Valid <option> values:',
+  '    * MERGE: conflicting keys will be loaded from RDB.',
+  '    * NOFLUSH: the existing database will not be removed before load, but',
+  '      conflicting keys will generate an exception and kill the server.',
+  '    * NOSAVE: the database will be loaded from an existing RDB file.',
+  '    Examples:',
+  '    * DEBUG RELOAD: verify that the server is able to persist, flush and reload',
+  '      the database.',
+  '    * DEBUG RELOAD NOSAVE: replace the current database with the contents of an',
+  '      existing RDB file.',
+  '    * DEBUG RELOAD NOSAVE NOFLUSH MERGE: add the contents of an existing RDB',
+  '      file to the database.',
+  'SET-ACTIVE-EXPIRE <0|1>',
+  '    Setting it to 0 disables expiring keys in background when they are not',
+  '    accessed (otherwise the Redis behavior). Setting it to 1 reenables back the',
+  '    default.',
+  'SLEEP <seconds>',
+  '    Stop the server for <seconds>. Decimals allowed.',
+  'STRINGMATCH-LEN',
+  '    Run a fuzz tester against the stringmatchlen() function.',
+];
+
+/** A stable fake object address for DEBUG OBJECT `Value at:%p`. */
+function fakeAddress(key: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 0x01000193) >>> 0;
+  return `0x7f${(h & 0xffffff).toString(16).padStart(6, '0')}${((h >>> 8) & 0xfff0).toString(16).padStart(4, '0')}`;
+}
+
+/** DEBUG OBJECT key [fast]. */
+function debugObject(ctx: CommandContext, key: string, fast: boolean): Reply {
+  const v = ctx.db.peek(key);
+  if (!v) throw new CommandError('ERR no such key');
+  const cfg = ctx.server.config;
+  const enc = encodingOf(ctx, v);
+  // shared integers 0..9999 (OBJ_SHARED_REFCOUNT), as OBJECT REFCOUNT reports
+  const shared = v.type === 'string' && !v.raw && /^(0|[1-9]\d{0,3})$/.test(v.value) && cfg.get('maxmemory') === '0';
+  const refcount = shared ? 2147483647 : 1;
+  const idle = ctx.db.idleSeconds(key);
+  const now = Date.now();
+  // robj->lru: the LRU clock (seconds, 24 bits) of the last access, or (minutes << 8 | counter) under an LFU policy
+  const lru = cfg.lfu
+    ? (((Math.floor(now / 60000) & 0xffff) << 8) | ctx.db.frequency(key)) >>> 0
+    : (Math.floor(now / 1000) - idle) & 0xffffff;
+  let extra = '';
+  if (v.type === 'list' && enc === 'quicklist') {
+    const q = debugQuicklistInfo(v.value, cfg.num('list-max-listpack-size'), cfg.num('list-compress-depth'));
+    extra =
+      ` ql_nodes:${q.nodes} ql_avg_node:${q.avgNode.toFixed(2)} ql_listpack_max:${q.listpackMax}` +
+      ` ql_compressed:${q.compressed} ql_uncompressed_size:${q.uncompressedSize}`;
+  }
+  const serialized = fast ? '' : ` serializedlength:${serializedLength(v, rdbOptions(ctx), v.type === 'hash' ? hashFieldExpires(v.value) : undefined)}`;
+  return new Status(`Value at:${fakeAddress(key)} refcount:${refcount} encoding:${enc}${serialized} lru:${lru} lru_seconds_idle:${idle}${extra}`);
+}
+
+/** DEBUG POPULATE count [prefix] [size]: string keys `<prefix>:<n>` = `value:<n>` (padded / cut to size with NULs). */
+function debugPopulate(ctx: CommandContext, args: string[]): Reply {
+  const positive = (raw: string): number => {
+    const n = parseInteger(raw);
+    if (n < 0) throw new CommandError('ERR value is out of range, must be positive');
+    return n;
+  };
+  const count = positive(args[1]);
+  const prefix = args.length >= 3 ? args[2] : 'key';
+  const size = args.length === 4 ? positive(args[3]) : 0;
+  for (let j = 0; j < count; j++) {
+    const key = `${prefix}:${j}`;
+    if (ctx.db.peek(key) !== undefined) continue;
+    let value = `value:${j}`;
+    if (size) value = value.length >= size ? value.slice(0, size) : value + '\0'.repeat(size - value.length);
+    ctx.db.set(key, { type: 'string', value });
+    ctx.server.touch(ctx.client.dbIndex, key);
+  }
+  return OK;
+}
+
+/** DEBUG (debugCommand in debug.c): the subcommands that make sense without a C runtime. */
+function debug(ctx: CommandContext, args: string[]): Reply {
+  const sub = args[0].toLowerCase();
+  const argc = args.length + 1;
+  const s = ctx.server;
+  switch (sub) {
+    case 'help':
+      if (argc === 2) return helpReply('debug', DEBUG_HELP);
+      break;
+    case 'object':
+      if (argc === 3 || argc === 4) return debugObject(ctx, args[1], argc === 4 && args[2].toLowerCase() === 'fast');
+      break;
+    case 'sleep':
+      if (argc === 3) {
+        // Redis: strtod(), no validation
+        const seconds = Number.parseFloat(args[1]);
+        blockingSleep(Number.isFinite(seconds) ? seconds * 1000 : 0);
+        return OK;
+      }
+      break;
+    case 'set-active-expire':
+      if (argc === 3) {
+        s.activeExpire = Number.parseInt(args[1], 10) !== 0 && !Number.isNaN(Number.parseInt(args[1], 10));
+        return OK;
+      }
+      break;
+    case 'change-repl-id':
+      if (argc === 2) {
+        s.replId = randomBytes(20).toString('hex');
+        return OK;
+      }
+      break;
+    case 'quicklist-packed-threshold':
+      if (argc === 3) {
+        const m = /^(\d+)(b|k|kb|m|mb|g|gb)?$/i.exec(args[1]);
+        const mul: Record<string, number> = { b: 1, k: 1e3, kb: 1024, m: 1e6, mb: 1048576, g: 1e9, gb: 1073741824 };
+        const size = m ? Number(m[1]) * mul[(m[2] ?? 'b').toLowerCase()] : NaN;
+        // quicklistSetPackedThreshold(): 0 restores the default, otherwise at most 4GB (the threshold itself is not modelled)
+        if (!m || size > 2 ** 32) throw new CommandError('ERR argument must be a memory value bigger than 1 and smaller than 4gb');
+        return OK;
+      }
+      break;
+    case 'listpack':
+    case 'quicklist':
+      if (argc === 3 || (sub === 'quicklist' && argc === 4)) {
+        const v = ctx.db.peek(args[1]);
+        if (!v) throw new CommandError('ERR no such key');
+        const enc = encodingOf(ctx, v);
+        if (sub === 'listpack') {
+          if (enc !== 'listpack' && enc !== 'listpackex') throw new CommandError('ERR Not a listpack encoded object.');
+          return new Status('Listpack structure printed on stdout');
+        }
+        if (enc !== 'quicklist') throw new CommandError('ERR Not a quicklist encoded object.');
+        return new Status('Quicklist structure printed on stdout');
+      }
+      break;
+    case 'stringmatch-len':
+      if (argc === 2) return new Status('Apparently Redis did not crash: test passed');
+      break;
+    case 'populate':
+      if (argc >= 3 && argc <= 5) return debugPopulate(ctx, args);
+      break;
+    case 'log':
+      if (argc === 3) {
+        s.log('warn', `DEBUG LOG: ${args[1]}`);
+        return OK;
+      }
+      break;
+    case 'reload':
+      // TODO(persistence): the persistence engine registers server.debugHooks.reload (save RDB, flush, load it back).
+      return s.debugHooks.reload ? s.debugHooks.reload(ctx.client, args.slice(1)) : OK;
+    case 'loadaof':
+      if (argc === 2) {
+        // TODO(persistence): the persistence engine registers server.debugHooks.loadaof.
+        return s.debugHooks.loadaof ? s.debugHooks.loadaof(ctx.client) : OK;
+      }
+      break;
+    case 'set-disable-deny-scripts':
+    case 'set-skip-checksum-validation':
+    case 'pause-cron':
+    case 'dict-resizing':
+      if (argc === 3) return OK;
+      break;
+  }
+  throw subcommandSyntaxError(args[0], 'debug');
+}
+
 export const serverCommands: CommandSpec[] = [
   { name: 'info', arity: -1, handler: (ctx, args) => new RespVerbatim(info(ctx, args)) },
   { name: 'config', arity: -2, flags: { noscript: true }, handler: config },
@@ -880,17 +1033,5 @@ export const serverCommands: CommandSpec[] = [
   },
   { name: 'role', arity: 1, handler: () => ['master', 0, []] },
   { name: 'memory', arity: -2, handler: memory },
-  {
-    name: 'debug',
-    arity: -2,
-    flags: { noscript: true },
-    handler: (_ctx, args) => {
-      if (args[0].toLowerCase() === 'sleep') {
-        // Redis: strtod(), no validation
-        const seconds = Number.parseFloat(args[1] ?? '0');
-        blockingSleep(Number.isFinite(seconds) ? seconds * 1000 : 0);
-      }
-      return OK;
-    },
-  },
+  { name: 'debug', arity: -2, flags: { noscript: true }, handler: debug },
 ];

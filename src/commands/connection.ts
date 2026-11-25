@@ -4,6 +4,7 @@ import type { Reply } from '../resp';
 import type { Protocol } from '../resp';
 import { OK, PONG, RespError, RespMap, RespSet, RespVerbatim, Status } from '../resp';
 import type { Client } from '../server/client';
+import type { RedisLiteServer } from '../server/server';
 import { parseInteger } from '../util';
 import { HELP_TEXT } from './meta-table';
 import type { CommandContext, CommandSpec } from './types';
@@ -36,16 +37,16 @@ export function subcommandSyntaxError(sub: string, command: string): CommandErro
   return new CommandError(`ERR unknown subcommand or wrong number of arguments for '${sub.slice(0, 128)}'. Try ${command.toUpperCase()} HELP.`);
 }
 
-/** The single ACL user: `default`, with nopass unless requirepass is set. */
-export function defaultPassword(ctx: CommandContext): string {
-  return ctx.server.config.get('requirepass') ?? '';
-}
-
-/** ACLAuthenticateUser(): OK or WRONGPASS (only the `default` user exists). */
-function authenticate(ctx: CommandContext, user: string, password: string): Reply {
-  const expected = defaultPassword(ctx);
-  if (user !== 'default' || (expected !== '' && password !== expected)) return new RespError(RespMessages.WRONGPASS);
-  ctx.client.authenticated = true;
+/** ACLAuthenticateUser(): OK, or WRONGPASS with an `auth` ACL LOG entry (object = the command name as sent). */
+function authenticate(ctx: CommandContext, username: string, password: string): Reply {
+  const { server, client } = ctx;
+  const user = server.acl.authenticate(username, password) ? server.acl.user(username) : undefined;
+  if (!user) {
+    server.aclLog(client, { reason: 'auth', context: server.aclContext(client), object: ctx.name ?? 'AUTH', username });
+    return new RespError(RespMessages.WRONGPASS);
+  }
+  client.user = user;
+  client.authenticated = true;
   return OK;
 }
 
@@ -70,20 +71,21 @@ function clientType(c: Client): string {
 
 const CLIENT_TYPES: Record<string, string> = { normal: 'normal', slave: 'replica', replica: 'replica', master: 'master', pubsub: 'pubsub' };
 
-function localAddress(ctx: CommandContext, c: Client): string {
+function localAddress(server: RedisLiteServer, c: Client): string {
   const s = c.socket;
-  return s ? `${s.localAddress ?? ctx.server.options.host}:${s.localPort ?? ctx.server.options.port}` : `${ctx.server.options.host}:${ctx.server.options.port}`;
+  return s ? `${s.localAddress ?? server.options.host}:${s.localPort ?? server.options.port}` : `${server.options.host}:${server.options.port}`;
 }
 
-export function clientInfoLine(ctx: CommandContext, c: Client): string {
+/** One CLIENT LIST / CLIENT INFO line (Redis catClientInfoString). */
+export function clientInfoLine(server: RedisLiteServer, c: Client): string {
   const now = Date.now();
   const multiMem = c.multi ? c.multi.reduce((n, argv) => n + argv.reduce((m, a) => m + a.length, 0), 0) : 0;
   return (
-    `id=${c.id} addr=${c.address} laddr=${localAddress(ctx, c)} fd=${c.socket ? c.id + 7 : -1} name=${c.name} ` +
+    `id=${c.id} addr=${c.address} laddr=${localAddress(server, c)} fd=${c.socket ? c.id + 7 : -1} name=${c.name} ` +
     `age=${Math.floor((now - c.createdAt) / 1000)} idle=${Math.floor((now - c.lastActiveAt) / 1000)} flags=${clientFlags(c)} ` +
     `db=${c.dbIndex} sub=${c.channels.size} psub=${c.patterns.size} ssub=${c.shardChannels.size} multi=${c.multi ? c.multi.length : -1} ` +
     `watch=${c.watched.size} qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=${multiMem} rbs=1024 rbp=0 obl=0 oll=0 omem=0 tot-mem=${1024 + multiMem} ` +
-    `events=r cmd=${c.lastCommand} user=default redir=${c.tracking ? c.trackingRedirect : -1} resp=${c.resp} ` +
+    `events=r cmd=${c.lastCommand} user=${c.user ? c.user.name : '(superuser)'} redir=${c.tracking ? c.trackingRedirect : -1} resp=${c.resp} ` +
     `lib-name=${c.libName} lib-ver=${c.libVer} io-thread=0 tot-net-in=${c.netIn} tot-net-out=${c.netOut} tot-cmds=${c.commandsProcessed}`
   );
 }
@@ -109,7 +111,7 @@ function clientList(ctx: CommandContext, args: string[]): Reply {
       if (c) clients.push(c);
     }
   } else if (args.length !== 1) throw new CommandError(RespMessages.SYNTAX);
-  return new RespVerbatim(clients.map((c) => `${clientInfoLine(ctx, c)}\n`).join(''));
+  return new RespVerbatim(clients.map((c) => `${clientInfoLine(ctx.server, c)}\n`).join(''));
 }
 
 function clientKill(ctx: CommandContext, args: string[]): Reply {
@@ -129,6 +131,7 @@ function clientKill(ctx: CommandContext, args: string[]): Reply {
   let type: string | null = null;
   let addr: string | null = null;
   let laddr: string | null = null;
+  let user: Client['user'] = null;
   let maxAge: number | null = null;
   let skipMe = true;
   for (let i = 1; i < args.length; i += 2) {
@@ -145,7 +148,8 @@ function clientKill(ctx: CommandContext, args: string[]): Reply {
     } else if (opt === 'addr') addr = value;
     else if (opt === 'laddr') laddr = value;
     else if (opt === 'user') {
-      if (value !== 'default') throw new CommandError(`ERR No such user '${value}'`);
+      user = ctx.server.acl.user(value) ?? null;
+      if (!user) throw new CommandError(`ERR No such user '${value}'`);
     } else if (opt === 'skipme') {
       const v = value.toLowerCase();
       if (v !== 'yes' && v !== 'no') throw new CommandError(RespMessages.SYNTAX);
@@ -160,7 +164,8 @@ function clientKill(ctx: CommandContext, args: string[]): Reply {
     if (id !== null && c.id !== id) continue;
     if (type !== null && clientType(c) !== type) continue;
     if (addr !== null && c.address !== addr) continue;
-    if (laddr !== null && localAddress(ctx, c) !== laddr) continue;
+    if (laddr !== null && localAddress(ctx.server, c) !== laddr) continue;
+    if (user !== null && c.user !== user) continue;
     if (maxAge !== null && Math.floor((now - c.createdAt) / 1000) <= maxAge) continue;
     if (skipMe && c === me) continue;
     kill(c);
@@ -182,7 +187,7 @@ function client(ctx: CommandContext, args: string[]): Reply | typeof NO_REPLY {
     case 'id':
       return c.id;
     case 'info':
-      return new RespVerbatim(`${clientInfoLine(ctx, c)}\n`);
+      return new RespVerbatim(`${clientInfoLine(ctx.server, c)}\n`);
     case 'list':
       return clientList(ctx, args);
     case 'setinfo': {
@@ -320,7 +325,9 @@ function reset(ctx: CommandContext): Reply {
   c.replyOff = false;
   c.skipNext = false;
   c.skipCurrent = false;
-  c.authenticated = defaultPassword(ctx) === '';
+  // clientSetDefaultAuth()
+  c.user = ctx.server.defaultUser;
+  c.authenticated = ctx.server.acl.defaultLoginAllowed();
   return new Status('RESET');
 }
 
@@ -353,7 +360,8 @@ export const connectionCommands: CommandSpec[] = [
     handler: (ctx, args) => {
       if (args.length > 2) throw new CommandError(RespMessages.SYNTAX);
       if (args.length === 1) {
-        if (defaultPassword(ctx) === '') throw new CommandError(RespMessages.AUTH_NO_PASSWORD);
+        const def = ctx.server.defaultUser;
+      if (def.nopass) throw new CommandError(RespMessages.AUTH_NO_PASSWORD);
         return authenticate(ctx, 'default', args[0]);
       }
       return authenticate(ctx, args[0], args[1]);

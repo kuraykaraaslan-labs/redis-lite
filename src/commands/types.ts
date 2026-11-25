@@ -14,6 +14,8 @@ export interface CommandContext {
   noBlock: boolean;
   /** Set by a write handler that ended up not modifying anything (Redis then does not signal the key). */
   noop: boolean;
+  /** The command name exactly as the client sent it (argv[0]), e.g. the ACL LOG object of a failed AUTH. */
+  name?: string;
 }
 
 /** Returned by a blocking command that found nothing: the server parks the client until `retry` yields a reply or the timeout fires. */

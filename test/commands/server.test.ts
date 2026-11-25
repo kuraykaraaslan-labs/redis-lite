@@ -921,6 +921,8 @@ describe('ACL', () => {
   });
 
   it('LOG is empty and can be reset', async () => {
+    // earlier tests in this file fail AUTH / HELLO AUTH, which Redis records in the ACL LOG
+    expect.soft(await t.call('ACL', 'LOG', 'RESET')).toBe('OK');
     expect.soft(await t.call('ACL', 'LOG')).toEqual([]);
     expect.soft(await t.call('ACL', 'LOG', '5')).toEqual([]);
     expect.soft(await t.call('ACL', 'LOG', 'RESET')).toBe('OK');

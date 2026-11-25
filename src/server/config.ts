@@ -61,6 +61,8 @@ function normalizeSave(value: string): string | { error: string } {
 export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'active-expire-effort': int(1, 1n, 10n),
   activedefrag: bool('no'),
+  'acl-pubsub-default': oneOf('resetchannels', ['allchannels', 'resetchannels']),
+  aclfile: str('', true),
   'acllog-max-len': int(128, 0n, LONG_MAX),
   'aof-use-rdb-preamble': bool('yes'),
   appendfilename: str('appendonly.aof', true),

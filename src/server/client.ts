@@ -3,6 +3,7 @@ import type { Socket } from 'node:net';
 import type { Reply } from '../resp';
 import type { Protocol } from '../resp';
 import { encode, RespPush } from '../resp';
+import type { AclUser } from './acl';
 
 export interface Waiter {
   client: Client;
@@ -12,6 +13,8 @@ export interface Waiter {
   timeoutReply: Reply;
   timer: NodeJS.Timeout | null;
   done: boolean;
+  /** The blocked command (ACL permissions are checked again before it is served, like Redis reprocessing it). */
+  argv?: string[];
 }
 
 /** One connection's state. */
@@ -22,7 +25,12 @@ export class Client {
   dbIndex = 0;
   /** Protocol negotiated with HELLO (2 by default). */
   resp: Protocol = 2;
+  /** Logged in: false only while the default user requires a password and the client has not authenticated yet. */
   authenticated: boolean;
+  /** The ACL user of the connection (`default` until AUTH); null = internal superuser client (no ACL checks). */
+  user: AclUser | null;
+  /** Running the queued commands of EXEC (Redis keeps CLIENT_MULTI set then: ACL LOG context `multi`). */
+  inExec = false;
   readonly createdAt = Date.now();
   lastActiveAt = Date.now();
   /** Full name (`client|info`) of the last command run, for CLIENT LIST `cmd=`. */
@@ -71,8 +79,10 @@ export class Client {
     readonly id: number,
     readonly socket: Socket | null,
     requiresAuth: boolean,
+    user: AclUser | null = null,
   ) {
     this.authenticated = !requiresAuth;
+    this.user = user;
   }
 
   get subscriptionCount(): number {

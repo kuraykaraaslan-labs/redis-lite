@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import type { AddressInfo, Server, Socket } from 'node:net';
 
 import { COMMANDS } from '../commands';
+import { clientInfoLine } from '../commands/connection';
 import type { CommandMeta } from '../commands/meta';
-import { arityOk, lookupCommand } from '../commands/meta';
+import { allCommandsDeep, arityOk, getCommandMeta, keysFromSpecs, lookupCommand } from '../commands/meta';
 import type { CommandContext } from '../commands/types';
 import { Block, NO_REPLY } from '../commands/types';
 import { CommandError } from '../errors';
@@ -12,10 +14,14 @@ import { LuaEngine } from '../lua/engine';
 import { RespMessages, unknownCommand, unknownSubcommand, wrongArity } from '../messages';
 import type { Reply } from '../resp';
 import { NULL_ARRAY, OK, QUEUED, RespError, RespParser, RespPush, Status } from '../resp';
-import { hashHasFieldTtl } from '../commands/hashes';
+import { hashFieldExpires, hashHasFieldTtl } from '../commands/hashes';
 import { Database } from '../store/database';
-import { updateEncoding } from '../store/encoding';
+import { objectEncoding, updateEncoding } from '../store/encoding';
+import { clientMemory, computeMemory } from '../store/memory';
+import type { KeyRecord, MemoryReport } from '../store/memory';
 import { matchGlob } from '../util';
+import { Acl, aclDenialMessage, noPermError } from './acl';
+import type { AclDenial, AclLogContext, AclLogInput, AclUser, KeyAccess } from './acl';
 import { Client } from './client';
 import { ServerConfig } from './config';
 import type { Waiter } from './client';
@@ -26,6 +32,57 @@ export interface ServerOptions {
   password?: string;
   databases: number;
   logLevel: 'silent' | 'warn' | 'info' | 'debug';
+  /** ACL file (the immutable `aclfile` config): loaded at startup, used by ACL LOAD / ACL SAVE. */
+  aclfile?: string;
+}
+
+/** Hooks other modules plug into DEBUG (the persistence engine provides RELOAD / LOADAOF). */
+export interface DebugHooks {
+  /** DEBUG RELOAD [MERGE] [NOFLUSH] [NOSAVE]; args are the options after RELOAD. */
+  reload?: (client: Client, args: string[]) => Reply;
+  /** DEBUG LOADAOF. */
+  loadaof?: (client: Client) => Reply;
+}
+
+/** Redis execCommand(): why a queued command became forbidden between MULTI and EXEC. */
+const EXEC_ACL_REASONS: Record<AclDenial['reason'], string> = {
+  command: 'no permission to execute the command or subcommand',
+  key: 'no permission to touch the specified keys',
+  channel: 'no permission to access one of the channels used as arguments',
+};
+
+/** Redis keyspec flags → ACL key permission (ACLSelectorCheckKey: access = read; insert / delete / update = write). */
+function keyAccess(key: string, flags: readonly string[]): KeyAccess {
+  return {
+    key,
+    read: flags.includes('access'),
+    write: flags.includes('insert') || flags.includes('delete') || flags.includes('update'),
+  };
+}
+
+/** Keys of a command with their ACL flags; SET and BITFIELD have variable flags resolved like setGetKeys / bitfieldGetKeys. */
+export function aclKeysOf(meta: CommandMeta, argv: string[]): KeyAccess[] {
+  const name = meta.fullname;
+  if (name === 'set' && argv.length >= 2) {
+    const get = argv.slice(3).some((a) => a.toLowerCase() === 'get');
+    return [keyAccess(argv[1], get ? ['RW', 'access', 'update'] : ['OW', 'update'])];
+  }
+  if (name === 'bitfield' && argv.length >= 2) {
+    let readonly = true;
+    for (let i = 2; i < argv.length; i++) {
+      const arg = argv[i].toLowerCase();
+      const rem = argv.length - i - 1;
+      if (arg === 'get' && rem >= 2) i += 2;
+      else if (arg === 'overflow' && rem >= 1) i += 1;
+      else {
+        readonly = false;
+        break;
+      }
+    }
+    return [keyAccess(argv[1], readonly ? ['RO', 'access'] : ['RW', 'access', 'update'])];
+  }
+  const refs = keysFromSpecs(meta, argv) ?? [];
+  return refs.map((r) => keyAccess(argv[r.index], r.flags));
 }
 
 /** Write commands whose integer reply 0 means nothing was modified (Redis does not signal the key then). */
@@ -48,6 +105,20 @@ function isNoop(name: string, args: string[], reply: unknown): boolean {
   if (name === 'getex' && args.length === 1) return true;
   if (Array.isArray(reply) && reply.every((r) => r === -2 || r === 0 || r === -1) && /^h(p?expire(at)?|persist)$/.test(name)) return true;
   return false;
+}
+
+/** strerror() text of a failed file operation. */
+function strerror(e: unknown): string {
+  const code = (e as NodeJS.ErrnoException).code;
+  const texts: Record<string, string> = {
+    ENOENT: 'No such file or directory',
+    EACCES: 'Permission denied',
+    EISDIR: 'Is a directory',
+    ENOTDIR: 'Not a directory',
+    EROFS: 'Read-only file system',
+    ENOSPC: 'No space left on device',
+  };
+  return (code && texts[code]) ?? (e as Error).message;
 }
 
 /** Commands a client in MULTI runs right away instead of queueing. */
@@ -101,6 +172,11 @@ function reprString(s: string): string {
 function redact(argv: string[]): string[] {
   const name = argv[0].toLowerCase();
   if (name === 'auth') return argv.map((a, i) => (i === 0 ? a : '(redacted)'));
+  if (name === 'acl' && argv[1]?.toLowerCase() === 'setuser') return argv.map((a, i) => (i < 2 ? a : '(redacted)'));
+  if (name === 'config' && argv[1]?.toLowerCase() === 'set') {
+    // sensitive configs (requirepass, masterauth) have their value redacted
+    return argv.map((a, i) => (i > 2 && i % 2 === 1 && /^(requirepass|masterauth)$/i.test(argv[i - 1]) ? '(redacted)' : a));
+  }
   if (name === 'hello') {
     const out = [...argv];
     for (let i = 2; i < out.length; i++) {
@@ -139,6 +215,19 @@ export class RedisLiteServer {
   dirty = 0;
   lua!: LuaEngine;
   readonly config: ServerConfig;
+  /** Users, permissions and ACL LOG. */
+  readonly acl: Acl;
+  /** INFO stats acl_access_denied_*. */
+  readonly aclStats = { auth: 0, command: 0, key: 0, channel: 0 };
+  /** master_replid (DEBUG CHANGE-REPL-ID replaces it). */
+  replId = randomBytes(20).toString('hex');
+  /** DEBUG SET-ACTIVE-EXPIRE: the background expire cycle runs only while true. */
+  activeExpire = true;
+  /** used_memory_peak and the unix time (s) it was reached. */
+  memoryPeak = 0;
+  memoryPeakTime = 0;
+  /** Extension points for DEBUG subcommands implemented elsewhere. */
+  readonly debugHooks: DebugHooks = {};
 
   private readonly versions = new Map<string, number>();
   private readonly waiters = new Map<string, Waiter[]>();
@@ -149,13 +238,41 @@ export class RedisLiteServer {
   private servingReady = false;
   private closing: Promise<void> | null = null;
   private readonly closeListeners: Array<() => void> = [];
+  /** Bumped by every change that can alter memory accounting (cache key of memoryReport()). */
+  private memoryEpoch = 0;
+  private memoryCache: { key: string; report: MemoryReport } | null = null;
+  /** Standalone Redis allocates a db's dicts on first use and keeps them (MEMORY STATS db.N). */
+  private readonly dbAllocated: boolean[];
 
   constructor(readonly options: ServerOptions) {
-    this.config = new ServerConfig({ port: String(options.port), bind: options.host, databases: String(options.databases), requirepass: options.password ?? '' });
+    this.config = new ServerConfig({
+      port: String(options.port),
+      bind: options.host,
+      databases: String(options.databases),
+      requirepass: options.password ?? '',
+      aclfile: options.aclfile ?? '',
+    });
     this.databases = Array.from({ length: options.databases }, (_, i) => new Database((key) => this.onExpired(i, key), this.config));
+    this.dbAllocated = this.databases.map(() => false);
+    this.acl = new Acl({
+      allCommands: () => allCommandsDeep().map((m) => m.fullname),
+      categoriesOf: (name) => (getCommandMeta(name)?.acl ?? []).map((c) => `@${c}`),
+      requirepass: options.password ?? '',
+      pubsubDefault: this.config.get('acl-pubsub-default') === 'allchannels' ? 'allchannels' : 'resetchannels',
+      logMaxLen: this.config.num('acllog-max-len'),
+    });
+  }
+
+  /** The `default` ACL user (it can never be deleted). */
+  get defaultUser(): AclUser {
+    const u = this.acl.user('default');
+    if (!u) throw new Error('ACL default user missing');
+    return u;
   }
 
   async listen(): Promise<AddressInfo> {
+    const aclfile = this.config.get('aclfile') ?? '';
+    if (aclfile) this.loadAclFile(aclfile);
     this.lua = await LuaEngine.create(this);
     const net = createServer((socket) => this.accept(socket));
     this.net = net;
@@ -167,6 +284,7 @@ export class RedisLiteServer {
       });
     });
     this.sweepTimer = setInterval(() => {
+      if (!this.activeExpire) return;
       const now = Date.now();
       for (const db of this.databases) db.sweep(now, 200);
     }, 100);
@@ -211,7 +329,8 @@ export class RedisLiteServer {
 
   private accept(socket: Socket): void {
     socket.setNoDelay(true);
-    const client = new Client(this.nextClientId++, socket, Boolean(this.config.get('requirepass')));
+    // clientSetDefaultAuth(): logged in as default when default is `on nopass`
+    const client = new Client(this.nextClientId++, socket, !this.acl.defaultLoginAllowed(), this.defaultUser);
     this.clients.add(client);
     this.stats.connections++;
     const parser = new RespParser({ maxBulkLen: () => this.config.num('proto-max-bulk-len') });
@@ -316,6 +435,7 @@ export class RedisLiteServer {
     if (this.slowlog.length > maxLen) this.slowlog.length = maxLen;
   }
 
+  /** Redis processCommand(): existence/arity, auth, no_multi, ACL, subscriber context, then queue (MULTI) or run. */
   private runTopLevel(client: Client, argv: string[]): void {
     const name = argv[0].toLowerCase();
     client.lastActiveAt = Date.now();
@@ -330,33 +450,217 @@ export class RedisLiteServer {
       return;
     }
 
+    const checked = this.reject(argv);
     const spec = COMMANDS.get(name);
-    if (!client.authenticated && !spec?.flags?.noauth) {
-      this.replyError(client, RespMessages.NOAUTH);
+    if (!spec || checked.error !== null) {
+      if (!spec) this.log('warn', `unknown command: ${name}`);
+      this.rejectCommand(client, checked.error ?? unknownCommand(argv[0], argv.slice(1)), checked.statName);
+      return;
+    }
+    const meta = checked.meta;
+    const fullname = checked.statName ?? name;
+    if (this.authRequired(client) && !spec.flags?.noauth) {
+      this.rejectCommand(client, RespMessages.NOAUTH, fullname, name === 'exec');
+      return;
+    }
+    if (client.multi && meta?.flagSet.has('no_multi')) {
+      this.rejectCommand(client, 'ERR Command not allowed inside a transaction', fullname);
+      return;
+    }
+    const denial = this.aclDenial(client, argv, meta);
+    if (denial && client.user) {
+      client.lastCommand = fullname;
+      this.aclLogDenial(client, denial, this.aclContext(client));
+      this.rejectCommand(client, noPermError(denial, client.user.name), fullname, name === 'exec');
       return;
     }
     if (client.resp === 2 && client.subscriptionCount > 0 && !SUBSCRIBER_ALLOWED.has(name)) {
-      this.replyError(client, RespMessages.SUBSCRIBE_CONTEXT.replace('%s', name));
+      this.rejectCommand(client, RespMessages.SUBSCRIBE_CONTEXT.replace('%s', name), fullname);
       return;
     }
 
     if (client.multi && !MULTI_IMMEDIATE.has(name)) {
-      const checked = this.reject(argv);
-      const problem = checked.error ?? (checked.meta?.flagSet.has('no_multi') ? 'ERR Command not allowed inside a transaction' : null);
-      if (problem) {
-        client.multiError = true;
-        this.replyError(client, problem);
-        return;
-      }
       client.multi.push(argv);
       client.write(QUEUED);
       return;
     }
 
-    const result = this.execute(client, argv, { inScript: false, noBlock: false });
-    if (result instanceof Block) this.block(client, result);
+    const result = this.execute(client, argv, { inScript: false, noBlock: false }, checked);
+    if (result instanceof Block) this.block(client, result, argv);
     else if (result !== NO_REPLY) client.write(result);
     this.serveReadyKeys();
+  }
+
+  /**
+   * Redis rejectCommand(): flags a pending transaction, counts the rejection and replies the error. A rejected EXEC
+   * aborts the transaction instead (execCommandAbort).
+   */
+  private rejectCommand(client: Client, message: string, statName?: string, isExec = false): void {
+    if (client.multi) client.multiError = true;
+    if (statName) this.commandStat(statName).rejected++;
+    if (isExec) {
+      client.multi = null;
+      client.multiError = false;
+      client.watched.clear();
+      const reason = message.startsWith('NOAUTH') ? `${message}  ` : message;
+      this.replyError(client, `EXECABORT Transaction discarded because of: ${reason}`);
+      return;
+    }
+    this.replyError(client, message);
+  }
+
+  /** authRequired(): the default user needs a password (or is off) and this client has not authenticated. */
+  authRequired(client: Client): boolean {
+    return !client.authenticated && !this.acl.defaultLoginAllowed();
+  }
+
+  // ---- ACL -----------------------------------------------------------------------------------------------------
+
+  /** ACLCheckAllPerm() for argv (argv[0] included); null when allowed, the client is a superuser or the command is unknown. */
+  aclDenial(client: Client, argv: string[], meta = lookupCommand(argv).meta): AclDenial | null {
+    const user = client.user;
+    if (!user || !meta) return null;
+    return this.aclCheckUser(user, argv, meta);
+  }
+
+  aclCheckUser(user: AclUser, argv: string[], meta: CommandMeta): AclDenial | null {
+    const root = user.root;
+    if (root.allCommands && root.allKeys && root.allChannels) return null;
+    const command = meta.parent ? meta.parent.name : meta.name;
+    const sub = meta.parent ? meta.name : null;
+    const keys = user.selectors.some((s) => !s.allKeys) ? aclKeysOf(meta, argv) : [];
+    const noauth = meta.flagSet.has('no_auth') || Boolean(COMMANDS.get(command)?.flags?.noauth);
+    return this.acl.check(user, command, sub, argv.slice(1), keys, { noauth });
+  }
+
+  /** ACL LOG context of a client: `multi` while queueing or running a transaction. */
+  aclContext(client: Client): AclLogContext {
+    return client.multi || client.inExec ? 'multi' : 'toplevel';
+  }
+
+  /** addACLLogEntry(): ACL LOG + INFO acl_access_denied_* counters. */
+  aclLog(client: Client, entry: Omit<AclLogInput, 'clientInfo'>): void {
+    this.aclStats[entry.reason]++;
+    this.acl.log({ ...entry, clientInfo: clientInfoLine(this, client) });
+  }
+
+  aclLogDenial(client: Client, denial: AclDenial, context: AclLogContext): void {
+    this.aclLog(client, { reason: denial.reason, context, object: denial.object, username: client.user?.name ?? 'default' });
+  }
+
+  /** Closes a connection after the current reply when it is the caller, right away otherwise (freeClientAsync). */
+  private killOrCloseAfterReply(target: Client, current: Client | null): void {
+    if (target === current) target.closeAfterReply = true;
+    else this.killClient(target);
+  }
+
+  /** ACLFreeUserAndKillClients(): every connection authenticated as `user` is closed (ACL DELUSER, ACL LOAD). */
+  killUserClients(user: AclUser, current: Client | null): void {
+    for (const c of [...this.clients]) {
+      if (c.user !== user) continue;
+      c.user = this.defaultUser;
+      c.authenticated = false;
+      this.killOrCloseAfterReply(c, current);
+    }
+  }
+
+  /** ACLKillPubsubClientsIfNeeded(): subscribers of `user` holding a channel or pattern it may no longer access are closed. */
+  killRevokedSubscribers(user: AclUser, current: Client | null): void {
+    for (const c of [...this.clients]) {
+      if (c.user !== user || c.subscriptionCount === 0) continue;
+      const revoked =
+        [...c.channels].some((ch) => !this.acl.channelAllowed(user, ch, false)) ||
+        [...c.shardChannels].some((ch) => !this.acl.channelAllowed(user, ch, false)) ||
+        [...c.patterns].some((p) => !this.acl.channelAllowed(user, p, true));
+      if (revoked) this.killOrCloseAfterReply(c, current);
+    }
+  }
+
+  /** Reads the ACL file; throws CommandError with Redis's ACL LOAD error text. Returns the names whose users changed. */
+  loadAclFile(path: string, current: Client | null = null): string[] {
+    let text: string;
+    try {
+      text = readFileSync(path, 'latin1');
+    } catch (e) {
+      throw new CommandError(`ERR Error loading ACLs, opening file '${path}': ${strerror(e)}`);
+    }
+    const before = new Map(this.acl.users().map((n) => [n, this.acl.user(n)] as const));
+    const changed = this.acl.loadFile(text, path);
+    for (const name of changed) {
+      const old = before.get(name);
+      // the default user is updated in place and keeps its clients (pub/sub permissions are re-checked below)
+      if (old && name !== 'default') this.killUserClients(old, current);
+    }
+    for (const u of before.values()) if (u && this.acl.user(u.name) === u) this.killRevokedSubscribers(u, current);
+    return changed;
+  }
+
+  // ---- memory --------------------------------------------------------------------------------------------------
+
+  private keyRecords(db: Database): KeyRecord[] {
+    const out: KeyRecord[] = [];
+    for (const key of db.keys()) {
+      const value = db.peek(key);
+      if (!value) continue;
+      const fieldTtls = value.type === 'hash' ? hashFieldExpires(value.value) : undefined;
+      out.push({
+        key,
+        value,
+        encoding: objectEncoding(value, this.config, fieldTtls !== undefined),
+        hasExpire: db.getExpire(key) !== undefined,
+        fieldTtls,
+      });
+    }
+    return out;
+  }
+
+  /** used_memory and friends (getMemoryOverheadData over the whole dataset); also tracks used_memory_peak. */
+  memoryReport(): MemoryReport {
+    const clientsNormal = this.clients.size * clientMemory();
+    const key = `${this.memoryEpoch}|${clientsNormal}`;
+    let report = this.memoryCache?.key === key ? this.memoryCache.report : null;
+    if (!report) {
+      const databases = this.databases.map((db, id) => {
+        const keys = this.keyRecords(db);
+        if (keys.length) this.dbAllocated[id] = true;
+        return { id, keys, allocated: this.dbAllocated[id] };
+      });
+      report = computeMemory({
+        databases,
+        clientsNormal,
+        sizes: {
+          listMaxListpackSize: this.config.num('list-max-listpack-size'),
+          streamNodeMaxEntries: this.config.num('stream-node-max-entries'),
+          streamNodeMaxBytes: this.config.num('stream-node-max-bytes'),
+        },
+      });
+      this.memoryCache = { key, report };
+    }
+    if (report.usedMemory > this.memoryPeak) {
+      this.memoryPeak = report.usedMemory;
+      this.memoryPeakTime = Math.floor(Date.now() / 1000);
+    }
+    // the report's own peak is max(previous peak, used) at computation time; refresh it with the tracked peak
+    if (report.peak !== this.memoryPeak) {
+      report = { ...report, peak: this.memoryPeak, peakPercentage: Math.fround((report.usedMemory * 100) / this.memoryPeak) };
+    }
+    return report;
+  }
+
+  /** CONFIG SET side effects. */
+  applyConfig(name: string, value: string): void {
+    this.memoryEpoch++;
+    switch (ServerConfig.canonical(name)) {
+      case 'requirepass':
+        this.acl.setRequirePass(value);
+        break;
+      case 'acllog-max-len':
+        this.acl.logMaxLen = Number(value);
+        break;
+      case 'acl-pubsub-default':
+        this.acl.pubsubDefault = value === 'allchannels' ? 'allchannels' : 'resetchannels';
+        break;
+    }
   }
 
   /** Redis processCommand() checks before running a command: unknown command / subcommand, arity. */
@@ -379,11 +683,16 @@ export class RedisLiteServer {
   // ---- command execution ---------------------------------------------------------------------------------------
 
   /** Runs one command. Used by sockets, EXEC and Lua `redis.call`. */
-  execute(client: Client, argv: string[], mode: { inScript: boolean; noBlock: boolean }): Reply | Block | typeof NO_REPLY {
+  execute(
+    client: Client,
+    argv: string[],
+    mode: { inScript: boolean; noBlock: boolean },
+    prechecked?: ReturnType<RedisLiteServer['reject']>,
+  ): Reply | Block | typeof NO_REPLY {
     const name = argv[0].toLowerCase();
     const args = argv.slice(1);
     const spec = COMMANDS.get(name);
-    const checked = this.reject(argv);
+    const checked = prechecked ?? this.reject(argv);
     if (!spec || checked.error !== null) {
       const message = checked.error ?? unknownCommand(argv[0], args);
       if (!spec) this.log('warn', `unknown command: ${name}`);
@@ -394,13 +703,21 @@ export class RedisLiteServer {
     const meta = checked.meta;
     const fullname = checked.statName ?? name;
     if (mode.inScript && spec.flags?.noscript) return new RespError(RespMessages.NOT_ALLOWED_FROM_SCRIPT);
+    if (mode.inScript && client.user) {
+      // scriptVerifyACL()
+      const denial = this.aclDenial(client, argv, meta);
+      if (denial) {
+        this.aclLogDenial(client, denial, 'lua');
+        return new RespError(`ERR ACL failure in script: ${aclDenialMessage(denial, client.user.name)}`);
+      }
+    }
 
     if (this.monitors.size && !meta?.flagSet.has('skip_monitor') && !meta?.flagSet.has('admin')) this.feedMonitors(client, argv, mode.inScript);
     this.stats.commands++;
     client.commandsProcessed++;
     if (!mode.inScript) client.lastCommand = fullname;
     const db = this.databases[client.dbIndex];
-    const ctx: CommandContext = { server: this, client, db, inScript: mode.inScript, noBlock: mode.noBlock, noop: false };
+    const ctx: CommandContext = { server: this, client, db, inScript: mode.inScript, noBlock: mode.noBlock, noop: false, name: argv[0] };
     db.touchOnRead = !client.noTouch || name === 'touch';
     const started = process.hrtime.bigint();
     let result: Reply | Block | typeof NO_REPLY;
@@ -431,7 +748,9 @@ export class RedisLiteServer {
   /** Marks a key modified: invalidates WATCH and wakes clients blocked on it. */
   touch(dbIndex: number, key: string): void {
     this.dirty++;
+    this.memoryEpoch++;
     const value = this.databases[dbIndex]?.peek(key);
+    if (value) this.dbAllocated[dbIndex] = true;
     if (value) updateEncoding(value, this.config, value.type === 'hash' && hashHasFieldTtl(value.value));
     const k = `${dbIndex}:${key}`;
     this.versions.set(k, (this.versions.get(k) ?? 0) + 1);
@@ -444,6 +763,7 @@ export class RedisLiteServer {
 
   private onExpired(dbIndex: number, key: string): void {
     this.stats.expired++;
+    this.memoryEpoch++;
     const k = `${dbIndex}:${key}`;
     this.versions.set(k, (this.versions.get(k) ?? 0) + 1);
   }
@@ -461,9 +781,26 @@ export class RedisLiteServer {
     if (aborted) return new RespError(RespMessages.EXECABORT);
     if (dirty) return NULL_ARRAY;
     const replies: Reply[] = [];
-    for (const argv of queued) {
-      const r = this.execute(client, argv, { inScript: false, noBlock: true });
-      replies.push(r instanceof Block || r === NO_REPLY ? NULL_ARRAY : r);
+    client.inExec = true;
+    try {
+      for (const argv of queued) {
+        // ACL permissions are checked again at EXEC time in case they changed after the commands were queued
+        const denial = this.aclDenial(client, argv);
+        if (denial) {
+          client.lastCommand = 'exec';
+          this.aclLogDenial(client, denial, 'multi');
+          const message =
+            'NOPERM ACLs rules changed between the moment the transaction was accumulated and the EXEC call. ' +
+            `This command is no longer allowed for the following reason: ${EXEC_ACL_REASONS[denial.reason]}`;
+          this.countError(message);
+          replies.push(new RespError(message));
+          continue;
+        }
+        const r = this.execute(client, argv, { inScript: false, noBlock: true });
+        replies.push(r instanceof Block || r === NO_REPLY ? NULL_ARRAY : r);
+      }
+    } finally {
+      client.inExec = false;
     }
     return replies;
   }
@@ -473,6 +810,9 @@ export class RedisLiteServer {
    * for SWAPDB, in `other`). Call it before the database changes. Watched keys that did not exist are left alone (Redis 7.0+).
    */
   signalFlushedDb(dbIndex: number, other?: number): void {
+    // the peak is sampled on demand; take a sample before a database is emptied
+    if (other === undefined && this.databases[dbIndex]?.keys().length) this.memoryReport();
+    this.memoryEpoch++;
     const prefix = `${dbIndex}:`;
     const bumped = new Set<string>();
     for (const c of this.clients) {
@@ -494,8 +834,9 @@ export class RedisLiteServer {
 
   // ---- blocking ------------------------------------------------------------------------------------------------
 
-  private block(client: Client, block: Block): void {
+  private block(client: Client, block: Block, argv?: string[]): void {
     const waiter: Waiter = {
+      argv,
       client,
       dbKeys: block.keys.map((k) => `${client.dbIndex}:${k}`),
       retry: block.retry,
@@ -557,6 +898,10 @@ export class RedisLiteServer {
           if (!list) continue;
           for (const waiter of [...list]) {
             if (waiter.done) continue;
+            if (this.rejectBlockedByAcl(waiter)) {
+              released.push(waiter.client);
+              continue;
+            }
             const reply = waiter.retry();
             if (reply === undefined) continue;
             this.unblock(waiter);
@@ -570,6 +915,20 @@ export class RedisLiteServer {
     }
     for (const client of released) this.drain(client);
     if (this.readyKeys.size) this.serveReadyKeys();
+  }
+
+  /** A blocked command is re-checked against the ACLs before it is served (Redis reprocesses it): NOPERM when revoked. */
+  private rejectBlockedByAcl(waiter: Waiter): boolean {
+    const { client, argv } = waiter;
+    if (!argv || !client.user) return false;
+    const { meta } = lookupCommand(argv);
+    const denial = meta ? this.aclDenial(client, argv, meta) : null;
+    if (!denial || !meta) return false;
+    this.unblock(waiter);
+    this.aclLogDenial(client, denial, 'toplevel');
+    this.commandStat(meta.fullname).rejected++;
+    this.replyError(client, noPermError(denial, client.user.name));
+    return true;
   }
 
   // ---- pub/sub -------------------------------------------------------------------------------------------------
@@ -626,6 +985,7 @@ export class RedisLiteServer {
 
   /** SWAPDB: exchanges the contents of two databases, invalidates WATCHes and serves clients blocked on keys that now exist. */
   swapDatabases(a: number, b: number): void {
+    this.memoryEpoch++;
     this.signalFlushedDb(a, b);
     if (a !== b) this.signalFlushedDb(b, a);
     this.databases[a].swapWith(this.databases[b]);
@@ -654,7 +1014,7 @@ export class RedisLiteServer {
 
   /** A client that is not attached to a socket (embedded use, tests). */
   createInternalClient(): Client {
-    return new Client(this.nextClientId++, null, false);
+    return new Client(this.nextClientId++, null, false, null);
   }
 
   status(text: string): Status {
