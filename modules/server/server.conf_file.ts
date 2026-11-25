@@ -8,8 +8,12 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { REDIS_VERSION } from '@/modules/connection/connection.commands';
+import { formatMessage } from '@/libs/message-format';
+
 import { splitArgs } from '@/modules/persistence/persistence.core';
+
+import { REDIS_VERSION } from './server.constants';
+import ServerMessages from './server.messages';
 
 export interface ConfDirective {
   name: string;
@@ -21,19 +25,17 @@ export interface ConfDirective {
 
 /** The fatal error Redis prints for a bad configuration line. */
 export function configFileError(d: Pick<ConfDirective, 'line' | 'text'>, reason: string): Error {
-  return new Error(
-    `\n*** FATAL CONFIG FILE ERROR (Redis ${REDIS_VERSION}) ***\nReading the configuration file, at line ${d.line}\n>>> '${d.text}'\n${reason}`,
-  );
+  return new Error(formatMessage(ServerMessages.CONF_FATAL, { version: REDIS_VERSION, line: d.line, text: d.text, reason }));
 }
 
 /** Every directive of a config file, `include`s expanded in place (paths relative to the working directory). */
 export function readConfigFile(path: string, depth = 0): ConfDirective[] {
-  if (depth > 16) throw new Error(`Fatal error, too many nested includes reading '${path}'`);
+  if (depth > 16) throw new Error(formatMessage(ServerMessages.CONF_TOO_MANY_INCLUDES, { path }));
   let text: string;
   try {
     text = readFileSync(path, 'latin1');
   } catch (e) {
-    throw new Error(`Fatal error, can't open config file '${path}': ${(e as Error).message}`);
+    throw new Error(formatMessage(ServerMessages.CONF_OPEN, { path, error: (e as Error).message }));
   }
   const out: ConfDirective[] = [];
   text.split('\n').forEach((raw, i) => {
@@ -41,11 +43,11 @@ export function readConfigFile(path: string, depth = 0): ConfDirective[] {
     if (!line || line.startsWith('#')) return;
     const args = splitArgs(line);
     const d = { file: path, line: i + 1, text: line };
-    if (!args) throw configFileError(d, 'Unbalanced quotes in configuration line');
+    if (!args) throw configFileError(d, ServerMessages.CONF_UNBALANCED_QUOTES);
     if (!args.length) return;
     const name = args[0].toLowerCase();
     if (name === 'include') {
-      if (args.length !== 2) throw configFileError(d, 'Bad directive or wrong number of arguments');
+      if (args.length !== 2) throw configFileError(d, ServerMessages.CONF_BAD_DIRECTIVE);
       out.push(...readConfigFile(args[1], depth + 1));
       return;
     }
@@ -70,7 +72,7 @@ export function foldDirectives(
       unknown.push(d);
       continue;
     }
-    if (!d.args.length) throw configFileError(d, 'Bad directive or wrong number of arguments');
+    if (!d.args.length) throw configFileError(d, ServerMessages.CONF_BAD_DIRECTIVE);
     const value = d.args.join(' ');
     if (d.name === 'save') {
       if (d.args.length === 1 && d.args[0] === '') values.set('save', '');

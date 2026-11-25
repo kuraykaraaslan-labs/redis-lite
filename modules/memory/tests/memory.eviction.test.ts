@@ -14,8 +14,10 @@ import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
 import { objectEncoding } from '@/modules/database/database.encoding';
 import { sleep, tempDir, useServer } from '@/tests/helpers';
 
-import { clientMemory, computeMemory } from '../memory.accounting';
-import type { KeyRecord } from '../memory.accounting';
+import MemoryService from '../memory.service';
+import type { KeyRecord } from '../memory.types';
+
+const { clientMemory, computeMemory } = MemoryService;
 
 /**
  * maxmemory and the eviction policies, as documented on redis.io ("Key eviction") and in redis.conf: the policies,

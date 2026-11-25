@@ -1,3 +1,7 @@
+import { formatMessage } from '@/libs/message-format';
+
+import ServerMessages from './server.messages';
+
 /**
  * Live server configuration (CONFIG GET / SET). Values are kept as Redis prints them in CONFIG GET (memory values in bytes,
  * booleans as yes/no, enums lowercase). Types, bounds, defaults and error texts follow Redis 8 (src/config.c).
@@ -39,7 +43,7 @@ function normalizeKeyspaceEvents(value: string): string | { error: string } {
   for (const ch of value) {
     if (ch === 'A') for (const c of all) set.add(c);
     else if (classes.includes(ch) || ch === 'K' || ch === 'E') set.add(ch);
-    else return { error: "Invalid event class character. Use 'Ag$lshzxeKEtmdn'." };
+    else return { error: ServerMessages.CONFIG_KEYSPACE_EVENTS };
   }
   let out = '';
   if ([...all].every((c) => set.has(c))) out = 'A';
@@ -54,7 +58,7 @@ function normalizeKeyspaceEvents(value: string): string | { error: string } {
 /** save: "<seconds> <changes> ..." pairs, or "" to disable. */
 function normalizeSave(value: string): string | { error: string } {
   const parts = value.split(' ').filter(Boolean);
-  if (parts.length % 2 || parts.some((p) => !/^\d+$/.test(p))) return { error: 'Invalid save parameters' };
+  if (parts.length % 2 || parts.some((p) => !/^\d+$/.test(p))) return { error: ServerMessages.CONFIG_SAVE };
   return parts.map((p) => String(Number(p))).join(' ');
 }
 
@@ -194,23 +198,23 @@ export class ServerConfig {
     switch (t.kind) {
       case 'bool': {
         const v = value.toLowerCase();
-        return v === 'yes' || v === 'no' ? { value: v } : { error: "argument must be 'yes' or 'no'" };
+        return v === 'yes' || v === 'no' ? { value: v } : { error: ServerMessages.CONFIG_BOOL };
       }
       case 'enum': {
         const v = value.toLowerCase();
-        return t.values.includes(v) ? { value: v } : { error: `argument(s) must be one of the following: ${t.values.join(', ')}` };
+        return t.values.includes(v) ? { value: v } : { error: formatMessage(ServerMessages.CONFIG_ENUM, { values: t.values.join(', ') }) };
       }
       case 'int': {
-        if (!/^(0|-?[1-9]\d*)$/.test(value)) return { error: "argument couldn't be parsed into an integer" };
+        if (!/^(0|-?[1-9]\d*)$/.test(value)) return { error: ServerMessages.CONFIG_INT };
         const n = BigInt(value);
-        if (n < LONG_MIN || n > LONG_MAX) return { error: "argument couldn't be parsed into an integer" };
-        if (n < t.min || n > t.max) return { error: `argument must be between ${t.min} and ${t.max} inclusive` };
+        if (n < LONG_MIN || n > LONG_MAX) return { error: ServerMessages.CONFIG_INT };
+        if (n < t.min || n > t.max) return { error: formatMessage(ServerMessages.CONFIG_RANGE, { min: t.min.toString(), max: t.max.toString() }) };
         return { value: n.toString() };
       }
       case 'memory': {
         const n = parseMemory(value);
-        if (n === null || n > LONG_MAX) return { error: 'argument must be a memory value' };
-        if (n < t.min || n > t.max) return { error: `argument must be between ${t.min} and ${t.max} inclusive` };
+        if (n === null || n > LONG_MAX) return { error: ServerMessages.CONFIG_MEMORY };
+        if (n < t.min || n > t.max) return { error: formatMessage(ServerMessages.CONFIG_RANGE, { min: t.min.toString(), max: t.max.toString() }) };
         return { value: n.toString() };
       }
       case 'string':

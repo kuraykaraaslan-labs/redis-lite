@@ -1,55 +1,17 @@
-import { CommandError } from '@/libs/app-error';
-import { RespMessages } from '@/libs/resp/messages';
-import { OK } from '@/libs/resp';
-
+import { withDTO } from '@/modules/command/command.handler';
 import type { CommandSpec } from '@/modules/command/command.types';
 
+import { WatchDTO } from './transactions.dto';
+import TransactionsService from './transactions.service';
+
+/** Routing of the transaction commands: name, arity, flags, then DTO → service. No logic lives here. */
+
+const NOSCRIPT = { noscript: true } as const;
+
 export const transactionCommands: CommandSpec[] = [
-  {
-    name: 'multi',
-    arity: 1,
-    flags: { noscript: true },
-    handler: (ctx) => {
-      if (ctx.client.multi) throw new CommandError(RespMessages.MULTI_NESTED);
-      ctx.client.multi = [];
-      ctx.client.multiError = false;
-      return OK;
-    },
-  },
-  { name: 'exec', arity: 1, flags: { noscript: true }, handler: (ctx) => ctx.server.runExec(ctx.client) },
-  {
-    name: 'discard',
-    arity: 1,
-    flags: { noscript: true },
-    handler: (ctx) => {
-      if (!ctx.client.multi) throw new CommandError(RespMessages.DISCARD_WITHOUT_MULTI);
-      ctx.client.multi = null;
-      ctx.client.multiError = false;
-      ctx.client.watched.clear();
-      return OK;
-    },
-  },
-  {
-    name: 'watch',
-    arity: -2,
-    flags: { noscript: true },
-    handler: (ctx, args) => {
-      if (ctx.client.multi) throw new CommandError(RespMessages.WATCH_IN_MULTI);
-      for (const key of args) {
-        ctx.db.peek(key); // expire first, so an already-expired key does not count as a change later (no LRU/LFU touch)
-        const k = `${ctx.client.dbIndex}:${key}`;
-        if (!ctx.client.watched.has(k)) ctx.client.watched.set(k, ctx.server.keyVersion(ctx.client.dbIndex, key));
-      }
-      return OK;
-    },
-  },
-  {
-    name: 'unwatch',
-    arity: 1,
-    flags: { noscript: true },
-    handler: (ctx) => {
-      ctx.client.watched.clear();
-      return OK;
-    },
-  },
+  { name: 'multi', arity: 1, flags: NOSCRIPT, handler: (ctx) => TransactionsService.multi(ctx) },
+  { name: 'exec', arity: 1, flags: NOSCRIPT, handler: (ctx) => TransactionsService.exec(ctx) },
+  { name: 'discard', arity: 1, flags: NOSCRIPT, handler: (ctx) => TransactionsService.discard(ctx) },
+  { name: 'watch', arity: -2, flags: NOSCRIPT, handler: withDTO(WatchDTO, TransactionsService.watch) },
+  { name: 'unwatch', arity: 1, flags: NOSCRIPT, handler: (ctx) => TransactionsService.unwatch(ctx) },
 ];

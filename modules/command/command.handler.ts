@@ -4,10 +4,10 @@ import { NULL_ARRAY } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 import { validationErrorReply } from '@/libs/schemas';
 
-import type { CommandContext, CommandSpec, HandlerResult } from './command.types';
+import type { CommandContext, CommandHandler, CommandSpec, HandlerResult } from './command.types';
 
 // ============================================================================
-// Handler results
+// Handler Results
 // ============================================================================
 
 /** Returned by a blocking command that found nothing: the server parks the client until `retry` yields a reply or the timeout fires. */
@@ -26,7 +26,7 @@ export class Block {
 export const NO_REPLY = Symbol('NO_REPLY');
 
 // ============================================================================
-// Handler builders
+// Handler Builders
 // ============================================================================
 
 /** Key extractor for keys at fixed positions: first..last (inclusive, -1 = last arg) every `step`. */
@@ -54,4 +54,13 @@ export function withDTO<TInput>(
   action: (ctx: CommandContext, input: TInput) => HandlerResult,
 ): CommandSpec['handler'] {
   return (ctx, args) => validated(dto, args, (input) => action(ctx, input));
+}
+
+/**
+ * Routing of a container command (CLIENT, CONFIG, ACL…) on its subcommand `args[0]` (case-insensitive). Each route gets
+ * the whole `args`, subcommand included (error texts quote it as typed); `fallback` answers any other subcommand.
+ */
+export function bySubcommand(routes: Record<string, CommandHandler>, fallback: CommandHandler): CommandHandler {
+  const table = new Map(Object.entries(routes));
+  return (ctx, args) => (table.get(args[0].toLowerCase()) ?? fallback)(ctx, args);
 }

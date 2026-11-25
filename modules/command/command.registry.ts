@@ -16,6 +16,7 @@ import { stringCommands } from '@/modules/strings/strings.commands';
 import { transactionCommands } from '@/modules/transactions/transactions.commands';
 import { zsetCommands } from '@/modules/zsets/zsets.commands';
 
+import CommandLookupService from './command.lookup.service';
 import type { CommandSpec } from './command.types';
 
 /** Every supported command, by lowercase name. */
@@ -40,3 +41,6 @@ export const COMMANDS: ReadonlyMap<string, CommandSpec> = new Map(
     ...functionCommands,
   ].map((spec) => [spec.name, spec]),
 );
+
+// the metadata lookup reads the implemented commands from here (see CommandLookupService.useRegistry)
+CommandLookupService.useRegistry(COMMANDS);

@@ -1,7 +1,4 @@
-export interface ZEntry {
-  member: string;
-  score: number;
-}
+import type { LexBound, ScoreBound, ZEntry } from './zsets.types';
 
 function compare(a: ZEntry, score: number, member: string): number {
   if (a.score !== score) return a.score < score ? -1 : 1;
@@ -85,13 +82,6 @@ export class ZSet {
     return [lo, hi];
   }
 }
-
-export interface ScoreBound {
-  value: number;
-  exclusive: boolean;
-}
-
-export type LexBound = { kind: 'min' } | { kind: 'max' } | { kind: 'value'; value: string; exclusive: boolean };
 
 function lexAboveMin(member: string, min: LexBound): boolean {
   if (min.kind === 'min') return true;

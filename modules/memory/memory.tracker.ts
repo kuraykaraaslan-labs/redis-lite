@@ -4,7 +4,7 @@
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  *
  * Redis's allocator knows used_memory at all times, so maxmemory can be checked before every command. Here the size of
- * every key is computed by the memory model (src/store/memory.ts) and cached; a key is re-sized only after it changed
+ * every key is computed by the memory model (MemoryService) and cached; a key is re-sized only after it changed
  * (a write touched it, it was added, removed, expired or got / lost a TTL). Each database keeps a running total, so
  * used_memory costs O(databases) plus the keys that changed since the last look, never a rescan of the dataset.
  */
@@ -13,20 +13,10 @@ import type { Database } from '@/modules/database/database.core';
 import { objectEncoding } from '@/modules/database/database.encoding';
 import type { ServerConfig } from '@/modules/server/server.config';
 
-import { objectSize } from './memory.accounting';
-import type { DbSnapshot } from './memory.accounting';
+import MemoryService from './memory.service';
+import type { DbSizes, DbSnapshot } from './memory.types';
 
-interface DbSizes {
-  /** Cached objectSize of every key that is not stale. */
-  sizes: Map<string, number>;
-  /** Sum of `sizes`. */
-  total: number;
-  /** Keys changed since they were last sized. */
-  stale: Set<string>;
-  /** Everything must be re-sized (flush, swap, config change). */
-  all: boolean;
-}
-
+/** Per-server stateful component: cached key sizes and per-database totals. */
 export class MemoryTracker {
   private readonly dbs: DbSizes[];
 
@@ -66,7 +56,7 @@ export class MemoryTracker {
     const value = db.raw(key);
     if (!value) return undefined;
     const fieldTtls = value.type === 'hash' ? hashFieldExpires(value.value) : undefined;
-    return objectSize(key, value, objectEncoding(value, this.config, fieldTtls !== undefined), {
+    return MemoryService.objectSize(key, value, objectEncoding(value, this.config, fieldTtls !== undefined), {
       samples: 0,
       hasExpire: db.hasExpireRaw(key),
       fieldTtls,
@@ -111,3 +101,5 @@ export class MemoryTracker {
     });
   }
 }
+
+export default MemoryTracker;

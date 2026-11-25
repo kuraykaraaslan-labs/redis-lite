@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+
+import type { z } from 'zod';
+
+import { firstIssue } from '@/libs/schemas';
+
+import { EvalDTO, EvalShaDTO, FcallDTO, FunctionDTO, ScriptDTO } from '../scripting.dto';
+
+/**
+ * Unit tests of the stateless argument grammar (no server): parsed shapes and which error wins.
+ * The end-to-end behaviour of every command is covered by the scripting.*.service and scripting.*.engine tests.
+ */
+
+/** The error text a DTO reports for `args`, or the parsed value when it succeeds. */
+function parse(dto: z.ZodType, args: string[]): unknown {
+  const result = dto.safeParse(args);
+  return result.success ? result.data : firstIssue(result.error);
+}
+
+describe('numkeys (EvalDTO, EvalShaDTO, FcallDTO)', () => {
+  it('splits keys and arguments', () => {
+    expect(parse(EvalDTO, ['return 1', '2', 'k1', 'k2', 'a1'])).toEqual({ script: 'return 1', keys: ['k1', 'k2'], argv: ['a1'] });
+    expect(parse(EvalShaDTO, ['ABCDEF', '0', 'a1'])).toEqual({ sha: 'abcdef', keys: [], argv: ['a1'] });
+    expect(parse(FcallDTO, ['fn', '1', 'k1'])).toEqual({ name: 'fn', keys: ['k1'], argv: [] });
+  });
+
+  it('checks the integer first, then the sign, then the count', () => {
+    expect(parse(EvalDTO, ['return 1', 'x'])).toBe('ERR value is not an integer or out of range');
+    expect(parse(EvalDTO, ['return 1', '-1'])).toBe("ERR Number of keys can't be negative");
+    expect(parse(FcallDTO, ['fn', '2', 'k1'])).toBe("ERR Number of keys can't be greater than number of args");
+  });
+});
+
+describe('ScriptDTO', () => {
+  it('parses subcommands case-insensitively', () => {
+    expect(parse(ScriptDTO, ['LoAd', 'return 1'])).toEqual({ subcommand: 'load', script: 'return 1' });
+    expect(parse(ScriptDTO, ['EXISTS', 'a', 'b'])).toEqual({ subcommand: 'exists', shas: ['a', 'b'] });
+    expect(parse(ScriptDTO, ['flush', 'async'])).toEqual({ subcommand: 'flush' });
+  });
+
+  it('rejects a wrong LOAD arity and unknown subcommands', () => {
+    expect(parse(ScriptDTO, ['load'])).toBe("ERR wrong number of arguments for 'script|load' command");
+    expect(parse(ScriptDTO, ['load', 'a', 'b'])).toBe("ERR wrong number of arguments for 'script|load' command");
+    expect(parse(ScriptDTO, ['Nope'])).toBe("ERR unknown subcommand 'Nope'. Try SCRIPT HELP.");
+  });
+});
+
+describe('FunctionDTO', () => {
+  it('LOAD with and without REPLACE', () => {
+    expect(parse(FunctionDTO, ['load', 'code'])).toEqual({ subcommand: 'load', code: 'code', replace: false });
+    expect(parse(FunctionDTO, ['LOAD', 'REPLACE', 'code'])).toEqual({ subcommand: 'load', code: 'code', replace: true });
+    expect(parse(FunctionDTO, ['load', 'replace'])).toBe("ERR wrong number of arguments for 'function|load' command");
+    expect(parse(FunctionDTO, ['load', 'code', 'extra'])).toBe("ERR wrong number of arguments for 'function|load' command");
+  });
+
+  it('LIST options are read left to right', () => {
+    expect(parse(FunctionDTO, ['list', 'WITHCODE', 'libraryname', 'a*'])).toEqual({ subcommand: 'list', pattern: 'a*', withCode: true });
+    expect(parse(FunctionDTO, ['list', 'libraryname'])).toBe('ERR syntax error');
+  });
+
+  it('RESTORE checks the policy, not the payload', () => {
+    expect(parse(FunctionDTO, ['restore', 'payload'])).toEqual({ subcommand: 'restore', payload: 'payload', policy: 'append' });
+    expect(parse(FunctionDTO, ['restore', 'payload', 'Replace'])).toEqual({ subcommand: 'restore', payload: 'payload', policy: 'replace' });
+    expect(parse(FunctionDTO, ['restore', 'payload', 'merge'])).toBe(
+      'ERR Wrong restore policy given, value should be either FLUSH, APPEND or REPLACE.',
+    );
+  });
+
+  it('DELETE without a name and unknown subcommands', () => {
+    expect(parse(FunctionDTO, ['delete'])).toEqual({ subcommand: 'delete', library: '' });
+    expect(parse(FunctionDTO, ['nope'])).toBe("ERR unknown subcommand 'nope'. Try FUNCTION HELP.");
+  });
+});

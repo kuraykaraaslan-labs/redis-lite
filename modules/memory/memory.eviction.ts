@@ -12,42 +12,26 @@
  *   When a pass runs out of time the rest of the work continues in the background and the command is not refused.
  */
 import type { Database } from '@/modules/database/database.core';
-import type { ServerConfig } from '@/modules/server/server.config';
 
-/** The documented OOM reply for denyoom commands. */
-export const OOM_ERROR = "OOM command not allowed when used memory > 'maxmemory'.";
+import type { EvictionResult } from './memory.enums';
+import MemoryMessages from './memory.messages';
+import type { EvictionCandidate as Candidate, EvictionHost } from './memory.types';
 
-export type EvictionResult = 'ok' | 'running' | 'fail';
-
-/** What the evictor needs from the server. */
-export interface EvictionHost {
-  readonly databases: readonly Database[];
-  readonly config: ServerConfig;
-  /** used_memory as maxmemory sees it (memory not counted for eviction already subtracted). */
-  usedMemoryForEviction(): number;
-  /** Deletes the key and does everything an eviction implies (notification, propagation, invalidation). */
-  evictKey(dbIndex: number, key: string): void;
-}
-
-interface Candidate {
-  db: number;
-  key: string;
-  /** Higher = better to evict. */
-  score: number;
-}
-
-/** Candidates kept between rounds (Redis keeps a small pool too, so good candidates are not forgotten). */
-const POOL_SIZE = 16;
-/** How often the time bound is checked, in evicted keys. */
-const TIME_CHECK_EVERY = 16;
-
-/** The time one pass may take, from maxmemory-eviction-tenacity (this mapping is redis-lite's own). */
-export function evictionTimeLimitMs(tenacity: number): number {
-  if (tenacity >= 100) return Infinity;
-  return 0.25 * Math.pow(1.12, tenacity);
-}
-
+/** Per-server stateful component: the eviction pool, the background pass and the INFO stats counters. */
 export class Evictor {
+  // ──────────────────────────────────────────────
+  // Constants
+  // ──────────────────────────────────────────────
+
+  /** Candidates kept between rounds (Redis keeps a small pool too, so good candidates are not forgotten). */
+  private static readonly POOL_SIZE = 16;
+  /** How often the time bound is checked, in evicted keys. */
+  private static readonly TIME_CHECK_EVERY = 16;
+
+  // ──────────────────────────────────────────────
+  // State
+  // ──────────────────────────────────────────────
+
   /** INFO stats evicted_keys. */
   evictedKeys = 0;
   /** INFO stats total_eviction_exceeded_time (ms). */
@@ -59,6 +43,12 @@ export class Evictor {
   private background: NodeJS.Immediate | null = null;
 
   constructor(private readonly host: EvictionHost) {}
+
+  /** The time one pass may take, from maxmemory-eviction-tenacity (this mapping is redis-lite's own). */
+  static evictionTimeLimitMs(tenacity: number): number {
+    if (tenacity >= 100) return Infinity;
+    return 0.25 * Math.pow(1.12, tenacity);
+  }
 
   private get policy(): string {
     return this.host.config.get('maxmemory-policy') ?? 'noeviction';
@@ -97,7 +87,7 @@ export class Evictor {
     if (this.background) return 'running';
     if (this.policy === 'noeviction') return 'fail';
     const started = performance.now();
-    const limit = evictionTimeLimitMs(this.host.config.num('maxmemory-eviction-tenacity'));
+    const limit = Evictor.evictionTimeLimitMs(this.host.config.num('maxmemory-eviction-tenacity'));
     let evicted = 0;
     while (this.overLimit()) {
       const victim = this.pick();
@@ -105,7 +95,7 @@ export class Evictor {
       this.host.evictKey(victim.db, victim.key);
       this.evictedKeys++;
       evicted++;
-      if (evicted % TIME_CHECK_EVERY === 0 && performance.now() - started > limit) {
+      if (evicted % Evictor.TIME_CHECK_EVERY === 0 && performance.now() - started > limit) {
         if (!this.overLimit()) return 'ok';
         this.continueInBackground();
         return 'running';
@@ -182,11 +172,11 @@ export class Evictor {
   /** Inserts into the pool, kept sorted by ascending score and capped at POOL_SIZE (the worst falls out). */
   private offer(c: Candidate): void {
     const pool = this.pool;
-    if (pool.length >= POOL_SIZE && c.score <= pool[0].score) return;
+    if (pool.length >= Evictor.POOL_SIZE && c.score <= pool[0].score) return;
     let i = pool.length;
     while (i > 0 && pool[i - 1].score > c.score) i--;
     pool.splice(i, 0, c);
-    if (pool.length > POOL_SIZE) pool.shift();
+    if (pool.length > Evictor.POOL_SIZE) pool.shift();
   }
 
   /** The policy changed or the dataset was replaced: pooled candidates are meaningless. */
@@ -194,3 +184,14 @@ export class Evictor {
     this.pool = [];
   }
 }
+
+// ============================================================================
+// Compatibility (step 2): old export paths still imported outside the module
+// ============================================================================
+
+/** @deprecated Use `MemoryMessages.OOM` (server.core imports this name). */
+export const OOM_ERROR = MemoryMessages.OOM;
+
+export type { EvictionHost, EvictionResult };
+
+export default Evictor;

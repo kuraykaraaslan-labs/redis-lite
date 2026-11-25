@@ -2,90 +2,22 @@ import { AppError } from '@/libs/app-error';
 import { RespMessages } from '@/libs/resp/messages';
 
 import type { ServerConfig } from '@/modules/server/server.config';
-import type { Stream } from '@/modules/streams/streams.structure';
-import type { ZSet } from '@/modules/zsets/zsets.structure';
 
-export type RedisValue =
-  /** `raw`: the value went through APPEND/SETRANGE/SETBIT/…, which Redis always leaves raw-encoded. */
-  | { type: 'string'; value: string; raw?: boolean }
-  | { type: 'hash'; value: Map<string, string> }
-  | { type: 'list'; value: string[] }
-  | { type: 'set'; value: Set<string> }
-  | { type: 'zset'; value: ZSet }
-  | { type: 'stream'; value: Stream };
+import { KeySampler } from './database.sampler';
+import type { Access, KeyChangeListener, RedisValue, ValueOf, ValueType } from './database.types';
 
-interface ValueMap {
-  string: string;
-  hash: Map<string, string>;
-  list: string[];
-  set: Set<string>;
-  zset: ZSet;
-  stream: Stream;
-}
+// Step-2 compatibility: these types moved to database.types.ts; other modules still import them from here.
+export type { KeyChangeListener, RedisValue, ValueType } from './database.types';
 
-export type ValueType = keyof ValueMap;
-type ValueOf<T extends ValueType> = ValueMap[T];
-
-/** Per-key access metadata, like the `lru` field of a Redis object (LRU clock or LFU counter + decay time). */
-interface Access {
-  /** Last access, ms (LRU). */
-  at: number;
-  /** LFU logarithmic counter (0..255). */
-  counter: number;
-  /** LFU last decrement time, minutes. */
-  decrementedAt: number;
-}
+// ============================================================================
+// Constants
+// ============================================================================
 
 const LFU_INIT_VAL = 5;
 
-/** A set of keys with O(1) add / delete / uniform random pick (Redis samples dict buckets; a Map cannot be indexed). */
-export class KeySampler {
-  private readonly list: string[] = [];
-  private readonly index = new Map<string, number>();
-
-  get size(): number {
-    return this.list.length;
-  }
-
-  add(key: string): void {
-    if (this.index.has(key)) return;
-    this.index.set(key, this.list.length);
-    this.list.push(key);
-  }
-
-  delete(key: string): void {
-    const i = this.index.get(key);
-    if (i === undefined) return;
-    const last = this.list.pop() as string;
-    this.index.delete(key);
-    if (last !== key) {
-      this.list[i] = last;
-      this.index.set(last, i);
-    }
-  }
-
-  clear(): void {
-    this.list.length = 0;
-    this.index.clear();
-  }
-
-  /** Up to `count` keys picked at random (with replacement when the set is small; duplicates removed). */
-  sample(count: number): string[] {
-    const n = this.list.length;
-    if (!n) return [];
-    if (n <= count) return [...this.list];
-    const out = new Set<string>();
-    for (let tries = 0; out.size < count && tries < count * 3; tries++) out.add(this.list[Math.floor(Math.random() * n)]);
-    return [...out];
-  }
-
-  random(): string | undefined {
-    return this.list.length ? this.list[Math.floor(Math.random() * this.list.length)] : undefined;
-  }
-}
-
-/** Receives every structural change of a database: a key name, or null for "everything" (FLUSHDB, SWAPDB). */
-export type KeyChangeListener = (key: string | null) => void;
+// ============================================================================
+// Database
+// ============================================================================
 
 /** One logical database (`SELECT n`): key → typed value, plus absolute expiry times in ms. */
 export class Database {
@@ -288,7 +220,9 @@ export class Database {
     }
   }
 
-  // ---- LRU / LFU ------------------------------------------------------------------------------------------------
+  // ──────────────────────────────────────────────
+  // LRU / LFU
+  // ──────────────────────────────────────────────
 
   private newAccess(): Access {
     const now = Date.now();
@@ -348,6 +282,10 @@ export class Database {
     return copy.counter;
   }
 }
+
+// ============================================================================
+// Helpers
+// ============================================================================
 
 /** Redis LFULogIncr: the counter grows with probability 1 / ((counter - LFU_INIT_VAL) * factor + 1). */
 function lfuLogIncr(counter: number, factor: number): number {

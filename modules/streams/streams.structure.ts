@@ -1,50 +1,19 @@
 import { listpackSize } from '@/modules/database/database.encoding';
 
-/** A stream ID: both parts are unsigned 64-bit integers. */
-export interface StreamId {
-  ms: bigint;
-  seq: bigint;
-}
+import type { TrimStrategy } from './streams.enums';
+import type { Consumer, ConsumerGroup, PendingEntry, StreamEntry, StreamId, StreamNode } from './streams.types';
 
-export interface StreamEntry {
-  id: StreamId;
-  fields: string[];
-}
+// compatibility: other modules import the stream types from this file
+export type { Consumer, ConsumerGroup, PendingEntry, StreamEntry, StreamId, StreamNode } from './streams.types';
 
-export interface PendingEntry {
-  id: StreamId;
-  consumer: string;
-  deliveryTime: number;
-  deliveryCount: number;
-}
+/**
+ * The stream data structure (Redis t_stream.c semantics): ids, the append-only entry log laid out in listpack nodes,
+ * and the consumer-group bookkeeping (read counters, lag, pending entries lists) shared by the stream services.
+ */
 
-export interface Consumer {
-  name: string;
-  seenTime: number;
-  activeTime: number;
-  pending: Map<string, PendingEntry>;
-}
-
-export interface ConsumerGroup {
-  name: string;
-  lastId: StreamId;
-  entriesRead: number | null;
-  pending: Map<string, PendingEntry>;
-  consumers: Map<string, Consumer>;
-}
-
-/** One radix-tree node of a Redis stream: a listpack holding up to stream-node-max-entries entries. */
-export interface StreamNode {
-  masterId: StreamId;
-  masterFields: string[];
-  /** Entries ever appended to this node (valid + deleted), as Redis counts them. */
-  total: number;
-  /** Entries not deleted. */
-  live: number;
-  /** Bytes of the entries part of the listpack (the master entry is computed from the live counters). */
-  entryBytes: number;
-  lastId: StreamId;
-}
+// ============================================================================
+// IDs
+// ============================================================================
 
 export const U64_MAX = (1n << 64n) - 1n;
 export const ZERO_ID: StreamId = { ms: 0n, seq: 0n };
@@ -89,6 +58,10 @@ export function prevId(id: StreamId): StreamId | null {
   if (id.ms > 0n) return { ms: id.ms - 1n, seq: U64_MAX };
   return null;
 }
+
+// ============================================================================
+// Stream
+// ============================================================================
 
 function lpInt(n: number | bigint): string {
   return String(n);
@@ -167,7 +140,7 @@ export class Stream {
    * the threshold; with `~` (approx) trimming stops at the first node that cannot be removed whole, otherwise
    * entries of that node are deleted one by one. `limit` caps removed entries (approx only; 0 = none).
    */
-  trimNodes(strategy: 'maxlen' | 'minid', maxlen: number, minid: StreamId, approx: boolean, limit: number): number {
+  trimNodes(strategy: TrimStrategy, maxlen: number, minid: StreamId, approx: boolean, limit: number): number {
     this.ensureNodes();
     let removed = 0;
     while (this.nodes.length) {
@@ -244,4 +217,112 @@ export class Stream {
     if (compareIds(id, this.maxDeletedId) > 0) this.maxDeletedId = id;
     return true;
   }
+}
+
+// ============================================================================
+// Entries as replies
+// ============================================================================
+
+/** An entry as Redis replies it: `[id, [field, value, …]]`. */
+export function entryReply(entry: StreamEntry): [string, string[]] {
+  return [idToString(entry.id), entry.fields];
+}
+
+/** Orders consumers and groups by name, as Redis's radix trees list them. */
+export function byName<T extends { name: string }>(a: T, b: T): number {
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
+// ============================================================================
+// Consumer group read counters and lag (t_stream.c)
+// ============================================================================
+
+function firstId(s: Stream): StreamId {
+  return s.entries[0]?.id ?? ZERO_ID;
+}
+
+/** streamRangeHasTombstones: whether a deleted entry may lie in [start, end]. */
+function rangeHasTombstones(s: Stream, start: StreamId, end: StreamId = MAX_ID): boolean {
+  if (!s.length || compareIds(s.maxDeletedId, ZERO_ID) === 0) return false;
+  if (compareIds(firstId(s), s.maxDeletedId) > 0) return false;
+  return compareIds(start, s.maxDeletedId) <= 0 && compareIds(s.maxDeletedId, end) <= 0;
+}
+
+/** streamEstimateDistanceFromFirstEverEntry: the logical read counter of `id`, or null when unknown. */
+function estimateEntriesRead(s: Stream, id: StreamId): number | null {
+  if (!s.entriesAdded) return 0;
+  if (!s.length && compareIds(id, s.lastId) < 1) return s.entriesAdded;
+  const cmpLast = compareIds(id, s.lastId);
+  if (cmpLast === 0) return s.entriesAdded;
+  if (cmpLast > 0) return null;
+  const cmpFirst = compareIds(id, firstId(s));
+  if (compareIds(s.maxDeletedId, ZERO_ID) === 0 || compareIds(s.maxDeletedId, firstId(s)) < 0) {
+    if (cmpFirst < 0) return s.entriesAdded - s.length;
+    if (cmpFirst === 0) return s.entriesAdded - s.length + 1;
+  }
+  return null;
+}
+
+/** streamReplyWithCGLag: the group's lag, or null when it cannot be computed. */
+export function groupLag(s: Stream, g: ConsumerGroup): number | null {
+  if (!s.entriesAdded) return 0;
+  if (g.entriesRead !== null && !rangeHasTombstones(s, g.lastId)) return s.entriesAdded - g.entriesRead;
+  const read = estimateEntriesRead(s, g.lastId);
+  return read === null ? null : s.entriesAdded - read;
+}
+
+/** Advances the group's last-delivered id to `id`, keeping entries-read as Redis does. */
+export function advanceGroup(s: Stream, g: ConsumerGroup, id: StreamId): void {
+  if (compareIds(id, g.lastId) <= 0) return;
+  if (g.entriesRead !== null && !rangeHasTombstones(s, g.lastId)) g.entriesRead++;
+  else if (s.entriesAdded) g.entriesRead = estimateEntriesRead(s, id);
+  g.lastId = id;
+}
+
+// ============================================================================
+// Consumers and pending entries lists
+// ============================================================================
+
+/** The group's consumer `name`, created (never seen, never active) when missing. */
+export function getOrCreateConsumer(g: ConsumerGroup, name: string): Consumer {
+  let c = g.consumers.get(name);
+  if (!c) {
+    c = { name, seenTime: Date.now(), activeTime: -1, pending: new Map() };
+    g.consumers.set(name, c);
+  }
+  return c;
+}
+
+/** Adds (or reassigns) a PEL entry for `e` delivered through `>`. */
+export function deliverNew(g: ConsumerGroup, c: Consumer, e: StreamEntry, now: number): void {
+  const k = idToString(e.id);
+  const prev = g.pending.get(k);
+  if (prev) {
+    g.consumers.get(prev.consumer)?.pending.delete(k);
+    prev.consumer = c.name;
+    prev.deliveryTime = now;
+    prev.deliveryCount = 1;
+    c.pending.set(k, prev);
+    return;
+  }
+  const p: PendingEntry = { id: e.id, consumer: c.name, deliveryTime: now, deliveryCount: 1 };
+  g.pending.set(k, p);
+  c.pending.set(k, p);
+}
+
+/** Removes a pending entry from the group's PEL and its consumer's. */
+export function dropPending(g: ConsumerGroup, p: PendingEntry): void {
+  const k = idToString(p.id);
+  g.pending.delete(k);
+  g.consumers.get(p.consumer)?.pending.delete(k);
+}
+
+/** Moves a pending entry to `c` (no-op on ownership when it is already c's). */
+export function movePending(g: ConsumerGroup, c: Consumer, p: PendingEntry): void {
+  const k = idToString(p.id);
+  if (p.consumer !== c.name) {
+    if (p.consumer) g.consumers.get(p.consumer)?.pending.delete(k);
+    p.consumer = c.name;
+  }
+  c.pending.set(k, p);
 }

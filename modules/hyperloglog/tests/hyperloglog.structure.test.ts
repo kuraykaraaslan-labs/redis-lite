@@ -4,7 +4,9 @@ import Redis from 'ioredis';
 
 import { RedisLite } from '@/index';
 
-import { HLL_DENSE_SIZE, Hll, hllPatLen, murmurHash64A } from '../hyperloglog.structure';
+import { HLL_DENSE_SIZE } from '../hyperloglog.encoding';
+import { hllPatLen, murmurHash64A } from '../hyperloglog.hash';
+import { Hll } from '../hyperloglog.structure';
 
 let server: RedisLite;
 let redis: Redis;

@@ -1,160 +1,37 @@
+import {
+  HLL_DENSE,
+  HLL_DENSE_SIZE,
+  HLL_HDR_SIZE,
+  HLL_MAX_ENCODING,
+  HLL_RAW,
+  HLL_REGISTERS,
+  HLL_SPARSE,
+  SPARSE_VAL_MAX_LEN,
+  SPARSE_VAL_MAX_VALUE,
+  SPARSE_XZERO_MAX_LEN,
+  SPARSE_ZERO_MAX_LEN,
+  denseGet,
+  denseSet,
+  denseSetReg,
+  isVal,
+  isXzero,
+  isZero,
+  valLen,
+  valOp,
+  valValue,
+  xzeroLen,
+  xzeroOps,
+  zeroLen,
+  zeroOp,
+} from './hyperloglog.encoding';
+import { estimate } from './hyperloglog.estimator';
+import { hllPatLen } from './hyperloglog.hash';
+
 /**
- * Redis-compatible HyperLogLog (P=14, Q=50, 6-bit registers).
- *
- * Value layout (a plain Redis string):
- *   "HYLL" | encoding (0 dense, 1 sparse) | 3 unused bytes | 8-byte cached cardinality (little endian,
- *   MSB of the last byte set = cache invalid) | registers.
- * Dense: 16384 6-bit registers packed LSB-first. Sparse: ZERO (00xxxxxx), XZERO (01xxxxxx xxxxxxxx)
- * and VAL (1vvvvvxx) run-length opcodes.
+ * A Redis-compatible HyperLogLog value being worked on (layout in hyperloglog.encoding.ts): creation, parsing, register
+ * updates in the sparse and dense encodings, sparse → dense promotion, merging and counting. `bytes` is replaced when
+ * the representation changes size.
  */
-
-export const HLL_P = 14;
-export const HLL_Q = 64 - HLL_P;
-export const HLL_REGISTERS = 1 << HLL_P;
-const HLL_P_MASK = HLL_REGISTERS - 1;
-const HLL_BITS = 6;
-const HLL_REGISTER_MAX = (1 << HLL_BITS) - 1;
-export const HLL_HDR_SIZE = 16;
-export const HLL_DENSE_SIZE = HLL_HDR_SIZE + Math.floor((HLL_REGISTERS * HLL_BITS + 7) / 8);
-export const HLL_DENSE = 0;
-export const HLL_SPARSE = 1;
-/** Internal-only encoding: one byte per register (multi-key PFCOUNT). */
-export const HLL_RAW = 255;
-const HLL_MAX_ENCODING = 1;
-
-const SPARSE_VAL_MAX_VALUE = 32;
-const SPARSE_VAL_MAX_LEN = 4;
-const SPARSE_ZERO_MAX_LEN = 64;
-const SPARSE_XZERO_MAX_LEN = 16384;
-
-const HLL_ALPHA_INF = 0.721347520444481703680;
-const HASH_SEED = 0xadc83b19;
-
-export const HLL_WRONGTYPE = 'WRONGTYPE Key is not a valid HyperLogLog string value.';
-export const HLL_INVALID = 'INVALIDOBJ Corrupted HLL object detected';
-
-/* ---------------------------------------------------------------- hashing */
-
-const M = 0xc6a4a7935bd1e995n;
-const R = 47n;
-const MASK64 = (1n << 64n) - 1n;
-
-/** MurmurHash64A (Austin Appleby), little-endian block reads, as used by Redis. */
-export function murmurHash64A(data: Uint8Array, seed: number): bigint {
-  const len = data.length;
-  let h = BigInt(seed >>> 0) ^ ((BigInt(len) * M) & MASK64);
-  const blocksEnd = len - (len & 7);
-  for (let i = 0; i < blocksEnd; i += 8) {
-    const lo = (data[i] | (data[i + 1] << 8) | (data[i + 2] << 16) | (data[i + 3] << 24)) >>> 0;
-    const hi = (data[i + 4] | (data[i + 5] << 8) | (data[i + 6] << 16) | (data[i + 7] << 24)) >>> 0;
-    let k = BigInt(lo) | (BigInt(hi) << 32n);
-    k = (k * M) & MASK64;
-    k ^= k >> R;
-    k = (k * M) & MASK64;
-    h ^= k;
-    h = (h * M) & MASK64;
-  }
-  const rem = len & 7;
-  if (rem) {
-    for (let i = rem - 1; i >= 0; i--) h ^= BigInt(data[blocksEnd + i]) << BigInt(8 * i);
-    h = (h * M) & MASK64;
-  }
-  h ^= h >> R;
-  h = (h * M) & MASK64;
-  h ^= h >> R;
-  return h;
-}
-
-/** Register index (low P bits of the hash) and run length of the "000..1" pattern of the remaining bits (1..Q+1). */
-export function hllPatLen(ele: Uint8Array): { index: number; count: number } {
-  const hash = murmurHash64A(ele, HASH_SEED);
-  const index = Number(hash & BigInt(HLL_P_MASK));
-  // Remaining bits plus the sentinel bit Q, so the count is at most Q+1. Fits a double exactly (< 2^51).
-  let rest = Number((hash >> BigInt(HLL_P)) | (1n << BigInt(HLL_Q)));
-  let count = 1;
-  while (rest % 2 === 0) {
-    count++;
-    rest /= 2;
-  }
-  return { index, count };
-}
-
-/* ---------------------------------------------------------------- dense registers */
-
-/** Register `regnum` of a dense register area starting at `offset` (reads past the end count as 0, like the sds NUL). */
-export function denseGet(b: Uint8Array, offset: number, regnum: number): number {
-  const byte = offset + ((regnum * HLL_BITS) >> 3);
-  const fb = (regnum * HLL_BITS) & 7;
-  const fb8 = 8 - fb;
-  const b0 = b[byte] ?? 0;
-  const b1 = byte + 1 < b.length ? b[byte + 1] : 0;
-  return ((b0 >> fb) | (b1 << fb8)) & HLL_REGISTER_MAX;
-}
-
-export function denseSetReg(b: Uint8Array, offset: number, regnum: number, val: number): void {
-  const byte = offset + ((regnum * HLL_BITS) >> 3);
-  const fb = (regnum * HLL_BITS) & 7;
-  const fb8 = 8 - fb;
-  b[byte] &= ~(HLL_REGISTER_MAX << fb);
-  b[byte] |= val << fb;
-  if (byte + 1 < b.length) {
-    b[byte + 1] &= ~(HLL_REGISTER_MAX >> fb8);
-    b[byte + 1] |= val >> fb8;
-  }
-}
-
-/** Sets the register when `count` is bigger. 1 = changed. */
-function denseSet(b: Uint8Array, index: number, count: number): number {
-  if (count > denseGet(b, HLL_HDR_SIZE, index)) {
-    denseSetReg(b, HLL_HDR_SIZE, index, count);
-    return 1;
-  }
-  return 0;
-}
-
-/* ---------------------------------------------------------------- sparse opcodes */
-
-const isZero = (op: number): boolean => (op & 0xc0) === 0x00;
-const isXzero = (op: number): boolean => (op & 0xc0) === 0x40;
-const isVal = (op: number): boolean => (op & 0x80) !== 0;
-const zeroLen = (op: number): number => (op & 0x3f) + 1;
-const xzeroLen = (op: number, next: number | undefined): number => (((op & 0x3f) << 8) | (next ?? 0)) + 1;
-const valValue = (op: number): number => ((op >> 2) & 0x1f) + 1;
-const valLen = (op: number): number => (op & 0x3) + 1;
-const valOp = (val: number, len: number): number => (((val - 1) << 2) | (len - 1) | 0x80) & 0xff;
-const zeroOp = (len: number): number => len - 1;
-const xzeroOps = (len: number): [number, number] => [((len - 1) >> 8) | 0x40, (len - 1) & 0xff];
-
-/** One sparse opcode: the registers [first, first+len) all hold `value` (0 for ZERO/XZERO). */
-export interface SparseRun {
-  kind: 'zero' | 'xzero' | 'val';
-  value: number;
-  len: number;
-}
-
-/** Decodes the sparse opcodes after the header (lenient, like PFDEBUG DECODE). */
-export function sparseRuns(b: Uint8Array): SparseRun[] {
-  const out: SparseRun[] = [];
-  let p = HLL_HDR_SIZE;
-  while (p < b.length) {
-    const op = b[p];
-    if (isZero(op)) {
-      out.push({ kind: 'zero', value: 0, len: zeroLen(op) });
-      p++;
-    } else if (isXzero(op)) {
-      out.push({ kind: 'xzero', value: 0, len: xzeroLen(op, b[p + 1]) });
-      p += 2;
-    } else {
-      out.push({ kind: 'val', value: valValue(op), len: valLen(op) });
-      p++;
-    }
-  }
-  return out;
-}
-
-/* ---------------------------------------------------------------- the object */
-
-/** A HyperLogLog value being worked on; `bytes` is replaced when the representation changes size. */
 export class Hll {
   constructor(public bytes: Uint8Array) {}
 
@@ -473,47 +350,4 @@ export function countRaw(registers: Uint8Array): number {
   b[4] = HLL_RAW;
   b.set(registers, HLL_HDR_SIZE);
   return estimate(new Hll(b).histogram().histo);
-}
-
-/* ---------------------------------------------------------------- estimator (Ertl, arXiv:1702.01284) */
-
-function hllSigma(x: number): number {
-  if (x === 1) return Infinity;
-  let zPrime: number;
-  let y = 1;
-  let z = x;
-  do {
-    x *= x;
-    zPrime = z;
-    z += x * y;
-    y += y;
-  } while (zPrime !== z);
-  return z;
-}
-
-function hllTau(x: number): number {
-  if (x === 0 || x === 1) return 0;
-  let zPrime: number;
-  let y = 1.0;
-  let z = 1 - x;
-  do {
-    x = Math.sqrt(x);
-    zPrime = z;
-    y *= 0.5;
-    const d = 1 - x;
-    z -= d * d * y;
-  } while (zPrime !== z);
-  return z / 3;
-}
-
-function estimate(histo: number[]): number {
-  const m = HLL_REGISTERS;
-  let z = m * hllTau((m - histo[HLL_Q + 1]) / m);
-  for (let j = HLL_Q; j >= 1; --j) {
-    z += histo[j];
-    z *= 0.5;
-  }
-  z += m * hllSigma(histo[0] / m);
-  // llroundl: round half away from zero (the value is never negative).
-  return Math.round((HLL_ALPHA_INF * m * m) / z);
 }
