@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { z } from 'zod';
 
-import { firstIssue } from '@/libs/schemas';
-
-import { ScanCursorSchema, ScanOptionsSchema } from '../database.dto';
+import { ScanCursorSchema, ScanOptionsSchema, firstIssue } from '@/libs/schemas';
 
 /** Unit tests of the SCAN-family grammar shared by SCAN, HSCAN and SSCAN (no server). */
 

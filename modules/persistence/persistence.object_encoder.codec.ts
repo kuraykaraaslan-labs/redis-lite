@@ -1,7 +1,8 @@
-import type { RedisValue } from '@/modules/database/database.core';
 import { compareIds } from '@/modules/streams/streams.structure';
-import type { PendingEntry, Stream, StreamEntry, StreamId } from '@/modules/streams/streams.structure';
+import type { Stream } from '@/modules/streams/streams.structure';
 import type { ZSet } from '@/modules/zsets/zsets.structure';
+import type { RedisValue } from '@/modules/database/database.types';
+import type { PendingEntry, StreamEntry, StreamId } from '@/modules/streams/streams.types';
 
 import PersistenceBytesCodec, { RdbWriter } from './persistence.bytes.codec';
 import { QUICKLIST_CONTAINER, RDB_TYPE } from './persistence.enums';

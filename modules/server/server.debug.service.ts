@@ -5,15 +5,14 @@ import Logger from '@/libs/logger';
 import { formatMessage } from '@/libs/message-format';
 import { OK, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
-import { RespMessages } from '@/libs/resp/messages';
 
 import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
-import type { RedisValue } from '@/modules/database/database.core';
-import { objectEncoding } from '@/modules/database/database.encoding';
-import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
-import { rdbOptions } from '@/modules/keys/keys.extra.commands';
-import { debugQuicklistInfo, serializedLength } from '@/modules/memory/memory.accounting';
+import DatabaseService from '@/modules/database/database.service';
+import HashesService from '@/modules/hashes/hashes.service';
+import KeysService from '@/modules/keys/keys.service';
+import MemoryService from '@/modules/memory/memory.service';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import type {
   DebugActiveExpireInput,
@@ -39,7 +38,7 @@ export default class ServerDebugService {
   // ──────────────────────────────────────────────
 
   private static encodingOf(ctx: CommandContext, v: RedisValue): string {
-    return objectEncoding(v, ctx.server.config, v.type === 'hash' && hashFieldExpires(v.value) !== undefined);
+    return DatabaseService.objectEncoding(v, ctx.server.config, v.type === 'hash' && HashesService.hashFieldExpires(v.value) !== undefined);
   }
 
   /** A stable fake object address for DEBUG OBJECT `Value at:%p`. */
@@ -52,7 +51,7 @@ export default class ServerDebugService {
   /** The value at `key`, or ERR no such key. */
   private static value(ctx: CommandContext, key: string): RedisValue {
     const v = ctx.db.peek(key);
-    if (!v) throw new AppError(RespMessages.NO_SUCH_KEY);
+    if (!v) throw new AppError(ServerMessages.NO_SUCH_KEY);
     return v;
   }
 
@@ -76,14 +75,14 @@ export default class ServerDebugService {
       : (Math.floor(now / 1000) - idle) & 0xffffff;
     let quicklist = '';
     if (v.type === 'list' && enc === 'quicklist') {
-      const q = debugQuicklistInfo(v.value, cfg.num('list-max-listpack-size'), cfg.num('list-compress-depth'));
+      const q = MemoryService.debugQuicklistInfo(v.value, cfg.num('list-max-listpack-size'), cfg.num('list-compress-depth'));
       quicklist =
         ` ql_nodes:${q.nodes} ql_avg_node:${q.avgNode.toFixed(2)} ql_listpack_max:${q.listpackMax}` +
         ` ql_compressed:${q.compressed} ql_uncompressed_size:${q.uncompressedSize}`;
     }
     const serialized = fast
       ? ''
-      : ` serializedlength:${serializedLength(v, rdbOptions(ctx), v.type === 'hash' ? hashFieldExpires(v.value) : undefined)}`;
+      : ` serializedlength:${MemoryService.serializedLength(v, KeysService.rdbOptions(ctx), v.type === 'hash' ? HashesService.hashFieldExpires(v.value) : undefined)}`;
     return new Status(
       formatMessage(ServerMessages.DEBUG_OBJECT, { address: ServerDebugService.fakeAddress(key), refcount, encoding: enc, serialized, lru, idle, quicklist }),
     );

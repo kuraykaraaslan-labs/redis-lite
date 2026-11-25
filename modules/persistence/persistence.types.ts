@@ -1,10 +1,10 @@
 import type { LogContext, LogLevelName } from '@/libs/logger';
 import type { Reply } from '@/libs/resp';
 
-import type { Database, RedisValue } from '@/modules/database/database.core';
-import type { LuaEngine } from '@/modules/scripting/scripting.engine';
-import type { Client } from '@/modules/server/server.client';
-import type { ServerConfig } from '@/modules/server/server.config';
+import type { Database } from '@/modules/database/database.service';
+import type { LuaEngine } from '@/modules/scripting/scripting.service';
+import type { Client, ServerConfig } from '@/modules/server/server.service';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import type { AofFileType, LoadSource, PropagationTarget } from './persistence.enums';
 

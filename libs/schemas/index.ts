@@ -1,6 +1,11 @@
-export { KeySchema, ValueSchema } from './argument';
+export { KeySchema, SubcommandSchema, ValueSchema } from './argument';
 export type { Key } from './argument';
 export { ExpireOptionEnum, ExpireTimeSchema, ExpireTimeSchemas } from './expire';
 export type { ExpireOption } from './expire';
-export { firstIssue, reject, validationErrorReply } from './issue';
-export { FloatSchema, Int64Schema, IntegerSchema } from './number';
+export { firstIssue, parseArg, reject, validationErrorReply } from './issue';
+export type { Parsed } from './issue';
+export { FloatSchema, FloatSchemaWith, Int64Schema, IntegerSchema, IntegerSchemaWith } from './number';
+export { ScanCursorSchema, ScanOptionsSchema } from './scan';
+export type { ScanCursor, ScanOptions } from './scan';
+export { BlockTimeoutSchema } from './timeout';
+export type { BlockTimeout } from './timeout';

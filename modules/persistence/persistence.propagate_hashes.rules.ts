@@ -1,6 +1,6 @@
 import type { Reply } from '@/libs/resp';
 
-import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
+import HashesService from '@/modules/hashes/hashes.service';
 
 import PropagateBaseRules from './persistence.propagate_base.rules';
 import type { PropagateContext, PropagatedOp } from './persistence.types';
@@ -25,7 +25,7 @@ export default class PropagateHashRules {
   private static fieldExpire(ctx: PropagateContext, key: string, field: string): number | undefined {
     const v = ctx.database.peek(key);
     if (!v || v.type !== 'hash') return undefined;
-    return hashFieldExpires(v.value)?.get(field);
+    return HashesService.hashFieldExpires(v.value)?.get(field);
   }
 
   // ──────────────────────────────────────────────

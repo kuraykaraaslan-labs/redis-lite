@@ -4,10 +4,11 @@ import { OK, RespError, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
-import type { Database, RedisValue } from '@/modules/database/database.core';
+import type { Database } from '@/modules/database/database.service';
 import DatabaseService from '@/modules/database/database.service';
 import { Stream } from '@/modules/streams/streams.structure';
 import { ZSet } from '@/modules/zsets/zsets.structure';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import type { CopyInput, KeyInput, KeysInput, KeysPatternInput, RenameInput, ScanInput } from './keys.dto';
 import KeysMessages from './keys.messages';

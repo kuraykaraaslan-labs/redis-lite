@@ -8,10 +8,10 @@
  * (a write touched it, it was added, removed, expired or got / lost a TTL). Each database keeps a running total, so
  * used_memory costs O(databases) plus the keys that changed since the last look, never a rescan of the dataset.
  */
-import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
-import type { Database } from '@/modules/database/database.core';
-import { objectEncoding } from '@/modules/database/database.encoding';
-import type { ServerConfig } from '@/modules/server/server.config';
+import HashesService from '@/modules/hashes/hashes.service';
+import type { Database } from '@/modules/database/database.service';
+import DatabaseService from '@/modules/database/database.service';
+import type { ServerConfig } from '@/modules/server/server.service';
 
 import MemoryService from './memory.service';
 import type { DbSizes, DbSnapshot } from './memory.types';
@@ -55,8 +55,8 @@ export class MemoryTracker {
   private sizeOf(db: Database, key: string): number | undefined {
     const value = db.raw(key);
     if (!value) return undefined;
-    const fieldTtls = value.type === 'hash' ? hashFieldExpires(value.value) : undefined;
-    return MemoryService.objectSize(key, value, objectEncoding(value, this.config, fieldTtls !== undefined), {
+    const fieldTtls = value.type === 'hash' ? HashesService.hashFieldExpires(value.value) : undefined;
+    return MemoryService.objectSize(key, value, DatabaseService.objectEncoding(value, this.config, fieldTtls !== undefined), {
       samples: 0,
       hasExpire: db.hasExpireRaw(key),
       fieldTtls,

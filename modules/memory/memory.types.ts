@@ -1,5 +1,6 @@
-import type { Database, RedisValue } from '@/modules/database/database.core';
-import type { ServerConfig } from '@/modules/server/server.config';
+import type { Database } from '@/modules/database/database.service';
+import type { ServerConfig } from '@/modules/server/server.service';
+import type { RedisValue } from '@/modules/database/database.types';
 
 // ============================================================================
 // Size model

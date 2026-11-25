@@ -7,12 +7,6 @@ import type { ScanPage } from './database.types';
  */
 export default class DatabaseScanService {
   // ──────────────────────────────────────────────
-  // Constants
-  // ──────────────────────────────────────────────
-
-  private static readonly UINT64_MAX = 2 ** 64 - 1;
-
-  // ──────────────────────────────────────────────
   // Private Helpers
   // ──────────────────────────────────────────────
 
@@ -43,12 +37,5 @@ export default class DatabaseScanService {
     }
     if (i >= ordered.length) return { next: 0, page };
     return { next: ordered[i].h, page };
-  }
-
-  /** Parses an unsigned 64-bit SCAN cursor; null when it is not one (Redis replies 'ERR invalid cursor'). */
-  static parseCursor(raw: string): number | null {
-    if (!/^\d+$/.test(raw)) return null;
-    const n = Number(raw);
-    return n > DatabaseScanService.UINT64_MAX ? null : n;
   }
 }

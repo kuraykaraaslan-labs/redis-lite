@@ -4,8 +4,8 @@ import { join } from 'node:path';
 
 import { formatMessage } from '@/libs/message-format';
 
-import { hashFieldExpires, setHashFieldExpires } from '@/modules/hashes/hashes.commands';
-import type { RedisValue } from '@/modules/database/database.core';
+import HashesService from '@/modules/hashes/hashes.service';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import PersistenceMessages from './persistence.messages';
 import PersistenceService from './persistence.service';
@@ -39,7 +39,7 @@ export abstract class PersistenceSnapshot extends PersistenceState {
         const at = db.getExpire(key);
         if (at !== undefined) entry.expireAt = at;
         if (value.type === 'hash') {
-          const ttl = hashFieldExpires(value.value);
+          const ttl = HashesService.hashFieldExpires(value.value);
           if (ttl) {
             const live: FieldExpires = new Map();
             let expired = false;
@@ -130,7 +130,7 @@ export abstract class PersistenceSnapshot extends PersistenceState {
           value = { type: 'hash', value: h };
         }
         db.set(key, value);
-        if (value.type === 'hash' && fields && fields.size) setHashFieldExpires(value.value, fields);
+        if (value.type === 'hash' && fields && fields.size) HashesService.setHashFieldExpires(value.value, fields);
         if (e.expireAt !== undefined) db.setExpire(key, e.expireAt);
         if (lfu && e.freq !== undefined) db.setFrequency(key, e.freq);
         else if (!lfu && e.idle !== undefined) db.setIdle(key, e.idle);

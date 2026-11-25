@@ -1,6 +1,6 @@
-import type { RedisValue } from '@/modules/database/database.core';
 import PersistenceService from '@/modules/persistence/persistence.service';
 import type { FieldExpires, RdbOptions } from '@/modules/persistence/persistence.types';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import MemoryAllocModel from './memory.alloc.model';
 import MemoryObjectModel from './memory.object.model';

@@ -1,13 +1,10 @@
 import { AppError } from '@/libs/app-error';
 import { RespMessages } from '@/libs/resp/messages';
 
-import type { ServerConfig } from '@/modules/server/server.config';
+import type { ServerConfig } from '@/modules/server/server.service';
 
 import { KeySampler } from './database.sampler';
 import type { Access, KeyChangeListener, RedisValue, ValueOf, ValueType } from './database.types';
-
-// Step-2 compatibility: these types moved to database.types.ts; other modules still import them from here.
-export type { KeyChangeListener, RedisValue, ValueType } from './database.types';
 
 // ============================================================================
 // Constants

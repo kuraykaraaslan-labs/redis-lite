@@ -2,6 +2,7 @@ import DatabaseEncodingService from './database.encoding.service';
 import DatabaseScanService from './database.scan.service';
 
 export { DatabaseEncodingService, DatabaseScanService };
+export { Database } from './database.core';
 
 /**
  * The database module's public API besides the stateful `Database` keyspace (database.core.ts): object encodings and
@@ -19,5 +20,4 @@ export default class DatabaseService {
 
   // Scan — cursor pages
   static scanPage = DatabaseScanService.scanPage.bind(DatabaseScanService);
-  static parseCursor = DatabaseScanService.parseCursor.bind(DatabaseScanService);
 }

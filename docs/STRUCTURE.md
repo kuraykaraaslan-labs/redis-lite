@@ -4,8 +4,9 @@ How redis-lite's source is laid out and the conventions every change follows. Th
 structure rules (module-first, `libs/` for infrastructure, Zod DTOs, static services, messages files) to a protocol
 server, with the adaptations listed in [Adaptations](#adaptations-for-a-protocol-server).
 
-Status: **step 1 is done**: the tree is in the target layout, `libs/` and the core are in place and `modules/strings` is
-converted as the reference. **Step 2** converts the other modules with the [checklist](#step-2-checklist).
+Status: every module follows the layout and the recipe below (`modules/strings` is the worked example). The
+deliberate exceptions are listed in [Stateful components](#stateful-components-the-exception-to-static-services-only)
+and [Public surface of a module](#public-surface-of-a-module).
 
 ## Layout
 
@@ -16,9 +17,13 @@ libs/                    thin infrastructure, no Redis semantics of its own
   env.ts                 option and environment schemas; the only file that reads process.env
   logger/                Logger: structured JSON lines on stderr
   message-format/        formatMessage(): fills `{placeholders}` of message templates
-  schemas/               reusable Zod primitives (KeySchema, Int64Schema, FloatSchema, ExpireTimeSchema…)
-  resp/                  RESP2/RESP3 codec and reply types; messages.ts = error texts shared by several modules
-  number/, glob/         Redis number parsing/formatting, Redis glob matching
+  schemas/               reusable Zod primitives, one per concept: KeySchema, SubcommandSchema, IntegerSchema(With),
+                         Int64Schema, FloatSchema(With), ExpireTimeSchema(s), BlockTimeoutSchema, ScanCursorSchema,
+                         ScanOptionsSchema, and the option-loop helpers parseArg / Parsed<T> / reject / firstIssue
+    tests/               unit tests of the primitives (no server)
+  resp/                  RESP2/RESP3 codec and reply types; messages.ts = error texts shared by several modules or
+                         by the libs/schemas primitives (protocol errors included)
+  number/, glob/         pure Redis number recognition/formatting (no error replies), Redis glob matching
 modules/<module>/        one folder per command group or subsystem (see the mapping below)
   tests/                 the module's tests
 tests/                   cross-module end-to-end suites (smoke, BullMQ, RESP3, protocol, binary safety…) + helpers.ts
@@ -31,22 +36,33 @@ the build (`tsc-alias`, see [Build](#build)).
 
 ### Module → path mapping
 
-| Module | Files | Was |
-|---|---|---|
-| `command` | `command.types.ts` (CommandSpec, CommandContext), `command.handler.ts` (Block, NO_REPLY, keysAt, `withDTO` / `validated`), `command.registry.ts` (COMMANDS), `command.meta.ts` + `command.meta_table.ts` (COMMAND metadata, key specs), `command.blocking.ts` | `src/commands/{types,index,meta,meta-table,blocking}.ts` |
-| `server` | `server.core.ts` (RedisLiteServer: sockets, dispatcher), `server.client.ts`, `server.config.ts`, `server.conf_file.ts`, `server.commands.ts` (INFO, CONFIG, DEBUG, COMMAND, ACL, SLOWLOG, MEMORY, WAIT…) | `src/server/{server,client,config,conf-file}.ts`, `src/commands/server.ts` |
-| `connection` | `connection.commands.ts` (PING, AUTH, HELLO, SELECT, CLIENT, RESET…) | `src/commands/connection.ts` |
-| `database` | `database.core.ts` (keyspace, expiry), `database.encoding.ts`, `database.scan.ts` | `src/store/{database,encoding,scan}.ts` |
-| `keys` | `keys.commands.ts`, `keys.extra.commands.ts` (SORT, MOVE, SWAPDB, DUMP, RESTORE) | `src/commands/keys.ts`, `keys-extra.ts` |
-| `strings` | converted, see [the recipe](#the-module-recipe-worked-example-modulesstrings) (now also owns LCS and SUBSTR, Redis's `string` group) | `src/commands/strings.ts` (+ LCS / SUBSTR from `bitmaps.ts`) |
-| `bitmaps`, `hashes`, `lists`, `sets`, `geo`, `pubsub`, `transactions` | `<module>.commands.ts` | `src/commands/<name>.ts` |
-| `zsets`, `streams`, `hyperloglog` | `<module>.commands.ts` + `<module>.structure.ts` (sorted set, stream, HLL data structures) | `src/commands/*.ts`, `src/store/{zset,stream,hll}.ts` |
-| `scripting` | `scripting.commands.ts` (EVAL, SCRIPT), `scripting.functions.commands.ts` (FUNCTION, FCALL), `scripting.engine.ts` (Lua engine), `scripting.prelude.ts` | `src/commands/{scripting,functions}.ts`, `src/lua/*` |
-| `acl` | `acl.core.ts` (users, rules, ACL LOG, ACL file) | `src/server/acl.ts` |
-| `persistence` | `persistence.core.ts` (RDB/AOF lifecycle), `persistence.rdb.ts` (format), `persistence.propagate.ts` (AOF propagation) | `src/server/{persistence,propagate}.ts`, `src/store/rdb.ts` |
-| `memory` | `memory.accounting.ts` (Redis-style sizes), `memory.tracker.ts`, `memory.eviction.ts` (maxmemory policies) | `src/store/memory.ts`, `src/server/{memory-tracker,eviction}.ts` |
-| `notifications` | `notifications.core.ts` (keyspace events) | `src/server/notifications.ts` |
-| `tracking` | `tracking.core.ts` (client-side caching) | `src/server/tracking.ts` |
+Every module has a facade `<module>.service.ts` (static methods bound from its sub-services) and, when it has error
+texts, `<module>.messages.ts`. The table lists the rest.
+
+| Module | Commands, DTOs, sub-services | Other files | Was |
+|---|---|---|---|
+| `command` | sub-services `lookup` (metadata table, arity), `keys` (key specs), `reply` (COMMAND INFO / DOCS, HELP), `blocking` (Block replies) | `command.types.ts` (CommandSpec, CommandContext, CommandMeta), `command.handler.ts` (withDTO, validated, keysAt, bySubcommand, Block, NO_REPLY; re-exported by the facade), `command.registry.ts` (COMMANDS: every module's table), `command.meta_table.ts` (metadata data table), `command.enums.ts` | `src/commands/{types,index,meta,meta-table,blocking}.ts` |
+| `server` | `server.commands.ts`, `server.dto.ts`; sub-services `info`, `config`, `command`, `acl`, `diagnostics`, `memory`, `debug`, `admin`, `lolwut` | runtime (stateful): `server.core.ts` (RedisLiteServer), `server.client.ts`, `server.config.ts`, `server.dispatcher.ts`, `server.connections.ts`, `server.access.ts`, `server.blocking.ts`, `server.keyspace.ts`, `server.pubsub.ts`, `server.observer.ts`, `server.memory_model.ts`, `server.files.ts`; `server.conf_file.ts` (redis.conf reader), `server.constants.ts`, `server.types.ts`, `server.enums.ts` | `src/server/{server,client,config,conf-file}.ts`, `src/commands/server.ts` |
+| `connection` | `connection.commands.ts`, `connection.dto.ts`; sub-services `session` (PING, ECHO, SELECT, RESET, QUIT…), `auth` (AUTH, HELLO), `client` (the caller's own CLIENT settings, tracking), `admin` (CLIENT INFO / LIST / KILL / UNBLOCK…) | `connection.types.ts`, `connection.enums.ts` | `src/commands/connection.ts` |
+| `database` | sub-services `encoding` (OBJECT ENCODING, listpack sizes), `scan` (cursor pages) | `database.core.ts` (Database: keyspace, expiry; stateful), `database.sampler.ts`, `database.types.ts` | `src/store/{database,encoding,scan}.ts` |
+| `keys` | `keys.commands.ts`, `keys.extra.commands.ts` (SORT, MOVE, SWAPDB, DUMP, RESTORE), `keys.dto.ts`; sub-services `space` (DEL, EXISTS, RENAME, COPY, KEYS, SCAN…), `expire`, `object`, `database` (MOVE, SWAPDB), `sort`, `dump` (DUMP / RESTORE) | `keys.enums.ts` | `src/commands/keys.ts`, `keys-extra.ts` |
+| `strings` | the [worked example](#the-module-recipe-worked-example-modulesstrings) (also owns LCS and SUBSTR) | | `src/commands/strings.ts` (+ LCS / SUBSTR from `bitmaps.ts`) |
+| `bitmaps` | sub-services `bit` (GETBIT, SETBIT, BITCOUNT, BITPOS), `op` (BITOP), `field` (BITFIELD) | `bitmaps.structure.ts`, `bitmaps.types.ts`, `bitmaps.enums.ts` | `src/commands/bitmaps.ts` |
+| `hashes` | sub-services `field` (HSET, HGET…), `getset` (HGETDEL, HGETEX, HSETEX), `iteration` (HSCAN, HRANDFIELD), `ttl` (HEXPIRE / HTTL families, HPERSIST) | `hashes.structure.ts` (HashStore: field TTLs), `hashes.types.ts`, `hashes.enums.ts` | `src/commands/hashes.ts` |
+| `lists` | sub-services `push`, `index`, `move` (incl. blocking pops) | `lists.structure.ts`, `lists.enums.ts` | `src/commands/lists.ts` |
+| `sets` | sub-services `member`, `random` (SPOP, SRANDMEMBER), `algebra` (SUNION, SINTER, SDIFF, SINTERCARD), `scan` (SSCAN) | `sets.structure.ts`, `sets.enums.ts` | `src/commands/sets.ts` |
+| `zsets` | sub-services `write`, `query`, `range`, `pop`, `combine` | `zsets.structure.ts` (sorted set), `zsets.types.ts`, `zsets.enums.ts` | `src/commands/zsets.ts`, `src/store/zset.ts` |
+| `streams` | sub-services `append`, `range`, `read`, `group`, `pending`, `info` | `streams.structure.ts` (stream, ids), `streams.types.ts`, `streams.enums.ts` | `src/commands/streams.ts`, `src/store/stream.ts` |
+| `hyperloglog` | sub-services `value` (PFADD, PFCOUNT, PFMERGE), `debug` (PFDEBUG, PFSELFTEST) | `hyperloglog.structure.ts`, `.encoding.ts`, `.estimator.ts`, `.hash.ts` (the HLL algorithm, split by concern), `.types.ts`, `.enums.ts` | `src/commands/hyperloglog.ts`, `src/store/hll.ts` |
+| `geo` | sub-services `point` (GEOADD, GEOPOS, GEODIST, GEOHASH), `search` | `geo.geohash.ts`, `geo.types.ts`, `geo.enums.ts` | `src/commands/geo.ts` |
+| `pubsub` | `pubsub.service.ts` (single service) | | `src/commands/pubsub.ts` |
+| `transactions` | sub-services `queue` (MULTI, DISCARD), `watch` (WATCH, UNWATCH), `exec` (EXEC) | | `src/commands/transactions.ts` |
+| `scripting` | `scripting.commands.ts` (EVAL, SCRIPT), `scripting.functions.commands.ts` (FUNCTION, FCALL), `scripting.dto.ts`; sub-services `scripts`, `functions` | Lua engine (stateful): `scripting.engine.ts` (LuaEngine) and its parts `scripting.{bridge,convert,library,stack}.engine.ts`; `scripting.prelude.ts` + `prelude/*.prelude.ts` (Lua source); `scripting.types.ts`, `scripting.enums.ts` | `src/commands/{scripting,functions}.ts`, `src/lua/*` |
+| `acl` | `acl.dto.ts`; sub-services `check` (permission checks, denial texts), `rules` (ACL rules, passwords, GENPASS), `log` (ACL LOG) | `acl.engine.ts` (Acl: users + ACL LOG; stateful), `acl.structure.ts` (AclUser, AclSelector), `acl.types.ts`, `acl.enums.ts` (owner of `AclCategoryEnum`) | `src/server/acl.ts` |
+| `persistence` | sub-services `rdb`, `dump` (DUMP / RESTORE payloads), `aof`, `manifest`, `files`, `propagate`; codecs `*.codec.ts` (bytes / CRC / LZF, listpack, object encoder / decoder, RDB I/O); `persistence_*.rules.ts` (propagation rules per type) | runtime (stateful): `persistence.core.ts` (Persistence) built as layers `persistence.state.ts` → `.snapshot.ts` → `.aof_writer.ts` → `.aof_loader.ts`; `persistence.propagator.ts` (Propagator); `persistence.types.ts`, `persistence.enums.ts` | `src/server/{persistence,propagate}.ts`, `src/store/rdb.ts` |
+| `memory` | sub-services `usage` (per key: MEMORY USAGE, DEBUG OBJECT), `overhead` (dataset, used_memory, maxmemory), `info` (MEMORY STATS, INFO memory); size models `*.model.ts` (allocator, object, quicklist, rax) | `memory.tracker.ts` (MemoryTracker) and `memory.eviction.ts` (Evictor) (stateful), `memory.types.ts`, `memory.enums.ts` | `src/store/memory.ts`, `src/server/{memory-tracker,eviction}.ts` |
+| `notifications` | sub-services `events` (which keyspace events a command fires), `publish` (flags, channel messages) | `notifications.types.ts` | `src/server/notifications.ts` |
+| `tracking` | `tracking.dto.ts` (CLIENT TRACKING / CACHING grammar, exposed as `TrackingService.TrackingOptionsSchema` / `CachingValueSchema`); sub-services `client`, `invalidation` | `tracking.core.ts` (Tracking: the invalidation table; stateful), `tracking.types.ts`, `tracking.enums.ts` | `src/server/tracking.ts` |
 
 Why these are modules and not libs: `libs/` holds code with no Redis behaviour of its own (a codec, a logger, number
 parsing). Anything that implements Redis semantics (the dispatcher's checks, ACL rules, persistence formats, eviction
@@ -55,10 +71,34 @@ policies) is domain logic and lives in a module, even when it has no commands of
 lives in `memory` because it is the maxmemory half of memory accounting.
 
 File type suffixes: `.service.ts`, `.dto.ts`, `.types.ts`, `.enums.ts`, `.messages.ts`, `.commands.ts` follow the
-recipe below. Step-1 files that are not converted yet keep a descriptive suffix: `.core.ts` (the module's central
-runtime class), `.structure.ts` (a data structure), `.engine.ts` / `.prelude.ts` (Lua), `.accounting.ts`, `.tracker.ts`,
-`.eviction.ts`, `.rdb.ts`, `.propagate.ts`, `.client.ts`, `.config.ts`. Step 2 decides per file whether it becomes a
-sub-service or stays a stateful component.
+recipe below. Other suffixes name what a file is: `.structure.ts` (a data structure), `.core.ts` (a module's stateful
+runtime class), `.engine.ts` / `.prelude.ts` (the Lua engine and its Lua source), `.codec.ts` (binary formats),
+`.model.ts` (memory size models), `.rules.ts` (propagation rules); the server runtime files are named after their part
+(`server.dispatcher.ts`, `server.client.ts`…).
+
+### Public surface of a module
+
+Another module may import only:
+
+- the facade `<module>.service.ts` (the default-export class, plus what it re-exports: the commands-layer toolkit from
+  `command.handler`, and the stateful classes `Acl` / `AclUser`, `Database`, `Tracking`, `Evictor`, `MemoryTracker`,
+  `Persistence`, `Propagator`);
+- the module's `.types.ts`, `.enums.ts`, `.structure.ts` and `.messages.ts` files (a shared constant such as
+  `MemoryMessages.OOM` is read where it is owned, not copied).
+
+Never another module's sub-services, DTOs, commands files or internals: a facade gains a method when a caller needs one.
+Primitives several modules need go to `@/libs/schemas` instead. Three documented exceptions, each forced by load order
+(a value re-export through the facade would close an import cycle and leave a facade `undefined` while the command
+tables are built):
+
+1. **`command.registry.ts`** is the composition root of the command table: it imports every module's commands file,
+   and the dispatcher (`server.dispatcher`, `server.access`, `server.blocking`) and the Lua bridge
+   (`scripting.bridge.engine`, for `redis.call`) read `COMMANDS` from it.
+2. **The server runtime** (`server.core`, `server.client`, `server.config`, `server.conf_file`) is built by the entry
+   points (`index.ts`, `cli.ts`) and by tests that start a bare server. Other modules use these classes as types only,
+   through `export type` re-exports of `server.service.ts`.
+3. **`LuaEngine`** is constructed by `server.core` from `scripting.engine.ts`; `scripting.service.ts` re-exports it as a
+   type only (the engine reaches the command registry through `redis.call`).
 
 ## The module recipe (worked example: `modules/strings`)
 
@@ -123,12 +163,16 @@ note which line touches the database first.
   integer, proto-max-bulk-len from the config) stays in the service.
 - Build schemas once at module level (`const SET_EXPIRE = ExpireTimeSchemas('set')`), never per call.
 - A primitive goes to `libs/schemas` once a second module needs it; until then it stays in the module DTO, named by the
-  value (`OffsetSchema`), not the command.
+  value (`OffsetSchema`), not the command. One primitive per concept: a command-worded integer is
+  `IntegerSchemaWith(Messages.X)`, never a local copy.
+- Option loops that parse several arguments use `parseArg(schema, raw)` → `Parsed<T>` (`{ ok, value } | { ok, error }`)
+  and `reject(ctx, error)` from `@/libs/schemas`.
 
 ### 3. Services: `<module>.service.ts` and `<module>.<sub>.service.ts`
 
 - `export default class XService` with only `static` methods, explicit return types on public methods, private
-  constants as `static readonly`, class sections *Constants → Private Helpers → Public Methods*.
+  constants as `static readonly`, class sections *Constants → Private Helpers → Public Methods*. (Per-server state
+  lives in [stateful components](#stateful-components-the-exception-to-static-services-only), never in a service.)
 - Signature: `(ctx: CommandContext, input: XInput)`; read-first methods also take the value read
   (`getRange(value, input)`).
 - Split into sub-services past ~150 lines or 3+ concerns. The facade binds them
@@ -151,8 +195,10 @@ export const StringsMessages = {
 export default StringsMessages;
 ```
 
-Texts used by several modules (`ERR syntax error`, WRONGTYPE, overflow…) live in `@/libs/resp/messages`
-(`RespMessages`). A text that embeds values is a template filled with `formatMessage`:
+Texts used by several modules or by the `@/libs/schemas` primitives (`ERR syntax error`, WRONGTYPE, overflow, the
+blocking-timeout and SCAN-cursor errors, protocol errors…) live in `@/libs/resp/messages` (`RespMessages`); everything
+else is owned by one module's messages file. Lua source in `scripting.prelude` / `prelude/*.prelude.ts` raises its
+own error texts inside Lua and is not subject to this rule. A text that embeds values is a template filled with `formatMessage`:
 `formatMessage(RespMessages.WRONG_ARITY, { command: 'mset' })`.
 
 ### 5. Tests: `modules/<module>/tests/`
@@ -196,6 +242,36 @@ These deviate from the HTTP-oriented rules on purpose:
    starts; with several servers in one process the last one started wins).
 6. **`process.env` only in `libs/env.ts`.**
 
+## Stateful components: the exception to "static services only"
+
+Services are static and stateless. A Redis server, however, owns state that lives as long as the server and exists
+once per server (tests start several servers in one process, so module-level singletons are not an option). That
+state is held by a few classes, each created by `server.core` (RedisLiteServer) and reachable from every command as
+`ctx.server.<x>`. They are the only `new`-able classes besides AppError, the reply types and the data structures:
+
+| Component | File | Why it is an object |
+|---|---|---|
+| Server runtime | `server.core.ts` (RedisLiteServer) with its parts `server.dispatcher`, `.connections`, `.access`, `.blocking`, `.keyspace`, `.pubsub`, `.observer`, `.memory_model`, `.files`; `server.client.ts` (one Client per connection); `server.config.ts` (ServerConfig) | sockets, connected clients, blocked clients, pub/sub subscriptions, stats and config of one server |
+| Database | `database.core.ts` | one keyspace per logical database (`databases` config): values, expiries, LRU/LFU data, change listeners |
+| Lua engine | `scripting.engine.ts` (LuaEngine) | one Lua state per server: loaded scripts, function libraries, the running script |
+| ACL | `acl.engine.ts` (Acl), `acl.structure.ts` (AclUser) | the server's users and its ACL LOG |
+| Tracking | `tracking.core.ts` (Tracking) | the invalidation table, BCAST prefixes, deferred messages; all its operations are TrackingService methods taking it as first argument |
+| Persistence | `persistence.core.ts` (Persistence, layered over `.state` / `.snapshot` / `.aof_writer` / `.aof_loader`), `persistence.propagator.ts` (Propagator) | open AOF files, rewrite and save state, fsync timers; the current propagation unit |
+| Memory | `memory.tracker.ts` (MemoryTracker), `memory.eviction.ts` (Evictor) | incremental used-memory accounting and the eviction pool / background pass |
+
+Rules for them: the logic that does not need the state stays in the module's static services (a component delegates
+to them, e.g. Tracking → TrackingService, Persistence → PersistenceService); a component file follows the same import,
+quote, divider and 500-line rules; other modules reach the class through the module's facade (see the exceptions in
+[Public surface of a module](#public-surface-of-a-module)).
+
+## Open notes
+
+- Three `sdssplitargs` implementations exist (`RespParser.splitArgs` in `libs/resp` for inline requests,
+  `PersistenceService.splitArgs` for the AOF manifest and redis.conf, a private one in `acl.rules.service` for ACL
+  rules). They differ in corner cases (NUL bytes, which whitespace counts) that the tests pin, so they were not merged.
+- Parsing through Zod costs some throughput on hot commands (after step 1: SET and GET within noise, INCR about
+  15–20 % slower in a pipelined check). Measure with `bench/` when touching hot DTOs.
+
 ## Build
 
 `npm run build` = `tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json`. TypeScript does not rewrite
@@ -203,42 +279,3 @@ These deviate from the HTTP-oriented rules on purpose:
 
 `tsconfig.json` keeps `moduleResolution: NodeNext` and declares `paths` without `baseUrl`: TypeScript 7 removed
 `baseUrl` and `moduleResolution: node`, which the rules' tsconfig snippet still shows.
-
-## Step 2 checklist
-
-For each module (`connection`, `keys`, `bitmaps`, `hashes`, `lists`, `sets`, `zsets`, `streams`, `hyperloglog`, `geo`,
-`pubsub`, `transactions`, `scripting`, `server`) and then the subsystems (`command`, `database`, `acl`, `persistence`,
-`memory`, `notifications`, `tracking`):
-
-1. Run `npx vitest run modules/<module>` and keep it green after every step; never edit an assertion.
-2. Read each handler and note its **error precedence**: which argument checks come before the first database access.
-3. Write `<module>.messages.ts` with every module-specific error text (move single-module entries out of
-   `@/libs/resp/messages`, keep shared ones there). Templates for texts with values.
-4. Write `<module>.dto.ts`: one DTO per command, from `@/libs/schemas` primitives; add a primitive to `libs/schemas`
-   when a second module needs it.
-5. Write the service(s): static class, typed inputs, `AppError` + messages, no literal strings. Split past ~150 lines or
-   3+ concerns; facade with `.bind()`.
-6. Rewrite `<module>.commands.ts` as routing only (`withDTO`, or read → `validated` → act with a comment).
-7. Replace `CommandError` with `AppError` in the module.
-8. Logs: `Logger.<level>('[Class.method] Static text', { …context })`.
-9. Split `tests/<module>.commands.test.ts` along the service split; add `<module>.dto.test.ts` for grammar corners.
-10. Keep files ≤ 500 lines, imports in six groups, single quotes, dividers; `npx tsc --noEmit`, `npx vitest run` and
-    `npm run build` green.
-11. Cross-module calls go through the other module's facade; replace imports of another module's internals as that
-    module gets a facade.
-
-### Known debt left by step 1
-
-- `CommandError` is a deprecated alias of `AppError` (`@/libs/app-error`) still used by the unconverted modules; delete
-  it once the last use is gone.
-- `@/libs/resp/messages` still holds single-module texts (streams, zsets, scripting, transactions, connection…).
-- The throwing parsers in `@/libs/number` (`parseInteger`, `parseInt64`, `parseFloatArg`) are still used for argument
-  parsing by unconverted modules; after step 2 they should only parse stored values.
-- Cross-module imports of non-facade internals (e.g. `hashes.commands` helpers used by `server.core`, `persistence.core`
-  and `keys.extra.commands`).
-- Files over 500 lines (see the step-1 report): `persistence.rdb.ts`, `persistence.core.ts`, `server.core.ts`,
-  `acl.core.ts`, `server.commands.ts`, `memory.accounting.ts`, `command.meta_table.ts` (a data table),
-  `streams.commands.ts`, `scripting.prelude.ts`, `scripting.engine.ts`, `persistence.propagate.ts`, `zsets.commands.ts`,
-  `hyperloglog.structure.ts`, and several test suites that split along with their modules.
-- Parsing through Zod costs some throughput on hot commands (quick pipelined check after step 1: SET and GET within
-  noise, INCR about 15–20 % slower). Measure with `bench/` when converting hot modules.

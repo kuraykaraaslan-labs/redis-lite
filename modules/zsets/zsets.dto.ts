@@ -1,11 +1,21 @@
 import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
-import { isInteger, toFloat } from '@/libs/number';
+import { toFloat } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { FloatSchema, IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
-
-import { parseCursor } from '@/modules/database/database.scan';
+import {
+  BlockTimeoutSchema,
+  FloatSchema,
+  FloatSchemaWith,
+  IntegerSchema,
+  IntegerSchemaWith,
+  KeySchema,
+  ScanCursorSchema,
+  ValueSchema,
+  parseArg,
+  reject,
+} from '@/libs/schemas';
+import type { Parsed } from '@/libs/schemas';
 
 import { AggregateEnum, PopSideEnum } from './zsets.enums';
 import type { Aggregate, CombineOp } from './zsets.enums';
@@ -25,28 +35,12 @@ import type { CombineMode, FixedRange, LexBound, ParsedRange, RangeOptions, Scor
 // Argument Primitives
 // ============================================================================
 
-/** One argument parsed inside a DTO's option loop: its value, or the Redis error text of its first issue. */
-type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
-
-function parseArg<T>(schema: z.ZodType<T>, raw: string): Parsed<T> {
-  const result = schema.safeParse(raw);
-  return result.success ? { ok: true, value: result.data } : { ok: false, error: firstIssue(result.error) };
-}
-
 function fail(error: string): { ok: false; error: string } {
   return { ok: false, error };
 }
 
 function unwrap<T>(ctx: z.core.$RefinementCtx, parsed: Parsed<T>): T {
   return parsed.ok ? parsed.value : reject(ctx, parsed.error);
-}
-
-/** Strict Redis integer whose failures all report `message` (Redis's getPositiveLongFromObjectOrReply and friends). */
-function IntegerSchemaWith(message: string) {
-  return z
-    .string()
-    .refine(isInteger, { error: message })
-    .transform((value) => Number(value));
 }
 
 /** ZPOPMIN / ZPOPMAX's COUNT: not an integer and negative are the same error. */
@@ -56,10 +50,7 @@ const PopCountSchema = IntegerSchemaWith(RespMessages.COUNT_POSITIVE);
 const CardLimitSchema = IntegerSchemaWith(ZSetsMessages.LIMIT_NEGATIVE);
 
 /** A WEIGHTS value of ZUNION / ZINTER. */
-const WeightSchema = z
-  .string()
-  .refine((value) => toFloat(value) !== null, { error: ZSetsMessages.WEIGHT_NOT_FLOAT })
-  .transform((value) => toFloat(value) as number);
+const WeightSchema = FloatSchemaWith(ZSetsMessages.WEIGHT_NOT_FLOAT);
 
 /** A score bound: `5`, `(5` (exclusive), `-inf`, `+inf`. */
 export const ScoreBoundSchema = z.string().transform((raw, ctx): ScoreBound => {
@@ -76,17 +67,6 @@ export const LexBoundSchema = z.string().transform((raw, ctx): LexBound => {
   if (raw.startsWith('(')) return { kind: 'value', value: raw.slice(1), exclusive: true };
   return reject(ctx, ZSetsMessages.MIN_MAX_NOT_STRING);
 });
-
-/** Blocking timeout in seconds (float allowed) → ms; 0 = forever (the rules of BLPOP, BZPOPMIN…). */
-const TimeoutSchema = z.string().transform((raw, ctx) => {
-  const seconds = Number(raw);
-  if (raw.trim() === '' || Number.isNaN(seconds) || !Number.isFinite(seconds)) return reject(ctx, RespMessages.TIMEOUT_NOT_FLOAT);
-  if (seconds < 0) return reject(ctx, RespMessages.TIMEOUT_NEGATIVE);
-  return seconds === 0 ? 0 : Math.max(1, Math.round(seconds * 1000));
-});
-
-/** An unsigned 64-bit SCAN cursor. */
-const CursorSchema = z.string().transform((raw, ctx) => parseCursor(raw) ?? reject(ctx, ZSetsMessages.INVALID_CURSOR));
 
 // ============================================================================
 // Shared Shapes
@@ -162,10 +142,10 @@ export const ZRankDTO = RankDTO('zrank');
 export const ZRevRankDTO = RankDTO('zrevrank');
 
 /** ZSCAN key cursor …: the cursor alone, checked before the key is read. */
-export const ZScanCursorDTO = z.tuple([KeySchema, CursorSchema], z.string()).transform(([key, cursor]) => ({ key, cursor }));
+export const ZScanCursorDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor]) => ({ key, cursor }));
 
 /** ZSCAN key cursor [MATCH pattern] [COUNT count] [NOSCORES], parsed once the key is known to hold a sorted set. */
-export const ZScanDTO = z.tuple([KeySchema, CursorSchema], z.string()).transform(([key, cursor, ...options], ctx) => {
+export const ZScanDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor, ...options], ctx) => {
   let match = '*';
   let count = 10;
   let noScores = false;
@@ -305,7 +285,7 @@ export const ZPopMaxDTO = PopDTO(true);
 /** BZPOPMIN / BZPOPMAX key [key …] timeout. */
 function BlockingPopDTO(max: boolean) {
   return z.array(KeySchema).transform((args, ctx) => {
-    const timeoutMs = unwrap(ctx, parseArg(TimeoutSchema, args[args.length - 1]));
+    const timeoutMs = unwrap(ctx, parseArg(BlockTimeoutSchema, args[args.length - 1]));
     return { keys: args.slice(0, -1), timeoutMs, max };
   });
 }
@@ -337,7 +317,7 @@ export const ZMPopDTO = z.array(z.string()).transform((args, ctx) => unwrap(ctx,
 
 /** BZMPOP timeout numkeys key … MIN|MAX [COUNT count]: the timeout first. */
 export const BZMPopDTO = z.tuple([z.string()], z.string()).transform(([timeout, ...args], ctx) => {
-  const timeoutMs = parseArg(TimeoutSchema, timeout);
+  const timeoutMs = parseArg(BlockTimeoutSchema, timeout);
   if (!timeoutMs.ok) return reject(ctx, timeoutMs.error);
   return { timeoutMs: timeoutMs.value, ...unwrap(ctx, mpopArgs(args)) };
 });

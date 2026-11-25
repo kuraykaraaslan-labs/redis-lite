@@ -1,6 +1,8 @@
 import { formatMessage } from '@/libs/message-format';
 
-import { ACL_CATEGORIES, COMMAND_FLAG_ORDER } from './command.enums';
+import { AclCategoryEnum } from '@/modules/acl/acl.enums';
+
+import { COMMAND_FLAG_ORDER } from './command.enums';
 import CommandMessages from './command.messages';
 import type { Row } from './command.meta_table';
 import { COMMAND_TABLE } from './command.meta_table';
@@ -172,7 +174,7 @@ export default class CommandLookupService {
       arity,
       flags: COMMAND_FLAG_ORDER.filter((f) => flagSet.has(f)),
       flagSet,
-      acl: ACL_CATEGORIES.filter((c) => acl.has(c)),
+      acl: AclCategoryEnum.options.filter((c) => acl.has(c)),
       firstKey,
       lastKey,
       step,

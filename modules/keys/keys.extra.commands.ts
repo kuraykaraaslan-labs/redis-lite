@@ -1,4 +1,4 @@
-import { keysAt, withDTO } from '@/modules/command/command.handler';
+import { keysAt, withDTO } from '@/modules/command/command.service';
 import type { CommandSpec } from '@/modules/command/command.types';
 
 import { DumpDTO, MoveDTO, RestoreDTO, SortCmdDTO, SortRoDTO, SwapDbDTO } from './keys.dto';
@@ -7,12 +7,6 @@ import KeysService from './keys.service';
 /** Routing of SORT, MOVE, SWAPDB, DUMP and RESTORE: DTO → service. No logic lives here. */
 
 const WRITE = { write: true } as const;
-
-/**
- * @deprecated Step-2 compatibility shim: moved to KeysService.rdbOptions (keys.service.ts). Kept so unconverted
- * modules (server.commands) still compile; the lead removes it in the final pass.
- */
-export const rdbOptions = KeysService.rdbOptions;
 
 export const extraKeyCommands: CommandSpec[] = [
   // ============================================================================

@@ -1,6 +1,6 @@
 import { OK } from '@/libs/resp';
 
-import { keysAt, validated, withDTO } from '@/modules/command/command.handler';
+import { keysAt, validated, withDTO } from '@/modules/command/command.service';
 import type { CommandSpec } from '@/modules/command/command.types';
 
 import {

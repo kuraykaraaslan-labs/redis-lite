@@ -1,7 +1,7 @@
 import { AppError } from '@/libs/app-error';
 import { unknownSubcommand } from '@/libs/resp/messages';
 
-import { bySubcommand, withDTO } from '@/modules/command/command.handler';
+import { bySubcommand, withDTO } from '@/modules/command/command.service';
 import type { CommandSpec } from '@/modules/command/command.types';
 
 import {

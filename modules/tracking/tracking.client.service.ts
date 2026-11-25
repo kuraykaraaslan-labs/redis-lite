@@ -1,7 +1,7 @@
 import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
 
-import type { Client } from '@/modules/server/server.client';
+import type { Client } from '@/modules/server/server.service';
 
 import type { ClientCachingInput, ClientTrackingInput } from './tracking.dto';
 import TrackingMessages from './tracking.messages';

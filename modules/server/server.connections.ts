@@ -3,6 +3,8 @@ import type { Socket } from 'node:net';
 import { formatMessage } from '@/libs/message-format';
 import { RespError, RespParser } from '@/libs/resp';
 
+import TrackingService from '@/modules/tracking/tracking.service';
+
 import { Client } from './server.client';
 import type { RedisLiteServer } from './server.core';
 import ServerMessages from './server.messages';
@@ -63,7 +65,7 @@ export class ServerConnections {
     client.closed = true;
     server.clients.delete(client);
     this.clientsById.delete(client.id);
-    if (client.tracking) server.tracking.disable(client);
+    if (client.tracking) TrackingService.disable(server.tracking, client);
     if (client.blocked) server.blocking.unblock(client.blocked);
     server.pubsub.forget(client);
   }

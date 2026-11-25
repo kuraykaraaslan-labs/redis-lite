@@ -4,8 +4,7 @@ import { OK, RespError, RespVerbatim } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
-import type { Client } from '@/modules/server/server.client';
-import type { RedisLiteServer } from '@/modules/server/server.core';
+import type { Client, RedisLiteServer } from '@/modules/server/server.service';
 
 import type { ClientKillInput, ClientListInput, ClientUnblockInput } from './connection.dto';
 import ConnectionMessages from './connection.messages';

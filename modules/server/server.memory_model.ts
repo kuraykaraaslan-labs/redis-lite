@@ -1,6 +1,5 @@
-import { clientMemory, computeMemory, memoryForEviction } from '@/modules/memory/memory.accounting';
-import type { MemoryReport } from '@/modules/memory/memory.accounting';
-import { MemoryTracker } from '@/modules/memory/memory.tracker';
+import MemoryService, { MemoryTracker } from '@/modules/memory/memory.service';
+import type { MemoryReport } from '@/modules/memory/memory.types';
 
 import type { RedisLiteServer } from './server.core';
 
@@ -28,9 +27,9 @@ export class ServerMemoryModel {
       if (keys) this.dbAllocated[id] = true;
       return this.dbAllocated[id];
     });
-    let report = computeMemory({
+    let report = MemoryService.computeMemory({
       databases,
-      clientsNormal: server.clients.size * clientMemory(),
+      clientsNormal: server.clients.size * MemoryService.clientMemory(),
       sizes: {
         listMaxListpackSize: server.config.num('list-max-listpack-size'),
         streamNodeMaxEntries: server.config.num('stream-node-max-entries'),
@@ -50,6 +49,6 @@ export class ServerMemoryModel {
 
   /** used_memory as maxmemory sees it. */
   usedMemoryForEviction(): number {
-    return memoryForEviction(this.memoryReport());
+    return MemoryService.memoryForEviction(this.memoryReport());
   }
 }

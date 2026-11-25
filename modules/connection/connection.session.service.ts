@@ -3,6 +3,7 @@ import { OK, PONG, RespError, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import TrackingService from '@/modules/tracking/tracking.service';
 
 import type { EchoInput, PingInput, SelectInput } from './connection.dto';
 import ConnectionMessages from './connection.messages';
@@ -54,7 +55,7 @@ export default class ConnectionSessionService {
     c.resp = 2;
     c.noTouch = false;
     c.noEvict = false;
-    ctx.server.tracking.disable(c);
+    TrackingService.disable(ctx.server.tracking, c);
     c.replyOff = false;
     c.skipNext = false;
     c.skipCurrent = false;

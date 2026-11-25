@@ -1,9 +1,9 @@
-import type { RedisValue } from '@/modules/database/database.core';
 import PersistenceService from '@/modules/persistence/persistence.service';
 import type { ListpackEntry } from '@/modules/persistence/persistence.types';
 import { Stream } from '@/modules/streams/streams.structure';
-import type { ConsumerGroup, PendingEntry, StreamId } from '@/modules/streams/streams.structure';
 import type { ZSet } from '@/modules/zsets/zsets.structure';
+import type { RedisValue } from '@/modules/database/database.types';
+import type { ConsumerGroup, PendingEntry, StreamId } from '@/modules/streams/streams.types';
 
 import MemoryAllocModel from './memory.alloc.model';
 import MemoryQuicklistModel from './memory.quicklist.model';

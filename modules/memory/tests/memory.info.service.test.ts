@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { RedisValue } from '@/modules/database/database.core';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import MemoryService from '../memory.service';
 import type { KeyRecord, MemoryStatValue } from '../memory.types';

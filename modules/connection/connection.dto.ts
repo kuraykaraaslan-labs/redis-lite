@@ -1,13 +1,12 @@
 import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
-import { isInteger } from '@/libs/number';
 import type { Protocol } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
+import { IntegerSchema, IntegerSchemaWith, SubcommandSchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
 
 import CommandService from '@/modules/command/command.service';
-import { SubcommandSchema } from '@/modules/command/command.dto';
+import TrackingService from '@/modules/tracking/tracking.service';
 
 import { ClientAttributeEnum, PauseModeEnum, ReplyModeEnum, UnblockReasonEnum } from './connection.enums';
 import ConnectionMessages from './connection.messages';
@@ -31,22 +30,14 @@ function validAttr(value: string): boolean {
   return true;
 }
 
-/** A strict Redis integer whose error text is command specific. */
-function IntegerArgSchema(message: string) {
-  return z
-    .string()
-    .refine(isInteger, { error: message })
-    .transform((value) => Number(value));
-}
-
 const ClientNameSchema = z.string().refine(validAttr, { error: ConnectionMessages.NAME_INVALID });
 
 /** CLIENT LIST / KILL TYPE values → the type Redis reports (slave is an alias of replica). */
 const CLIENT_TYPES: Record<string, string> = { normal: 'normal', slave: 'replica', replica: 'replica', master: 'master', pubsub: 'pubsub' };
 
-const ClientIdSchema = IntegerArgSchema(ConnectionMessages.CLIENT_ID_INVALID);
-const PauseTimeoutSchema = IntegerArgSchema(ConnectionMessages.PAUSE_TIMEOUT_NOT_INTEGER);
-const ProtocolSchema = IntegerArgSchema(ConnectionMessages.HELLO_PROTOCOL_NOT_INTEGER).refine((v) => v === 2 || v === 3, {
+const ClientIdSchema = IntegerSchemaWith(ConnectionMessages.CLIENT_ID_INVALID);
+const PauseTimeoutSchema = IntegerSchemaWith(ConnectionMessages.PAUSE_TIMEOUT_NOT_INTEGER);
+const ProtocolSchema = IntegerSchemaWith(ConnectionMessages.HELLO_PROTOCOL_NOT_INTEGER).refine((v) => v === 2 || v === 3, {
   error: ConnectionMessages.NOPROTO,
 });
 
@@ -136,10 +127,17 @@ export const ClientPauseDTO = z.array(z.string()).transform((args, ctx) => {
   return { timeout: timeout.data };
 });
 
-/** CLIENT TRACKING: the options are parsed by the tracking module. */
-export const ClientTrackingDTO = z.tuple([SubcommandSchema], z.string()).transform(([, ...options]) => ({ options }));
+/** CLIENT TRACKING: the options after the subcommand, in the tracking module's grammar. */
+export const ClientTrackingDTO = z
+  .tuple([SubcommandSchema], z.string())
+  .transform(([, ...options]) => options)
+  .pipe(TrackingService.TrackingOptionsSchema);
 
-export const ClientCachingDTO = z.tuple([SubcommandSchema, z.string()]).transform(([, value]) => ({ value }));
+/** CLIENT CACHING YES|NO, in the tracking module's grammar. */
+export const ClientCachingDTO = z
+  .tuple([SubcommandSchema, z.string()])
+  .transform(([, value]) => [value] as [string])
+  .pipe(TrackingService.CachingValueSchema);
 
 // ============================================================================
 // Client Admin DTOs: CLIENT LIST, KILL, UNBLOCK

@@ -4,7 +4,8 @@ import { RespVerbatim } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
-import { infoMemory } from '@/modules/memory/memory.accounting';
+import MemoryService from '@/modules/memory/memory.service';
+import TrackingService from '@/modules/tracking/tracking.service';
 
 import { REDIS_VERSION } from './server.constants';
 import type { InfoInput } from './server.dto';
@@ -93,7 +94,7 @@ export default class ServerInfoService {
       }
       case 'memory': {
         const report = s.memoryReport();
-        return infoMemory(report, {
+        return MemoryService.infoMemory(report, {
           peakTime: s.memoryPeakTime,
           totalSystemMemory: totalmem(),
           cachedScripts: s.scripts.size,
@@ -109,7 +110,7 @@ export default class ServerInfoService {
         const netIn = s.stats.netIn + clients.reduce((n, c) => n + c.netIn, 0);
         const netOut = s.stats.netOut + clients.reduce((n, c) => n + c.netOut, 0);
         const exceeded = s.evictor.exceededTime(now);
-        const tracking = s.tracking.stats();
+        const tracking = TrackingService.stats(s.tracking);
         return [
           `total_connections_received:${s.stats.connections}`,
           `total_commands_processed:${s.stats.commands}`,

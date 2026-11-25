@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Reply } from '@/libs/resp';
 import { RespSet } from '@/libs/resp';
 
-import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
+import HashesService from '@/modules/hashes/hashes.service';
 
 import PersistenceService from '../persistence.service';
 import { tempDir, FUNCTION_CODE, harness } from './persistence.helpers';
@@ -138,7 +138,7 @@ describe('propagate()', () => {
     expect(h.last()).toEqual([['RESTORE', 'dst', String(h.server.databases[0].getExpire('dst')), payload, 'ABSTTL']]);
     h.run('HSET', 'h', 'a', '1', 'b', '2');
     h.run('HEXPIRE', 'h', '100', 'NX', 'FIELDS', '2', 'a', 'nope');
-    const at = hashFieldExpires((h.server.databases[0].peek('h') as { type: 'hash'; value: Map<string, string> }).value)?.get('a');
+    const at = HashesService.hashFieldExpires((h.server.databases[0].peek('h') as { type: 'hash'; value: Map<string, string> }).value)?.get('a');
     expect(h.last()).toEqual([['HPEXPIREAT', 'h', String(at), 'NX', 'FIELDS', '2', 'a', 'nope']]);
   });
 

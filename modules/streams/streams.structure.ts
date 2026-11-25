@@ -1,10 +1,7 @@
-import { listpackSize } from '@/modules/database/database.encoding';
+import DatabaseService from '@/modules/database/database.service';
 
 import type { TrimStrategy } from './streams.enums';
 import type { Consumer, ConsumerGroup, PendingEntry, StreamEntry, StreamId, StreamNode } from './streams.types';
-
-// compatibility: other modules import the stream types from this file
-export type { Consumer, ConsumerGroup, PendingEntry, StreamEntry, StreamId, StreamNode } from './streams.types';
 
 /**
  * The stream data structure (Redis t_stream.c semantics): ids, the append-only entry log laid out in listpack nodes,
@@ -85,7 +82,7 @@ export class Stream {
   /** Bytes of a node's listpack: header + master entry (count, deleted, fields, terminator) + entries + end byte. */
   static nodeBytes(node: StreamNode): number {
     const master = [lpInt(node.live), lpInt(node.total - node.live), lpInt(node.masterFields.length), ...node.masterFields, '0'];
-    return listpackSize(master) - 1 + node.entryBytes;
+    return DatabaseService.listpackSize(master) - 1 + node.entryBytes;
   }
 
   /** Listpack bytes of one entry inside `node`: flags, ms/seq deltas, [field count + fields] or values only, lp-count. */
@@ -95,7 +92,7 @@ export class Stream {
     const parts = [sameFields ? '2' : '0', lpInt(e.id.ms - node.masterId.ms), lpInt(e.id.seq - node.masterId.seq)];
     if (sameFields) parts.push(...e.fields.filter((_, i) => i % 2 === 1), lpInt(fields.length + 3));
     else parts.push(lpInt(fields.length), ...e.fields, lpInt(fields.length * 2 + 4));
-    return listpackSize(parts) - 7;
+    return DatabaseService.listpackSize(parts) - 7;
   }
 
   /** Appends an entry, opening a new node when Redis would (entry count or byte limit reached). */

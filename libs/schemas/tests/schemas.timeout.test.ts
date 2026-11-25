@@ -2,11 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { z } from 'zod';
 
-import { firstIssue } from '@/libs/schemas';
+import { BlockTimeoutSchema, firstIssue } from '@/libs/schemas';
 
-import { BlockTimeoutSchema } from '../command.dto';
-
-/** Unit tests of the command layer's argument primitives (no server). */
+/** Unit tests of the blocking-timeout primitive (no server). */
 
 function parse(schema: z.ZodType, value: string): unknown {
   const result = schema.safeParse(value);

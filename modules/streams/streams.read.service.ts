@@ -3,7 +3,7 @@ import { formatMessage } from '@/libs/message-format';
 import { NULL_ARRAY, RespError, RespMap } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { blockingCommand } from '@/modules/command/command.blocking';
+import CommandService from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 
 import type { XReadInput } from './streams.dto';
@@ -59,7 +59,7 @@ export default class StreamsReadService {
       return out.length ? new RespMap(out, true) : undefined;
     };
     if (block === null) return attempt() ?? NULL_ARRAY;
-    return blockingCommand(ctx, keys, block, attempt);
+    return CommandService.blockingCommand(ctx, keys, block, attempt);
   }
 
   /**
@@ -130,6 +130,6 @@ export default class StreamsReadService {
 
     if (block === null || from.some((id) => id !== null)) return attempt(false, false) ?? NULL_ARRAY;
     let calls = 0;
-    return blockingCommand(ctx, keys, block, () => attempt(true, calls++ > 0));
+    return CommandService.blockingCommand(ctx, keys, block, () => attempt(true, calls++ > 0));
   }
 }

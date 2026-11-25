@@ -4,8 +4,7 @@ import { NULL_ARRAY, RespDouble, RespPairs } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
-import { isCompact } from '@/modules/database/database.encoding';
-import { scanPage } from '@/modules/database/database.scan';
+import DatabaseService from '@/modules/database/database.service';
 
 import type {
   KeyInput,
@@ -80,8 +79,8 @@ export default class ZSetsQueryService {
   /** ZSCAN on an existing sorted set; a compact (listpack) one is returned whole in one call, as Redis does. */
   static scan(ctx: CommandContext, zset: ZSet, { key, cursor, match, count, noScores }: ZScanInput): Reply {
     const value = ctx.db.peek(key);
-    const compact = value !== undefined && isCompact(value, ctx.server.config);
-    const { next, page } = compact ? { next: 0, page: zset.entries.map((e) => e.member) } : scanPage(zset.scores.keys(), cursor, count);
+    const compact = value !== undefined && DatabaseService.isCompact(value, ctx.server.config);
+    const { next, page } = compact ? { next: 0, page: zset.entries.map((e) => e.member) } : DatabaseService.scanPage(zset.scores.keys(), cursor, count);
     const out: string[] = [];
     for (const member of page) {
       if (!matchGlob(match, member)) continue;

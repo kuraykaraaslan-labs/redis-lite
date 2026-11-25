@@ -1,4 +1,4 @@
-import type { RedisValue } from '@/modules/database/database.core';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import PersistenceBytesCodec, { RdbReader, RdbWriter } from './persistence.bytes.codec';
 import { RDB_OPCODE, RDB_VERSION } from './persistence.enums';

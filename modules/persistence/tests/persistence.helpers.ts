@@ -10,7 +10,7 @@ import type { Reply } from '@/libs/resp';
 
 import { RedisLite } from '@/index';
 import type { RedisLiteOptions } from '@/index';
-import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
+import HashesService from '@/modules/hashes/hashes.service';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
 import { RedisLiteServer } from '@/modules/server/server.core';
 import { idToString } from '@/modules/streams/streams.structure';
@@ -109,7 +109,7 @@ export function logical(server: RedisLiteServer): unknown {
           value = v.value.entries.map((e) => [e.member, e.score]);
           break;
         case 'hash':
-          value = { fields: [...v.value].sort(), ttl: [...(hashFieldExpires(v.value) ?? [])].sort() };
+          value = { fields: [...v.value].sort(), ttl: [...(HashesService.hashFieldExpires(v.value) ?? [])].sort() };
           break;
         case 'stream': {
           const s = v.value;

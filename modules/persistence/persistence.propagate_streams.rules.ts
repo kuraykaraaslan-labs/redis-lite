@@ -2,7 +2,8 @@ import type { Reply } from '@/libs/resp';
 import { RespMap } from '@/libs/resp';
 
 import { idToString, parseStreamId, U64_MAX } from '@/modules/streams/streams.structure';
-import type { ConsumerGroup, Stream } from '@/modules/streams/streams.structure';
+import type { Stream } from '@/modules/streams/streams.structure';
+import type { ConsumerGroup } from '@/modules/streams/streams.types';
 
 import PropagateBaseRules from './persistence.propagate_base.rules';
 import type { PropagateContext, PropagatedOp } from './persistence.types';

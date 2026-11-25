@@ -9,18 +9,20 @@ import { formatMessage } from '@/libs/message-format';
 import { Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { Acl } from '@/modules/acl/acl.core';
-import type { AclDenial, AclLogContext, AclLogInput, AclUser } from '@/modules/acl/acl.core';
+import type { AclLogContext } from '@/modules/acl/acl.enums';
+import { Acl } from '@/modules/acl/acl.service';
+import type { AclUser } from '@/modules/acl/acl.structure';
+import type { AclDenial, AclLogInput } from '@/modules/acl/acl.types';
 import CommandService from '@/modules/command/command.service';
 import type { CommandMeta, HandlerResult } from '@/modules/command/command.types';
-import { Database } from '@/modules/database/database.core';
-import type { MemoryReport } from '@/modules/memory/memory.accounting';
-import { Evictor } from '@/modules/memory/memory.eviction';
-import type { KeyEvent } from '@/modules/notifications/notifications.core';
-import { Persistence } from '@/modules/persistence/persistence.core';
-import type { Propagator } from '@/modules/persistence/persistence.propagate';
+import { Database } from '@/modules/database/database.service';
+import type { MemoryReport } from '@/modules/memory/memory.types';
+import { Evictor } from '@/modules/memory/memory.service';
+import type { KeyEvent } from '@/modules/notifications/notifications.types';
+import { Persistence } from '@/modules/persistence/persistence.service';
+import type { Propagator } from '@/modules/persistence/persistence.service';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
-import { Tracking } from '@/modules/tracking/tracking.core';
+import { Tracking } from '@/modules/tracking/tracking.service';
 
 import { ServerAccess } from './server.access';
 import { ServerBlocking } from './server.blocking';
@@ -35,8 +37,6 @@ import ServerMessages from './server.messages';
 import { ServerObserver } from './server.observer';
 import { ServerPubSub } from './server.pubsub';
 import type { CommandStat, DebugHooks, ExecuteMode, Precheck, ServerOptions, SlowlogEntry } from './server.types';
-
-export type { CommandStat, DebugHooks, ServerOptions, SlowlogEntry } from './server.types';
 
 /** Configs that change how the memory model sizes existing keys. */
 const MEMORY_MODEL_CONFIGS = /max-listpack|max-intset|max-ziplist|stream-node|list-compress/;

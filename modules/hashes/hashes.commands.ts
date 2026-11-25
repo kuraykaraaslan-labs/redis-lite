@@ -1,4 +1,4 @@
-import { keysAt, validated, withDTO } from '@/modules/command/command.handler';
+import { keysAt, validated, withDTO } from '@/modules/command/command.service';
 import type { CommandSpec } from '@/modules/command/command.types';
 
 import {
@@ -39,16 +39,6 @@ import HashesService from './hashes.service';
  */
 
 const WRITE = { write: true } as const;
-
-/**
- * @deprecated Step-2 compatibility shims: the field TTL helpers moved to HashesService (hashes.service.ts). Kept so
- * unconverted modules (server, persistence, memory) still compile; the lead removes them in the final pass.
- */
-export const hashFieldExpires = HashesService.hashFieldExpires;
-/** @deprecated See {@link hashFieldExpires}. */
-export const setHashFieldExpires = HashesService.setHashFieldExpires;
-/** @deprecated See {@link hashFieldExpires}. */
-export const hashHasFieldTtl = HashesService.hashHasFieldTtl;
 
 export const hashCommands: CommandSpec[] = [
   // ============================================================================

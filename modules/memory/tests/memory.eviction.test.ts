@@ -10,8 +10,8 @@ import type { Reply } from '@/libs/resp';
 import { RedisLite } from '@/index';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
 import { RedisLiteServer } from '@/modules/server/server.core';
-import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
-import { objectEncoding } from '@/modules/database/database.encoding';
+import HashesService from '@/modules/hashes/hashes.service';
+import DatabaseService from '@/modules/database/database.service';
 import { sleep, tempDir, useServer } from '@/tests/helpers';
 
 import MemoryService from '../memory.service';
@@ -284,8 +284,8 @@ describe('incremental used-memory accounting', () => {
         for (const key of db.keys()) {
           const value = db.peek(key);
           if (!value) continue;
-          const fieldTtls = value.type === 'hash' ? hashFieldExpires(value.value) : undefined;
-          keys.push({ key, value, encoding: objectEncoding(value, server.config, fieldTtls !== undefined), hasExpire: db.getExpire(key) !== undefined, fieldTtls });
+          const fieldTtls = value.type === 'hash' ? HashesService.hashFieldExpires(value.value) : undefined;
+          keys.push({ key, value, encoding: DatabaseService.objectEncoding(value, server.config, fieldTtls !== undefined), hasExpire: db.getExpire(key) !== undefined, fieldTtls });
         }
         return { id, keys, allocated: allocated.has(id) };
       });

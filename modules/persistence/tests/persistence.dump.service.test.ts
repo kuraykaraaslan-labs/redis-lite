@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { RedisValue } from '@/modules/database/database.core';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import { RDB_VERSION } from '../persistence.enums';
 import PersistenceService from '../persistence.service';

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import type { RedisValue } from '@/modules/database/database.core';
 import PersistenceService from '@/modules/persistence/persistence.service';
 import { Stream } from '@/modules/streams/streams.structure';
 import { ZSet } from '@/modules/zsets/zsets.structure';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import { RaxShape } from '../memory.rax.model';
 import MemoryService from '../memory.service';

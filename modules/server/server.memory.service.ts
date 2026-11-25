@@ -3,11 +3,11 @@ import type { Reply } from '@/libs/resp';
 
 import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
-import type { RedisValue } from '@/modules/database/database.core';
-import { objectEncoding } from '@/modules/database/database.encoding';
-import { hashFieldExpires } from '@/modules/hashes/hashes.commands';
-import { memoryStats, memoryUsage } from '@/modules/memory/memory.accounting';
-import type { MemoryReport, MemoryStatValue } from '@/modules/memory/memory.accounting';
+import DatabaseService from '@/modules/database/database.service';
+import HashesService from '@/modules/hashes/hashes.service';
+import MemoryService from '@/modules/memory/memory.service';
+import type { MemoryReport, MemoryStatValue } from '@/modules/memory/memory.types';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import type { MemoryUsageInput } from './server.dto';
 import ServerMessages from './server.messages';
@@ -20,7 +20,7 @@ export default class ServerMemoryService {
 
   /** The OBJECT ENCODING of a value under the live config. */
   private static encodingOf(ctx: CommandContext, v: RedisValue): string {
-    return objectEncoding(v, ctx.server.config, v.type === 'hash' && hashFieldExpires(v.value) !== undefined);
+    return DatabaseService.objectEncoding(v, ctx.server.config, v.type === 'hash' && HashesService.hashFieldExpires(v.value) !== undefined);
   }
 
   /** Options of the memory model that follow the live config. */
@@ -29,7 +29,7 @@ export default class ServerMemoryService {
     return {
       samples,
       hasExpire: ctx.db.getExpire(key) !== undefined,
-      fieldTtls: v.type === 'hash' ? hashFieldExpires(v.value) : undefined,
+      fieldTtls: v.type === 'hash' ? HashesService.hashFieldExpires(v.value) : undefined,
       listMaxListpackSize: cfg.num('list-max-listpack-size'),
       streamNodeMaxEntries: cfg.num('stream-node-max-entries'),
       streamNodeMaxBytes: cfg.num('stream-node-max-bytes'),
@@ -61,7 +61,7 @@ export default class ServerMemoryService {
   /** MEMORY USAGE key [SAMPLES count]: null for a missing key. */
   static usage(ctx: CommandContext, { key, samples }: MemoryUsageInput): Reply {
     const v = ctx.db.peek(key);
-    return v ? memoryUsage(key, v, ServerMemoryService.encodingOf(ctx, v), ServerMemoryService.usageOptions(ctx, key, v, samples)) : null;
+    return v ? MemoryService.memoryUsage(key, v, ServerMemoryService.encodingOf(ctx, v), ServerMemoryService.usageOptions(ctx, key, v, samples)) : null;
   }
 
   static doctor(ctx: CommandContext): Reply {
@@ -69,7 +69,7 @@ export default class ServerMemoryService {
   }
 
   static stats(ctx: CommandContext): Reply {
-    return new RespMap(memoryStats(ctx.server.memoryReport()).map(([k, v]) => [k, ServerMemoryService.statValue(v)]));
+    return new RespMap(MemoryService.memoryStats(ctx.server.memoryReport()).map(([k, v]) => [k, ServerMemoryService.statValue(v)]));
   }
 
   static mallocStats(): Reply {

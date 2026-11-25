@@ -18,3 +18,12 @@ export function firstIssue(error: z.ZodError): string {
 export function validationErrorReply(error: z.ZodError): RespError {
   return new RespError(firstIssue(error));
 }
+
+/** One grammar step inside a DTO's option loop: its value, or the Redis error text to report. */
+export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** Parses one argument with `schema` inside an option loop, keeping the first issue's text instead of aborting. */
+export function parseArg<T>(schema: z.ZodType<T>, raw: string): Parsed<T> {
+  const result = schema.safeParse(raw);
+  return result.success ? { ok: true, value: result.data } : { ok: false, error: firstIssue(result.error) };
+}

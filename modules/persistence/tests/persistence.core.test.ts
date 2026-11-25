@@ -5,8 +5,6 @@ import { describe, expect, it } from 'vitest';
 
 import Redis from 'ioredis';
 
-import { OK } from '@/libs/resp';
-
 import { RedisLite } from '@/index';
 import { foldDirectives, readConfigFile } from '@/modules/server/server.conf_file';
 

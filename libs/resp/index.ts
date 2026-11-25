@@ -4,6 +4,9 @@
  * Every Redis string is kept as a "binary string": a JS string where each char is one byte (latin1). That keeps keys and values
  * byte-exact (msgpack payloads, UTF-8 text, anything) while still letting us use them as Map keys.
  */
+import { formatMessage } from '@/libs/message-format';
+
+import { RespMessages } from './messages';
 
 export class Status {
   constructor(readonly value: string) {}
@@ -280,7 +283,7 @@ export class RespParser {
       throw new Error(this.error);
     if (this.lastError !== null) {
       this.lastError = null;
-      throw new Error(this.error ?? 'Protocol error');
+      throw new Error(this.error ?? RespMessages.PROTOCOL_ERROR);
     }
     const { commands, error } = this.parse(chunk);
     if (error !== null) {
@@ -340,12 +343,12 @@ export class RespParser {
       this.consolidate();
       if (this.buffer[this.pos] !== 0x2a /* * */) return this.parseInline();
       const header = this.readLine(
-        'Protocol error: too big mbulk count string',
+        RespMessages.PROTOCOL_MBULK_TOO_BIG,
       );
       if (header === null) return null;
       const ll = strictInteger(header.slice(1));
       if (ll === null || ll > INT_MAX)
-        throw new Error('Protocol error: invalid multibulk length');
+        throw new Error(RespMessages.PROTOCOL_INVALID_MBULK);
       if (ll <= 0) return [];
       this.multibulkLen = ll;
       this.argv = [];
@@ -354,14 +357,14 @@ export class RespParser {
       if (this.bulkLen < 0) {
         this.consolidate();
         const line = this.readLine(
-          'Protocol error: too big bulk count string',
+          RespMessages.PROTOCOL_BULK_TOO_BIG,
           true,
         );
         if (line === null) return null;
         const ll = strictInteger(line.slice(1));
         const max = this.options.maxBulkLen?.() ?? DEFAULT_PROTO_MAX_BULK_LEN;
         if (ll === null || ll < 0 || ll > max)
-          throw new Error('Protocol error: invalid bulk length');
+          throw new Error(RespMessages.PROTOCOL_INVALID_BULK);
         this.bulkLen = ll;
       }
       if (this.available() < this.bulkLen + 2) return null;
@@ -393,7 +396,7 @@ export class RespParser {
     if (cr + 2 > buf.length) return null;
     if (bulk && buf[this.pos] !== 0x24 /* $ */)
       throw new Error(
-        `Protocol error: expected '$', got '${String.fromCharCode(buf[this.pos])}'`,
+        formatMessage(RespMessages.PROTOCOL_EXPECTED_DOLLAR, { got: String.fromCharCode(buf[this.pos]) }),
       );
     const line = buf.toString('latin1', this.pos, cr);
     this.pos = cr + 2;
@@ -406,7 +409,7 @@ export class RespParser {
     const nl = buf.indexOf(0x0a, this.pos);
     if (nl < 0) {
       if (buf.length - this.pos > PROTO_INLINE_MAX_SIZE)
-        throw new Error('Protocol error: too big inline request');
+        throw new Error(RespMessages.PROTOCOL_INLINE_TOO_BIG);
       return null;
     }
     const end = nl > this.pos && buf[nl - 1] === 0x0d ? nl - 1 : nl;
@@ -414,7 +417,7 @@ export class RespParser {
     this.pos = nl + 1;
     const argv = RespParser.splitArgs(line);
     if (argv === null)
-      throw new Error('Protocol error: unbalanced quotes in request');
+      throw new Error(RespMessages.PROTOCOL_UNBALANCED_QUOTES);
     return argv;
   }
 

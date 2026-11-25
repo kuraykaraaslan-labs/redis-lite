@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
 
-import type { AclDenial, AclLogContext, AclLogInput, AclUser, KeyAccess } from '@/modules/acl/acl.core';
+import type { AclLogContext } from '@/modules/acl/acl.enums';
+import type { AclUser } from '@/modules/acl/acl.structure';
+import type { AclDenial, AclLogInput, KeyAccess } from '@/modules/acl/acl.types';
 import { COMMANDS } from '@/modules/command/command.registry';
 import CommandService from '@/modules/command/command.service';
 import type { CommandMeta } from '@/modules/command/command.types';

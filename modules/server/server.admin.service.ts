@@ -2,7 +2,7 @@ import { AppError } from '@/libs/app-error';
 import { OK } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { Block, NO_REPLY } from '@/modules/command/command.handler';
+import { Block, NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 
 import type { BgsaveInput, ShutdownInput, WaitAofInput, WaitInput } from './server.dto';

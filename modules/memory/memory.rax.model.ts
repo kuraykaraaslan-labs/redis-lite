@@ -1,5 +1,5 @@
 import { compareIds } from '@/modules/streams/streams.structure';
-import type { StreamId } from '@/modules/streams/streams.structure';
+import type { StreamId } from '@/modules/streams/streams.types';
 
 import MemoryAllocModel from './memory.alloc.model';
 import type { RaxNode } from './memory.types';

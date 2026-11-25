@@ -3,8 +3,6 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import Redis from 'ioredis';
-
 import { OK, Status } from '@/libs/resp';
 
 import { tempDir, harness, populate, logical, fcall } from './persistence.helpers';

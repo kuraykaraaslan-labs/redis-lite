@@ -1,4 +1,4 @@
-import { withDTO } from '@/modules/command/command.handler';
+import { withDTO } from '@/modules/command/command.service';
 import type { CommandSpec } from '@/modules/command/command.types';
 
 import { PubSubDTO, PublishDTO, SubscribeDTO, UnsubscribeDTO } from './pubsub.dto';

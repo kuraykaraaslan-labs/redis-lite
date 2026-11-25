@@ -12,12 +12,4 @@ export class AppError extends Error {
   }
 }
 
-/**
- * @deprecated Step-1 alias so modules that are not converted yet keep compiling. Step 2 replaces every use with
- * AppError and deletes this alias (see docs/STRUCTURE.md).
- */
-export const CommandError = AppError;
-/** @deprecated See {@link CommandError}. */
-export type CommandError = AppError;
-
 export default AppError;

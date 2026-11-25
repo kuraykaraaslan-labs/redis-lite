@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 
-import { keysAt, validated, withDTO } from '@/modules/command/command.handler';
+import { keysAt, validated, withDTO } from '@/modules/command/command.service';
 import type { CommandContext, CommandSpec, HandlerResult } from '@/modules/command/command.types';
 
 import {

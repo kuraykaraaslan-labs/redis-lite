@@ -1,4 +1,4 @@
-import { validated, withDTO } from '@/modules/command/command.handler';
+import { validated, withDTO } from '@/modules/command/command.service';
 import type { CommandContext, CommandSpec, HandlerResult } from '@/modules/command/command.types';
 
 import { EvalDTO, EvalShaDTO, ScriptDTO } from './scripting.dto';

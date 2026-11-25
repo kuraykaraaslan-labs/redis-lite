@@ -2,10 +2,10 @@ import { formatMessage } from '@/libs/message-format';
 import { NULL_ARRAY, RespError } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import type { AclDenial } from '@/modules/acl/acl.core';
-import { Block, NO_REPLY } from '@/modules/command/command.handler';
+import type { AclDenial } from '@/modules/acl/acl.types';
+import { Block, NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
-import type { Client } from '@/modules/server/server.client';
+import type { Client } from '@/modules/server/server.service';
 
 import TransactionsMessages from './transactions.messages';
 

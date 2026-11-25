@@ -4,7 +4,7 @@ import { OK, RespMap, RespSet } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
-import { functionsDumpPayload, functionsRestorePayload } from '@/modules/persistence/persistence.rdb';
+import PersistenceService from '@/modules/persistence/persistence.service';
 
 import type { FcallInput, FunctionInput } from './scripting.dto';
 import type { LuaEngine } from './scripting.engine';
@@ -58,7 +58,7 @@ export default class ScriptingFunctionsService {
   private static restore(lua: LuaEngine, { payload, policy }: RestoreInput): Reply {
     let codes: string[];
     try {
-      codes = functionsRestorePayload(Buffer.from(payload, 'latin1'));
+      codes = PersistenceService.functionsRestorePayload(Buffer.from(payload, 'latin1'));
     } catch (error) {
       const msg = (error as Error).message;
       throw new AppError(
@@ -96,7 +96,7 @@ export default class ScriptingFunctionsService {
       case 'stats':
         return ScriptingFunctionsService.stats(lua);
       case 'dump':
-        return functionsDumpPayload([...lua.libraries.values()].map((l) => l.code)).toString('latin1');
+        return PersistenceService.functionsDumpPayload([...lua.libraries.values()].map((l) => l.code)).toString('latin1');
       case 'restore':
         return ScriptingFunctionsService.restore(lua, input);
       case 'kill':

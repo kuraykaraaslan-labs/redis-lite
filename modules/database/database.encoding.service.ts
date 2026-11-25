@@ -1,4 +1,4 @@
-import type { ServerConfig } from '@/modules/server/server.config';
+import type { ServerConfig } from '@/modules/server/server.service';
 
 import type { ListLimit, RedisValue } from './database.types';
 

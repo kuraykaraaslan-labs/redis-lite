@@ -1,4 +1,4 @@
-import type { Client } from '@/modules/server/server.client';
+import type { Client } from '@/modules/server/server.service';
 
 /** A `lua_State*` (a pointer into the WASM heap). */
 export type LuaState = number;

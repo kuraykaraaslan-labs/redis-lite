@@ -6,6 +6,8 @@ import MemoryOverheadService from './memory.overhead.service';
 import MemoryUsageService from './memory.usage.service';
 
 export { MemoryInfoService, MemoryOverheadService, MemoryUsageService };
+export { Evictor } from './memory.eviction';
+export { MemoryTracker } from './memory.tracker';
 
 /**
  * The memory module's stateless public API: Redis-style memory accounting (a clean-room model of Redis 8 on 64-bit

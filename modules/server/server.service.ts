@@ -7,6 +7,7 @@ import ServerDiagnosticsService from './server.diagnostics.service';
 import ServerInfoService from './server.info.service';
 import ServerLolwutService from './server.lolwut.service';
 import ServerMemoryService from './server.memory.service';
+import { REDIS_VERSION } from './server.constants';
 
 export {
   ServerAclService,
@@ -19,9 +20,16 @@ export {
   ServerLolwutService,
   ServerMemoryService,
 };
+/** The server runtime, as types: other modules hold these objects (the runtime itself is built by the entry points). */
+export type { Client } from './server.client';
+export type { ServerConfig } from './server.config';
+export type { RedisLiteServer } from './server.core';
 
 /** The server commands' public API: one flat facade over the sub-services (other modules import only this class). */
 export default class ServerService {
+  /** The Redis version redis-lite reports (HELLO, INFO, LOLWUT). */
+  static readonly REDIS_VERSION = REDIS_VERSION;
+
   // Info — INFO
   static info = ServerInfoService.info.bind(ServerInfoService);
 

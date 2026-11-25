@@ -1,7 +1,7 @@
 import type { Reply } from '@/libs/resp';
 import { NULL_ARRAY, RespPush } from '@/libs/resp';
 
-import type { Client } from '@/modules/server/server.client';
+import type { Client } from '@/modules/server/server.service';
 
 import TrackingMessages from './tracking.messages';
 import type { TrackingState, TrackingStats } from './tracking.types';

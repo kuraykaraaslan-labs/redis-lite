@@ -2,11 +2,13 @@ import { renameSync, writeFileSync } from 'node:fs';
 
 import { AppError } from '@/libs/app-error';
 import Logger from '@/libs/logger';
+import { formatMessage } from '@/libs/message-format';
 import { OK } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 import { wrongArity } from '@/libs/resp/messages';
 
-import { ACL_MESSAGES, aclDenialMessage, genPass } from '@/modules/acl/acl.core';
+import AclMessages from '@/modules/acl/acl.messages';
+import AclService from '@/modules/acl/acl.service';
 import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 
@@ -39,7 +41,7 @@ export default class ServerAclService {
   /** ACL DELUSER: the connections of deleted users are closed; `default` can never be deleted. */
   static delUser(ctx: CommandContext, { usernames }: AclDelUserInput): Reply {
     const engine = ctx.server.acl;
-    if (usernames.includes('default')) throw new AppError(ACL_MESSAGES.DEFAULT_UNDELETABLE);
+    if (usernames.includes('default')) throw new AppError(AclMessages.DEFAULT_UNDELETABLE);
     const users = [...new Set(usernames)].map((n) => engine.user(n)).filter((u) => u !== undefined);
     const deleted = engine.deleteUser(usernames);
     for (const u of users) ctx.server.killUserClients(u, ctx.client);
@@ -109,16 +111,16 @@ export default class ServerAclService {
   /** ACL DRYRUN user command [arg …]: OK, or why the user may not run it. */
   static dryRun(ctx: CommandContext, { username, argv }: AclDryRunInput): Reply {
     const user = ctx.server.acl.user(username);
-    if (!user) throw new AppError(ACL_MESSAGES.userNotFound(username));
+    if (!user) throw new AppError(formatMessage(AclMessages.USER_NOT_FOUND, { name: username }));
     const { meta } = CommandService.lookupCommand(argv);
-    if (!meta) throw new AppError(ACL_MESSAGES.commandNotFound(argv[0]));
+    if (!meta) throw new AppError(formatMessage(AclMessages.COMMAND_NOT_FOUND, { name: argv[0] }));
     if (!CommandService.arityOk(meta.arity, argv.length)) throw new AppError(wrongArity(meta.fullname));
     const denial = ctx.server.aclCheckUser(user, argv, meta);
-    return denial ? aclDenialMessage(denial, user.name, true) : OK;
+    return denial ? AclService.denialMessage(denial, user.name, true) : OK;
   }
 
   static genPass(_ctx: CommandContext, { bits }: AclGenPassInput): Reply {
-    return genPass(bits);
+    return AclService.genPass(bits);
   }
 
   static help(): Reply {

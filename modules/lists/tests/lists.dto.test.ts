@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { z } from 'zod';
 
-import { firstIssue } from '@/libs/schemas';
+import { BlockTimeoutSchema as TimeoutSchema, firstIssue } from '@/libs/schemas';
 
-import { BLMoveDTO, BLMPopDTO, LMPopDTO, LPopDTO, LPosDTO, TimeoutSchema } from '../lists.dto';
+import { BLMoveDTO, BLMPopDTO, LMPopDTO, LPopDTO, LPosDTO } from '../lists.dto';
 
 /**
  * Unit tests of the stateless argument grammar (no server): parsed shapes and which error wins.

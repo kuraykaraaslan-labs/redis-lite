@@ -18,6 +18,8 @@ export {
   PersistencePropagateService,
   PersistenceRdbService,
 };
+export { Persistence } from './persistence.core';
+export { Propagator } from './persistence.propagator';
 
 /**
  * The persistence module's stateless public API: one flat facade over the sub-services (RDB files, DUMP payloads, AOF

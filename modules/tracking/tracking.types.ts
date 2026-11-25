@@ -1,5 +1,4 @@
-import type { Client } from '@/modules/server/server.client';
-import type { ServerConfig } from '@/modules/server/server.config';
+import type { Client, ServerConfig } from '@/modules/server/server.service';
 
 /** What tracking needs from the server. */
 export interface TrackingHost {

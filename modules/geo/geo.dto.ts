@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
-import { toFloat } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { FloatSchema, Int64Schema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
+import { FloatSchema, FloatSchemaWith, Int64Schema, KeySchema, ValueSchema, parseArg, reject } from '@/libs/schemas';
+import type { Parsed } from '@/libs/schemas';
 
 import { GeoSortEnum } from './geo.enums';
 import GeoHash from './geo.geohash';
@@ -23,24 +23,8 @@ import type { GeoPoint, GeoQuery } from './geo.types';
 // Argument Primitives
 // ============================================================================
 
-/** One argument parsed inside a DTO's option loop: its value, or the Redis error text of its first issue. */
-type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
-
-function parseArg<T>(schema: z.ZodType<T>, raw: string): Parsed<T> {
-  const result = schema.safeParse(raw);
-  return result.success ? { ok: true, value: result.data } : { ok: false, error: firstIssue(result.error) };
-}
-
 /** Meters per unit; looked up by the lowercased unit name. */
 const UNITS: Record<string, number> = { m: 1, km: 1000, ft: 0.3048, mi: 1609.34 };
-
-/** A float whose failure reports `message` (Redis's "need numeric radius" family). */
-function FloatSchemaWith(message: string) {
-  return z
-    .string()
-    .refine((value) => toFloat(value) !== null, { error: message })
-    .transform((value) => toFloat(value) as number);
-}
 
 const RadiusSchema = FloatSchemaWith(GeoMessages.NEED_NUMERIC_RADIUS);
 const WidthSchema = FloatSchemaWith(GeoMessages.NEED_NUMERIC_WIDTH);

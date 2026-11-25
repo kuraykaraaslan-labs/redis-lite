@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 
 import { formatMessage } from '@/libs/message-format';
 
-import { splitArgs } from '@/modules/persistence/persistence.core';
+import PersistenceService from '@/modules/persistence/persistence.service';
 
 import { REDIS_VERSION } from './server.constants';
 import ServerMessages from './server.messages';
@@ -41,7 +41,7 @@ export function readConfigFile(path: string, depth = 0): ConfDirective[] {
   text.split('\n').forEach((raw, i) => {
     const line = raw.replace(/\r$/, '').trim();
     if (!line || line.startsWith('#')) return;
-    const args = splitArgs(line);
+    const args = PersistenceService.splitArgs(line);
     const d = { file: path, line: i + 1, text: line };
     if (!args) throw configFileError(d, ServerMessages.CONF_UNBALANCED_QUOTES);
     if (!args.length) return;

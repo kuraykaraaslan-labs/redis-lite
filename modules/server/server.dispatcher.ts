@@ -5,13 +5,13 @@ import { NULL_ARRAY, OK, QUEUED, RespError } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 import { unknownCommand, unknownSubcommand, wrongArity } from '@/libs/resp/messages';
 
-import { aclDenialMessage, noPermError } from '@/modules/acl/acl.core';
-import { Block, NO_REPLY } from '@/modules/command/command.handler';
+import AclService from '@/modules/acl/acl.service';
 import { COMMANDS } from '@/modules/command/command.registry';
-import CommandService from '@/modules/command/command.service';
+import CommandService, { Block, NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
-import { OOM_ERROR } from '@/modules/memory/memory.eviction';
-import { setWrote } from '@/modules/notifications/notifications.core';
+import MemoryMessages from '@/modules/memory/memory.messages';
+import NotificationsService from '@/modules/notifications/notifications.service';
+import TrackingService from '@/modules/tracking/tracking.service';
 
 import type { Client } from './server.client';
 import type { RedisLiteServer } from './server.core';
@@ -47,7 +47,7 @@ const SUBSCRIBER_ALLOWED = new Set(['subscribe', 'psubscribe', 'unsubscribe', 'p
  */
 function isNoop(name: string, args: string[], reply: Reply, existed: boolean): boolean {
   if (reply instanceof RespError) return true;
-  if (name === 'set') return !setWrote(['set', ...args], reply, existed);
+  if (name === 'set') return !NotificationsService.setWrote(['set', ...args], reply, existed);
   if (reply === 0 && ZERO_IS_NOOP.has(name)) return true;
   if (EMPTY_IS_NOOP.has(name) && (reply === null || reply === NULL_ARRAY || (Array.isArray(reply) && reply.length === 0))) return true;
   if (name === 'getex' && args.length === 1) return true;
@@ -100,7 +100,7 @@ export class ServerDispatcher {
       client.multi = null;
       client.multiError = false;
       client.watched.clear();
-      const reason = message.startsWith('NOAUTH') ? `${message}  ` : message;
+      const reason = message === ServerMessages.NOAUTH ? `${message}  ` : message;
       this.server.observer.replyError(client, formatMessage(ServerMessages.EXECABORT_BECAUSE, { reason }));
       return;
     }
@@ -125,7 +125,7 @@ export class ServerDispatcher {
     if (denial && client.user) {
       client.lastCommand = fullname;
       server.aclLogDenial(client, denial, server.aclContext(client));
-      this.rejectCommand(client, noPermError(denial, client.user.name), fullname, isExec);
+      this.rejectCommand(client, AclService.noPermError(denial, client.user.name), fullname, isExec);
       return true;
     }
     const queueing = Boolean(client.multi) && !MULTI_IMMEDIATE.has(name);
@@ -135,7 +135,7 @@ export class ServerDispatcher {
       // queueing in MULTI could grow memory without bound, so any queued command is refused too
       const denyoom = queueing || meta?.flagSet.has('denyoom') || (isExec && this.queuedHasFlag(client, 'denyoom'));
       if (this.preCommandOom && denyoom) {
-        this.rejectCommand(client, OOM_ERROR, fullname, isExec);
+        this.rejectCommand(client, MemoryMessages.OOM, fullname, isExec);
         return true;
       }
     } else this.preCommandOom = false;
@@ -165,7 +165,7 @@ export class ServerDispatcher {
       const denial = server.aclDenial(client, argv, meta);
       if (denial) {
         server.aclLogDenial(client, denial, 'lua');
-        return new RespError(formatMessage(ServerMessages.ACL_SCRIPT_FAILURE, { reason: aclDenialMessage(denial, client.user.name) }));
+        return new RespError(formatMessage(ServerMessages.ACL_SCRIPT_FAILURE, { reason: AclService.denialMessage(denial, client.user.name) }));
       }
     }
     // the checks processCommand() makes for top-level commands, for redis.call
@@ -173,7 +173,7 @@ export class ServerDispatcher {
       const diskError = server.persistence.writeDeniedError();
       if (diskError !== null) return new RespError(diskError);
     }
-    if (this.preCommandOom && meta?.flagSet.has('denyoom')) return new RespError(OOM_ERROR);
+    if (this.preCommandOom && meta?.flagSet.has('denyoom')) return new RespError(MemoryMessages.OOM);
     return null;
   }
 
@@ -238,10 +238,10 @@ export class ServerDispatcher {
     }
     if (result instanceof Block) server.blocking.block(client, result, argv);
     else if (result !== NO_REPLY) client.write(result);
-    server.tracking.flushDeferred(client);
+    TrackingService.flushDeferred(server.tracking, client);
     // CLIENT CACHING applies to the next command only (a whole transaction counts as one)
     if (!client.multi && !(name === 'client' && argv[1]?.toLowerCase() === 'caching')) client.trackingCaching = null;
-    server.tracking.enforceLimit();
+    TrackingService.enforceLimit(server.tracking);
     server.serveReadyKeys();
   }
 
@@ -309,7 +309,7 @@ export class ServerDispatcher {
           server.keyspace.notifyCommand(dbIndex, name, args, result, before, { write: Boolean(spec.flags?.write), noop, meta });
         }
       }
-      if (client.tracking && meta?.flagSet.has('readonly')) server.tracking.remember(client, CommandService.keyNames(meta, argv));
+      if (client.tracking && meta?.flagSet.has('readonly')) TrackingService.remember(server.tracking, client, CommandService.keyNames(meta, argv));
     } finally {
       propagator.exit();
     }

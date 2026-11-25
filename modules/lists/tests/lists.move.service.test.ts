@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { arity, err, sleep, SYNTAX, useServer, WRONGTYPE } from '@/tests/helpers';
+import { arity, sleep, SYNTAX, useServer, WRONGTYPE } from '@/tests/helpers';
 
 /**
  * LMOVE, RPOPLPUSH and the blocking commands BLPOP, BRPOP, BLMPOP, BLMOVE, BRPOPLPUSH (lists.move.service).

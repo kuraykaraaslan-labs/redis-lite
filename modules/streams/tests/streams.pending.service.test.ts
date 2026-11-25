@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { sleep, useServer } from '@/tests/helpers';
 
-import { arity, entry, err, INVALID_ID, NOT_INT, openResp3, toMap, WRONGTYPE } from './streams.test_helpers';
+import { arity, err, INVALID_ID, NOT_INT, openResp3, toMap, WRONGTYPE } from './streams.test_helpers';
 
 /**
  * XACK, XPENDING, XCLAIM, XAUTOCLAIM (streams.pending.service).

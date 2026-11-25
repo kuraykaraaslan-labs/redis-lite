@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { arity, err, NOT_INT, SYNTAX, useServer } from '@/tests/helpers';
+import { arity, NOT_INT, SYNTAX, useServer } from '@/tests/helpers';
 
 /**
  * HSCAN, HRANDFIELD (hashes.iteration.service).

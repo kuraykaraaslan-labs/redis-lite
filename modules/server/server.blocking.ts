@@ -1,10 +1,11 @@
 import { RespError } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { noPermError } from '@/modules/acl/acl.core';
-import type { Block } from '@/modules/command/command.handler';
+import AclService from '@/modules/acl/acl.service';
+import type { Block } from '@/modules/command/command.service';
 import { COMMANDS } from '@/modules/command/command.registry';
 import CommandService from '@/modules/command/command.service';
+import TrackingService from '@/modules/tracking/tracking.service';
 
 import type { Client, Waiter } from './server.client';
 import type { RedisLiteServer } from './server.core';
@@ -69,7 +70,7 @@ export class ServerBlocking {
     this.unblock(waiter);
     this.server.aclLogDenial(client, denial, 'toplevel');
     this.server.observer.commandStat(meta.fullname).rejected++;
-    this.server.observer.replyError(client, noPermError(denial, client.user.name));
+    this.server.observer.replyError(client, AclService.noPermError(denial, client.user.name));
     return true;
   }
 
@@ -164,7 +165,7 @@ export class ServerBlocking {
             if (reply === undefined) continue;
             this.unblock(waiter);
             waiter.client.write(reply);
-            this.server.tracking.flushDeferred(waiter.client);
+            TrackingService.flushDeferred(this.server.tracking, waiter.client);
             released.push(waiter.client);
           }
         }

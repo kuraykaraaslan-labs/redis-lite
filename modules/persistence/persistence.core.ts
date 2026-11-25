@@ -320,11 +320,4 @@ export class Persistence extends PersistenceAofLoader {
   }
 }
 
-// ============================================================================
-// Compatibility (step 2): old export paths still imported outside the module
-// ============================================================================
-
-/** @deprecated Use `PersistenceService.splitArgs` (server.conf_file imports this name). */
-export const splitArgs = PersistenceService.splitArgs;
-
 export default Persistence;

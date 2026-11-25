@@ -5,8 +5,7 @@ import { formatMessage } from '@/libs/message-format';
 import { RespError } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import type { Client } from '@/modules/server/server.client';
-import type { RedisLiteServer } from '@/modules/server/server.core';
+import type { Client, RedisLiteServer } from '@/modules/server/server.service';
 
 import LuaRedisBridge from './scripting.bridge.engine';
 import LuaReplyConverter from './scripting.convert.engine';
@@ -16,8 +15,6 @@ import ScriptingMessages from './scripting.messages';
 import { LUA_PRELUDE } from './scripting.prelude';
 import LuaStack from './scripting.stack.engine';
 import type { LuaLibrary, ScriptState } from './scripting.types';
-
-export type { FunctionMeta, LuaLibrary } from './scripting.types';
 
 /**
  * Redis scripting on top of Lua 5.4 (wasmoon, WASM), one Lua state per server. This class runs scripts and functions;

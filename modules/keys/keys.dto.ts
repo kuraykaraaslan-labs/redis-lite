@@ -1,11 +1,19 @@
 import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
-import { INT64_MAX, INT64_MIN, isInteger } from '@/libs/number';
+import { INT64_MAX, INT64_MIN } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { Int64Schema, IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
-
-import { ScanCursorSchema, ScanOptionsSchema } from '@/modules/database/database.dto';
+import {
+  Int64Schema,
+  IntegerSchema,
+  IntegerSchemaWith,
+  KeySchema,
+  ScanCursorSchema,
+  ScanOptionsSchema,
+  ValueSchema,
+  firstIssue,
+  reject,
+} from '@/libs/schemas';
 
 import { ExpireConditionEnum, ObjectSubcommandEnum } from './keys.enums';
 import type { ExpireCondition, ObjectSubcommand } from './keys.enums';
@@ -26,14 +34,6 @@ const KeyDTO = z.tuple([KeySchema]).transform(([key]) => ({ key }));
 const KeysDTO = z.array(KeySchema).transform((keys) => ({ keys }));
 
 const NoArgsDTO = z.tuple([]).transform(() => ({}));
-
-/** A database index whose parse error is `message` (SWAPDB names which index is wrong). */
-function DbIndexSchema(message: string) {
-  return z
-    .string()
-    .refine(isInteger, { error: message })
-    .transform((value) => Number(value));
-}
 
 // ============================================================================
 // Keyspace DTOs: DEL, UNLINK, EXISTS, TOUCH, TYPE, RENAME, COPY, KEYS, SCAN, RANDOMKEY
@@ -155,7 +155,7 @@ export const ObjectDTO = z.tuple([z.string()], z.string()).transform(([given, ..
 export const MoveDTO = z.tuple([KeySchema, IntegerSchema]).transform(([key, db]) => ({ key, db }));
 
 export const SwapDbDTO = z
-  .tuple([DbIndexSchema(KeysMessages.INVALID_FIRST_DB_INDEX), DbIndexSchema(KeysMessages.INVALID_SECOND_DB_INDEX)])
+  .tuple([IntegerSchemaWith(KeysMessages.INVALID_FIRST_DB_INDEX), IntegerSchemaWith(KeysMessages.INVALID_SECOND_DB_INDEX)])
   .transform(([first, second]) => ({ first, second }));
 
 // ============================================================================

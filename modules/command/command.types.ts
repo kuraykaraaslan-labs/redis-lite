@@ -1,8 +1,7 @@
 import type { Reply } from '@/libs/resp';
 
-import type { Database } from '@/modules/database/database.core';
-import type { Client } from '@/modules/server/server.client';
-import type { RedisLiteServer } from '@/modules/server/server.core';
+import type { Database } from '@/modules/database/database.service';
+import type { Client, RedisLiteServer } from '@/modules/server/server.service';
 
 import type { Block, NO_REPLY } from './command.handler';
 

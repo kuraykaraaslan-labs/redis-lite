@@ -11,10 +11,9 @@
  * - maxmemory-eviction-tenacity bounds how long one pass may run: 0 is the shortest, 10 the default, 100 means no bound.
  *   When a pass runs out of time the rest of the work continues in the background and the command is not refused.
  */
-import type { Database } from '@/modules/database/database.core';
+import type { Database } from '@/modules/database/database.service';
 
 import type { EvictionResult } from './memory.enums';
-import MemoryMessages from './memory.messages';
 import type { EvictionCandidate as Candidate, EvictionHost } from './memory.types';
 
 /** Per-server stateful component: the eviction pool, the background pass and the INFO stats counters. */
@@ -184,14 +183,5 @@ export class Evictor {
     this.pool = [];
   }
 }
-
-// ============================================================================
-// Compatibility (step 2): old export paths still imported outside the module
-// ============================================================================
-
-/** @deprecated Use `MemoryMessages.OOM` (server.core imports this name). */
-export const OOM_ERROR = MemoryMessages.OOM;
-
-export type { EvictionHost, EvictionResult };
 
 export default Evictor;

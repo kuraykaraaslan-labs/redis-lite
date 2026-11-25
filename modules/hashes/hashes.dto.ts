@@ -3,9 +3,17 @@ import { z } from 'zod';
 import { formatMessage } from '@/libs/message-format';
 import { isInteger } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { FloatSchema, Int64Schema, IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
-
-import { ScanCursorSchema, ScanOptionsSchema } from '@/modules/database/database.dto';
+import {
+  FloatSchema,
+  Int64Schema,
+  IntegerSchema,
+  KeySchema,
+  ScanCursorSchema,
+  ScanOptionsSchema,
+  ValueSchema,
+  firstIssue,
+  reject,
+} from '@/libs/schemas';
 
 import { FieldExpireConditionEnum, FieldExpireOptionEnum } from './hashes.enums';
 import type { FieldExpireCondition } from './hashes.enums';

@@ -2,9 +2,7 @@ import { z } from 'zod';
 
 import { isInteger } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, KeySchema, firstIssue, reject } from '@/libs/schemas';
-
-import { ScanCursorSchema, ScanOptionsSchema } from '@/modules/database/database.dto';
+import { IntegerSchema, IntegerSchemaWith, KeySchema, ScanCursorSchema, ScanOptionsSchema, firstIssue, reject } from '@/libs/schemas';
 
 import type { SetOperation } from './sets.enums';
 import SetsMessages from './sets.messages';
@@ -23,14 +21,6 @@ const KeyDTO = z.tuple([KeySchema]).transform(([key]) => ({ key }));
 const KeyMemberDTO = z.tuple([KeySchema, z.string()]).transform(([key, member]) => ({ key, member }));
 
 const KeyMembersDTO = z.tuple([KeySchema], z.string()).transform(([key, ...members]) => ({ key, members }));
-
-/** An integer whose parse error is `message` (SINTERCARD words its errors itself). */
-function NamedIntegerSchema(message: string) {
-  return z
-    .string()
-    .refine(isInteger, { error: message })
-    .transform((value) => Number(value));
-}
 
 // ============================================================================
 // Member DTOs: SADD, SREM, SMEMBERS, SISMEMBER, SMISMEMBER, SCARD, SMOVE
@@ -86,10 +76,10 @@ export const SUnionStoreDTO = CombineStoreDTO('union');
 export const SInterStoreDTO = CombineStoreDTO('inter');
 export const SDiffStoreDTO = CombineStoreDTO('diff');
 
-const NumKeysSchema = NamedIntegerSchema(SetsMessages.NUMKEYS_POSITIVE).refine((n) => n > 0, {
+const NumKeysSchema = IntegerSchemaWith(SetsMessages.NUMKEYS_POSITIVE).refine((n) => n > 0, {
   error: SetsMessages.NUMKEYS_POSITIVE,
 });
-const LimitSchema = NamedIntegerSchema(SetsMessages.LIMIT_NEGATIVE).refine((n) => n >= 0, {
+const LimitSchema = IntegerSchemaWith(SetsMessages.LIMIT_NEGATIVE).refine((n) => n >= 0, {
   error: SetsMessages.LIMIT_NEGATIVE,
 });
 

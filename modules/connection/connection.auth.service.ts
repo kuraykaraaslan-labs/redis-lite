@@ -3,7 +3,7 @@ import { OK, RespError, RespMap } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
-import { REDIS_VERSION } from '@/modules/server/server.constants';
+import ServerService from '@/modules/server/server.service';
 
 import type { AuthInput, HelloInput } from './connection.dto';
 import ConnectionMessages from './connection.messages';
@@ -50,7 +50,7 @@ export default class ConnectionAuthService {
     if (name !== null) ctx.client.name = name;
     if (protocol !== null) ctx.client.resp = protocol;
     return RespMap.from([
-      'server', 'redis', 'version', REDIS_VERSION, 'proto', ctx.client.resp, 'id', ctx.client.id, 'mode', 'standalone', 'role', 'master',
+      'server', 'redis', 'version', ServerService.REDIS_VERSION, 'proto', ctx.client.resp, 'id', ctx.client.id, 'mode', 'standalone', 'role', 'master',
       'modules', [],
     ]);
   }

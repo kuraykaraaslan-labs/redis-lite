@@ -2,11 +2,13 @@ import { RespError } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandMeta } from '@/modules/command/command.types';
-import type { Database, RedisValue } from '@/modules/database/database.core';
-import { updateEncoding } from '@/modules/database/database.encoding';
-import { hashHasFieldTtl } from '@/modules/hashes/hashes.commands';
-import { keyspaceEvents, notificationMessages, parseNotifyFlags } from '@/modules/notifications/notifications.core';
-import type { KeyEvent, NotifyFlags } from '@/modules/notifications/notifications.core';
+import type { Database } from '@/modules/database/database.service';
+import DatabaseService from '@/modules/database/database.service';
+import HashesService from '@/modules/hashes/hashes.service';
+import NotificationsService from '@/modules/notifications/notifications.service';
+import type { KeyEvent, NotifyFlags } from '@/modules/notifications/notifications.types';
+import TrackingService from '@/modules/tracking/tracking.service';
+import type { RedisValue } from '@/modules/database/database.types';
 
 import type { RedisLiteServer } from './server.core';
 import type { KeyState } from './server.types';
@@ -65,10 +67,10 @@ export class ServerKeyspace {
     const server = this.server;
     server.persistence.markDirty(1);
     server.memoryModel.tracker.changed(dbIndex, key);
-    server.tracking.invalidate(key, server.tracking.current);
+    TrackingService.invalidate(server.tracking, key, server.tracking.current);
     const value = server.databases[dbIndex]?.peek(key);
     if (value) server.memoryModel.markAllocated(dbIndex);
-    if (value) updateEncoding(value, server.config, value.type === 'hash' && hashHasFieldTtl(value.value));
+    if (value) DatabaseService.updateEncoding(value, server.config, value.type === 'hash' && HashesService.hashHasFieldTtl(value.value));
     const k = `${dbIndex}:${key}`;
     this.bump(k);
     server.blocking.keyChanged(k);
@@ -81,7 +83,7 @@ export class ServerKeyspace {
     this.bump(`${dbIndex}:${key}`);
     server.persistence.propagator.expired(dbIndex, key);
     this.notify(dbIndex, [{ cls: 'x', event: 'expired', key }]);
-    server.tracking.invalidate(key, null);
+    TrackingService.invalidate(server.tracking, key, null);
   }
 
   /** Evicts one key (maxmemory): delete, propagate DEL / UNLINK, `evicted` event, WATCH and tracking invalidation. */
@@ -92,7 +94,7 @@ export class ServerKeyspace {
     server.persistence.propagator.also(dbIndex, [server.config.get('lazyfree-lazy-eviction') === 'yes' ? 'UNLINK' : 'DEL', key]);
     this.notify(dbIndex, [{ cls: 'e', event: 'evicted', key }]);
     this.bump(`${dbIndex}:${key}`);
-    server.tracking.invalidate(key, null);
+    TrackingService.invalidate(server.tracking, key, null);
   }
 
   /** Hash fields expired lazily (hash field TTL): `hexpired`, plus `del` when the hash is gone. */
@@ -136,7 +138,7 @@ export class ServerKeyspace {
       this.signalFlushedDb(i);
       server.databases[i].flush();
     }
-    server.tracking.flushed();
+    TrackingService.flushed(server.tracking);
     server.evictor.clearPool();
     if (all) {
       server.persistence.afterFlushAll();
@@ -160,7 +162,7 @@ export class ServerKeyspace {
   notifyFlags(): NotifyFlags | null {
     const raw = this.server.config.get('notify-keyspace-events') ?? '';
     if (raw !== this.notifyCache.raw) {
-      const flags = parseNotifyFlags(raw);
+      const flags = NotificationsService.parseNotifyFlags(raw);
       this.notifyCache = { raw, flags: (flags.keyspace || flags.keyevent) && flags.classes.size ? flags : null };
     }
     return this.server.persistence.loading ? null : this.notifyCache.flags;
@@ -170,7 +172,7 @@ export class ServerKeyspace {
   notify(dbIndex: number, events: readonly KeyEvent[]): void {
     const flags = this.notifyFlags();
     if (!flags || !events.length) return;
-    for (const e of events) for (const [channel, message] of notificationMessages(flags, e.db ?? dbIndex, e)) this.server.publish(channel, message);
+    for (const e of events) for (const [channel, message] of NotificationsService.notificationMessages(flags, e.db ?? dbIndex, e)) this.server.publish(channel, message);
   }
 
   /** The state of a command's keys before it runs. */
@@ -200,7 +202,7 @@ export class ServerKeyspace {
     if (write && !noop) {
       for (const key of before.keys()) if (!before.get(key)?.exists && exists(key)) events.push({ cls: 'n', event: 'new', key });
       events.push(
-        ...keyspaceEvents({
+        ...NotificationsService.keyspaceEvents({
           name,
           args,
           reply,

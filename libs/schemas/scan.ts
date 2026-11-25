@@ -1,25 +1,13 @@
 import { z } from 'zod';
 
+import { parseScanCursor } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, firstIssue, reject } from '@/libs/schemas';
 
-import DatabaseMessages from './database.messages';
-import DatabaseScanService from './database.scan.service';
+import { firstIssue, reject } from './issue';
+import { IntegerSchema } from './number';
 
-/**
- * Grammar shared by the SCAN family (SCAN, HSCAN, SSCAN): the cursor and the options. Stateless; the commands' own DTOs
- * compose these schemas. Candidates for `@/libs/schemas` (used by keys, hashes and sets).
- */
-
-// ============================================================================
-// Scan Grammar
-// ============================================================================
-
-/** An unsigned 64-bit SCAN cursor → number; anything else is `ERR invalid cursor`. */
-export const ScanCursorSchema = z.string().transform((raw, ctx) => {
-  const cursor = DatabaseScanService.parseCursor(raw);
-  return cursor === null ? reject(ctx, DatabaseMessages.INVALID_CURSOR) : cursor;
-});
+/** An unsigned 64-bit SCAN cursor (SCAN, HSCAN, SSCAN, ZSCAN) → number; anything else is `ERR invalid cursor`. */
+export const ScanCursorSchema = z.string().transform((raw, ctx) => parseScanCursor(raw) ?? reject(ctx, RespMessages.INVALID_CURSOR));
 
 /**
  * `[MATCH pattern] [COUNT n] [TYPE type] [NOVALUES]`, in any order and case. An option missing its value, an unknown
@@ -45,8 +33,5 @@ export const ScanOptionsSchema = z.array(z.string()).transform((options, ctx) =>
   return { match, type, noValues, count };
 });
 
-// ============================================================================
-// Type Exports
-// ============================================================================
-
+export type ScanCursor = z.infer<typeof ScanCursorSchema>;
 export type ScanOptions = z.infer<typeof ScanOptionsSchema>;

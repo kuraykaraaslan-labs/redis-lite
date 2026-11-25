@@ -4,7 +4,7 @@ import type { Reply } from '@/libs/resp';
 import type { Protocol } from '@/libs/resp';
 import { encode, RespPush } from '@/libs/resp';
 
-import type { AclUser } from '@/modules/acl/acl.core';
+import type { AclUser } from '@/modules/acl/acl.structure';
 
 export interface Waiter {
   client: Client;

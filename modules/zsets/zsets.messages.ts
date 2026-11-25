@@ -15,7 +15,6 @@ export const ZSetsMessages = {
   WEIGHT_NOT_FLOAT: 'ERR weight value is not a float',
   NUMKEYS_NOT_POSITIVE: 'ERR numkeys should be greater than 0',
   COUNT_NOT_POSITIVE: 'ERR count should be greater than 0',
-  INVALID_CURSOR: 'ERR invalid cursor',
 
   // Templates: fill the {placeholders} with formatMessage() from @/libs/message-format
   AT_LEAST_ONE_KEY: "ERR at least 1 input key is needed for '{command}' command",

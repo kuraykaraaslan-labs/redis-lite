@@ -1,27 +1,18 @@
-import { AppError } from '@/libs/app-error';
-import { RespMessages } from '@/libs/resp/messages';
+/**
+ * Pure Redis number helpers: recognising integers and floats the way Redis reads them, int64 bounds, reply formatting
+ * and range normalisation. No error replies: argument grammar is in the DTOs (`@/libs/schemas`), and a service that
+ * finds a stored value unusable throws its own AppError.
+ */
 
 const INTEGER_RE = /^-?(0|[1-9]\d*)$/;
-
-/** Strict Redis integer argument (no spaces, no `+`, no leading zeros), within JS safe-integer range. */
-export function parseInteger(value: string, message: string = RespMessages.NOT_INTEGER): number {
-  if (!INTEGER_RE.test(value)) throw new AppError(message);
-  const n = Number(value);
-  if (!Number.isSafeInteger(n)) throw new AppError(message);
-  return n;
-}
 
 export const INT64_MIN = -(2n ** 63n);
 export const INT64_MAX = 2n ** 63n - 1n;
 
-/** Strict Redis int64 (string2ll rules): no '+', no leading zeros, no spaces, within [-2^63, 2^63-1]. */
-export function parseInt64(value: string, message: string = RespMessages.NOT_INTEGER): bigint {
-  if (!INTEGER_RE.test(value) || value.length > 20) throw new AppError(message);
-  const n = BigInt(value);
-  if (n < INT64_MIN || n > INT64_MAX) throw new AppError(message);
-  return n;
-}
+/** The largest SCAN cursor (an unsigned 64-bit integer). */
+const UINT64_MAX = 2 ** 64 - 1;
 
+/** Strict Redis int64 (string2ll rules): no '+', no leading zeros, no spaces, within [-2^63, 2^63-1]. */
 export function isInt64(value: string): boolean {
   if (!INTEGER_RE.test(value) || value.length > 20) return false;
   const n = BigInt(value);
@@ -33,17 +24,12 @@ export function intReply(n: bigint): number | bigint {
   return n >= BigInt(Number.MIN_SAFE_INTEGER) && n <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(n) : n;
 }
 
+/** Strict Redis integer (no spaces, no `+`, no leading zeros) within the JS safe-integer range. */
 export function isInteger(value: string): boolean {
   return INTEGER_RE.test(value) && Number.isSafeInteger(Number(value));
 }
 
-/** Redis float argument: decimal, exponent, `inf`/`+inf`/`-inf`; NaN is rejected. */
-export function parseFloatArg(value: string, message: string = RespMessages.NOT_FLOAT): number {
-  const n = toFloat(value);
-  if (n === null) throw new AppError(message);
-  return n;
-}
-
+/** Redis float: decimal, exponent, `inf`/`+inf`/`-inf` → number; NaN or anything else → null. */
 export function toFloat(value: string): number | null {
   const lower = value.toLowerCase();
   if (lower === 'inf' || lower === '+inf' || lower === 'infinity' || lower === '+infinity') return Infinity;
@@ -52,6 +38,13 @@ export function toFloat(value: string): number | null {
   const n = Number(value);
   if (Number.isNaN(n)) return null;
   return n;
+}
+
+/** An unsigned 64-bit SCAN cursor → number, or null when `raw` is not one. */
+export function parseScanCursor(raw: string): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const n = Number(raw);
+  return n > UINT64_MAX ? null : n;
 }
 
 /** Float in a reply: shortest round-trip form, `inf`/`-inf` as Redis writes them. */

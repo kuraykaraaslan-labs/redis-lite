@@ -117,6 +117,7 @@ export const ServerMessages = {
   // ============================================================================
   // DEBUG
   // ============================================================================
+  NO_SUCH_KEY: 'ERR no such key',
   DEBUG_RELOAD_OPTIONS: 'ERR DEBUG RELOAD only supports the MERGE, NOFLUSH and NOSAVE options.',
   DEBUG_PACKED_THRESHOLD: 'ERR argument must be a memory value bigger than 1 and smaller than 4gb',
   DEBUG_NOT_LISTPACK: 'ERR Not a listpack encoded object.',

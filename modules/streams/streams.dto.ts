@@ -1,9 +1,8 @@
 import { z } from 'zod';
 
-import { isInteger } from '@/libs/number';
 import { formatMessage } from '@/libs/message-format';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, KeySchema, firstIssue, reject } from '@/libs/schemas';
+import { IntegerSchema, IntegerSchemaWith, KeySchema, firstIssue, reject } from '@/libs/schemas';
 
 import { TrimStrategyEnum, XGroupSubcommandEnum, XInfoSubcommandEnum } from './streams.enums';
 import type { TrimStrategy, XGroupSubcommand, XInfoSubcommand } from './streams.enums';
@@ -22,14 +21,6 @@ import type { ClaimDeliveryTime, StreamId, StreamIdToken } from './streams.types
 // ============================================================================
 // Primitives
 // ============================================================================
-
-/** A Redis integer whose error text is command specific (XCLAIM's min-idle-time, XREAD's timeout…). */
-function IntegerWithMessage(message: string) {
-  return z
-    .string()
-    .refine(isInteger, { error: message })
-    .transform((value) => Number(value));
-}
 
 /** A strict stream id: `ms` or `ms-seq` (`-` and `+` rejected); a missing seq is `defaultSeq`. */
 function StreamIdWithDefaultSeq(defaultSeq: bigint) {
@@ -167,7 +158,6 @@ function AddTrimSchema(xadd: boolean) {
   });
 }
 
-
 /** XADD key [NOMKSTREAM] [MAXLEN|MINID [=|~] threshold [LIMIT count]] *|id field value [field value …] */
 export const XAddDTO = AddTrimSchema(true).transform(({ trim, noMkStream, id, seqGiven, fields, key }, ctx) => {
   if (fields.length < 2 || fields.length % 2) return reject(ctx, formatMessage(RespMessages.WRONG_ARITY, { command: 'xadd' }));
@@ -216,7 +206,7 @@ export const XRevRangeDTO = RangeDTO(true);
 // Read DTOs: XREAD, XREADGROUP
 // ============================================================================
 
-const TimeoutSchema = IntegerWithMessage(StreamsMessages.TIMEOUT_NOT_INTEGER);
+const BlockMsSchema = IntegerSchemaWith(StreamsMessages.TIMEOUT_NOT_INTEGER);
 
 /**
  * The option loop of xreadCommand, shared by XREAD and XREADGROUP:
@@ -234,7 +224,7 @@ function ReadDTO(xreadgroup: boolean) {
       const more = args.length - 1 - i;
       const opt = args[i].toLowerCase();
       if (opt === 'block' && more) {
-        const ms = TimeoutSchema.safeParse(args[++i]);
+        const ms = BlockMsSchema.safeParse(args[++i]);
         if (!ms.success) return reject(ctx, firstIssue(ms.error));
         if (ms.data < 0) return reject(ctx, RespMessages.TIMEOUT_NEGATIVE);
         block = ms.data;
@@ -311,10 +301,10 @@ export const XPendingDTO = z.array(z.string()).transform((args, ctx) => {
   return { key: args[0], group: args[1], summary: argc === 3, minIdle, start, end, count, consumer };
 });
 
-const XCLAIM_MIN_IDLE = IntegerWithMessage(StreamsMessages.XCLAIM_MIN_IDLE_INVALID);
-const XCLAIM_IDLE = IntegerWithMessage(StreamsMessages.XCLAIM_IDLE_INVALID);
-const XCLAIM_TIME = IntegerWithMessage(StreamsMessages.XCLAIM_TIME_INVALID);
-const XCLAIM_RETRYCOUNT = IntegerWithMessage(StreamsMessages.XCLAIM_RETRYCOUNT_INVALID);
+const XCLAIM_MIN_IDLE = IntegerSchemaWith(StreamsMessages.XCLAIM_MIN_IDLE_INVALID);
+const XCLAIM_IDLE = IntegerSchemaWith(StreamsMessages.XCLAIM_IDLE_INVALID);
+const XCLAIM_TIME = IntegerSchemaWith(StreamsMessages.XCLAIM_TIME_INVALID);
+const XCLAIM_RETRYCOUNT = IntegerSchemaWith(StreamsMessages.XCLAIM_RETRYCOUNT_INVALID);
 
 /**
  * XCLAIM key group consumer min-idle-time id [id …] [IDLE ms] [TIME unix-ms] [RETRYCOUNT n] [FORCE] [JUSTID]
@@ -358,8 +348,8 @@ export const XClaimDTO = z.array(z.string()).transform((args, ctx) => {
   return { key, group, consumer, minIdle: Math.max(0, idle.data), ids, deliveryTime, retryCount, force, justId, lastId };
 });
 
-const XAUTOCLAIM_MIN_IDLE = IntegerWithMessage(StreamsMessages.XAUTOCLAIM_MIN_IDLE_INVALID);
-const XAUTOCLAIM_COUNT = IntegerWithMessage(StreamsMessages.COUNT_NOT_POSITIVE);
+const XAUTOCLAIM_MIN_IDLE = IntegerSchemaWith(StreamsMessages.XAUTOCLAIM_MIN_IDLE_INVALID);
+const XAUTOCLAIM_COUNT = IntegerSchemaWith(StreamsMessages.COUNT_NOT_POSITIVE);
 
 /** XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID] */
 export const XAutoClaimDTO = z.array(z.string()).transform((args, ctx) => {

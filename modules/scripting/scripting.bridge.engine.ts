@@ -3,10 +3,9 @@ import { createHash } from 'node:crypto';
 import { formatMessage } from '@/libs/message-format';
 import { NULL_ARRAY, RespError, toResp2 } from '@/libs/resp';
 
-import { Block, NO_REPLY } from '@/modules/command/command.handler';
-import { lookupCommand } from '@/modules/command/command.meta';
+import CommandService, { Block, NO_REPLY } from '@/modules/command/command.service';
 import { COMMANDS } from '@/modules/command/command.registry';
-import type { RedisLiteServer } from '@/modules/server/server.core';
+import type { RedisLiteServer } from '@/modules/server/server.service';
 
 import { LuaType } from './scripting.enums';
 import type LuaReplyConverter from './scripting.convert.engine';
@@ -104,7 +103,7 @@ export default class LuaRedisBridge {
     try {
       const argv = this.readCallArgs(Ls);
       if (!Array.isArray(argv)) return this.pushCallError(Ls, argv.error);
-      const { meta } = lookupCommand(argv);
+      const { meta } = CommandService.lookupCommand(argv);
       if (!meta) return this.pushCallError(Ls, ScriptingMessages.ACL_CHECK_INVALID_COMMAND);
       const user = this.script.client?.user;
       const allowed = !user || this.server.aclCheckUser(user, argv, meta) === null;

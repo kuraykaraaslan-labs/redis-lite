@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { OK, RespError } from '@/libs/resp';
+import { RespError } from '@/libs/resp';
 
 import { RedisLiteServer } from '@/modules/server/server.core';
 

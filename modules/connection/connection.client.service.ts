@@ -1,10 +1,9 @@
 import { OK, RespMap, RespSet } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { NO_REPLY } from '@/modules/command/command.handler';
-import CommandService from '@/modules/command/command.service';
+import CommandService, { NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
-import { parseTrackingArgs } from '@/modules/tracking/tracking.core';
+import TrackingService from '@/modules/tracking/tracking.service';
 
 import type {
   ClientCachingInput,
@@ -87,17 +86,17 @@ export default class ConnectionClientService {
   }
 
   static trackingInfo(ctx: CommandContext): Reply {
-    const info = ctx.server.tracking.info(ctx.client);
+    const info = TrackingService.info(ctx.client);
     return RespMap.from(['flags', new RespSet(info.flags), 'redirect', info.redirect, 'prefixes', info.prefixes]);
   }
 
-  static tracking(ctx: CommandContext, { options }: ClientTrackingInput): Reply {
-    ctx.server.tracking.configure(ctx.client, parseTrackingArgs(options));
+  static tracking(ctx: CommandContext, input: ClientTrackingInput): Reply {
+    TrackingService.configure(ctx.server.tracking, ctx.client, input);
     return OK;
   }
 
-  static caching(ctx: CommandContext, { value }: ClientCachingInput): Reply {
-    ctx.server.tracking.caching(ctx.client, value);
+  static caching(ctx: CommandContext, input: ClientCachingInput): Reply {
+    TrackingService.caching(ctx.client, input);
     return OK;
   }
 }

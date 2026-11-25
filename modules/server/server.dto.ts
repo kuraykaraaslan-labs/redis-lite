@@ -1,11 +1,9 @@
 import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
-import { isInteger } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, firstIssue, reject } from '@/libs/schemas';
+import { IntegerSchema, IntegerSchemaWith, SubcommandSchema, parseArg, reject } from '@/libs/schemas';
 
-import { SubcommandSchema } from '@/modules/command/command.dto';
 import CommandService from '@/modules/command/command.service';
 
 import { REDIS_VERSION } from './server.constants';
@@ -22,21 +20,13 @@ import ServerMessages from './server.messages';
 // Shared Schemas
 // ============================================================================
 
-/** A strict Redis integer whose error text is command specific. */
-function IntegerArgSchema(message: string) {
-  return z
-    .string()
-    .refine(isInteger, { error: message })
-    .transform((value) => Number(value));
-}
-
 /** A WAIT / WAITAOF timeout in ms: an integer, not negative. */
-const WaitTimeoutSchema = IntegerArgSchema(ServerMessages.TIMEOUT_NOT_INTEGER).refine((ms) => ms >= 0, { error: ServerMessages.TIMEOUT_NEGATIVE });
+const WaitTimeoutSchema = IntegerSchemaWith(ServerMessages.TIMEOUT_NOT_INTEGER).refine((ms) => ms >= 0, { error: ServerMessages.TIMEOUT_NEGATIVE });
 
 /** A count that must not be negative (WAITAOF numlocal / numreplicas, DEBUG POPULATE). */
 const NonNegativeSchema = IntegerSchema.refine((n) => n >= 0, { error: RespMessages.COUNT_POSITIVE });
 
-const SlowlogCountSchema = IntegerArgSchema(ServerMessages.SLOWLOG_COUNT).refine((n) => n >= -1, { error: ServerMessages.SLOWLOG_COUNT });
+const SlowlogCountSchema = IntegerSchemaWith(ServerMessages.SLOWLOG_COUNT).refine((n) => n >= -1, { error: ServerMessages.SLOWLOG_COUNT });
 
 /** Redis addReplySubcommandSyntaxError() text, the subcommand as typed. */
 function syntax(sub: string, command: string): string {
@@ -49,12 +39,6 @@ function SubcommandArgsDTO(command: string, min: number, max = min) {
     const n = args.length - 1;
     return n < min || n > max ? reject(ctx, syntax(args[0], command)) : { args: args.slice(1) };
   });
-}
-
-/** Parses `raw` with `schema` inside a transform; the parsed value, or the first issue as `{ error }`. */
-function parseWith<T>(schema: z.ZodType<T>, raw: string): { value: T } | { error: string } {
-  const parsed = schema.safeParse(raw);
-  return parsed.success ? { value: parsed.data } : { error: firstIssue(parsed.error) };
 }
 
 // ============================================================================
@@ -116,19 +100,16 @@ export const AclCatDTO = SubcommandArgsDTO('acl', 0, 1).transform(({ args }) => 
 export const AclLogDTO = SubcommandArgsDTO('acl', 0, 1).transform(({ args }, ctx) => {
   if (!args.length) return { reset: false, count: 10 };
   if (args[0].toLowerCase() === 'reset') return { reset: true, count: 0 };
-  const count = parseWith(IntegerSchema, args[0]);
-  return 'error' in count ? reject(ctx, count.error) : { reset: false, count: Math.max(0, count.value) };
+  const count = parseArg(IntegerSchema, args[0]);
+  return count.ok ? { reset: false, count: Math.max(0, count.value) } : reject(ctx, count.error);
 });
 
 export const AclDryRunDTO = z.array(z.string()).transform((args, ctx) =>
   args.length < 3 ? reject(ctx, syntax(args[0], 'acl')) : { username: args[1], argv: args.slice(2) },
 );
 
-export const AclGenPassDTO = SubcommandArgsDTO('acl', 0, 1).transform(({ args }, ctx) => {
-  if (!args.length) return { bits: 256 };
-  const bits = parseWith(IntegerSchema, args[0]);
-  return 'error' in bits ? reject(ctx, bits.error) : { bits: bits.value };
-});
+/** ACL GENPASS [bits]: the raw argument goes to AclService.genPass, which owns the bits grammar (integer, 1..4096). */
+export const AclGenPassDTO = SubcommandArgsDTO('acl', 0, 1).transform(({ args }) => ({ bits: args[0] as string | undefined }));
 
 // ============================================================================
 // Diagnostics DTOs: SLOWLOG, LATENCY, MEMORY
@@ -137,8 +118,8 @@ export const AclGenPassDTO = SubcommandArgsDTO('acl', 0, 1).transform(({ args },
 /** SLOWLOG GET [count]: 10 by default, -1 = every entry. */
 export const SlowlogGetDTO = SubcommandArgsDTO('slowlog', 0, 1).transform(({ args }, ctx) => {
   if (!args.length) return { count: 10 };
-  const count = parseWith(SlowlogCountSchema, args[0]);
-  return 'error' in count ? reject(ctx, count.error) : { count: count.value };
+  const count = parseArg(SlowlogCountSchema, args[0]);
+  return count.ok ? { count: count.value } : reject(ctx, count.error);
 });
 
 export const LatencyEventDTO = z.tuple([SubcommandSchema, z.string()]).transform(([, event]) => ({ event }));
@@ -151,8 +132,8 @@ export const MemoryUsageDTO = z.array(z.string()).transform((args, ctx) => {
   let samples = 5;
   for (let j = 2; j < args.length; j++) {
     if (args[j].toLowerCase() === 'samples' && j + 1 < args.length) {
-      const n = parseWith(IntegerSchema, args[j + 1]);
-      if ('error' in n) return reject(ctx, n.error);
+      const n = parseArg(IntegerSchema, args[j + 1]);
+      if (!n.ok) return reject(ctx, n.error);
       if (n.value < 0) return reject(ctx, RespMessages.SYNTAX);
       samples = n.value;
       j++;
@@ -200,12 +181,12 @@ export const DebugQuicklistDTO = SubcommandArgsDTO('debug', 1, 2).transform(({ a
 
 /** DEBUG POPULATE count [prefix] [size]: `<prefix>:<n>` = `value:<n>`, padded / cut to `size`. */
 export const DebugPopulateDTO = SubcommandArgsDTO('debug', 1, 3).transform(({ args }, ctx) => {
-  const count = parseWith(NonNegativeSchema, args[0]);
-  if ('error' in count) return reject(ctx, count.error);
+  const count = parseArg(NonNegativeSchema, args[0]);
+  if (!count.ok) return reject(ctx, count.error);
   const prefix = args.length >= 2 ? args[1] : 'key';
   if (args.length < 3) return { count: count.value, prefix, size: 0 };
-  const size = parseWith(NonNegativeSchema, args[2]);
-  return 'error' in size ? reject(ctx, size.error) : { count: count.value, prefix, size: size.value };
+  const size = parseArg(NonNegativeSchema, args[2]);
+  return size.ok ? { count: count.value, prefix, size: size.value } : reject(ctx, size.error);
 });
 
 /** DEBUG RELOAD [option …]: the options are read by the reload hook. */
@@ -241,20 +222,20 @@ export const BgsaveDTO = z.array(z.string()).transform((args, ctx) => {
 
 /** WAIT numreplicas timeout: the timeout is checked first, as in Redis. */
 export const WaitDTO = z.tuple([z.string(), z.string()]).transform(([rawReplicas, rawTimeout], ctx) => {
-  const timeout = parseWith(WaitTimeoutSchema, rawTimeout);
-  if ('error' in timeout) return reject(ctx, timeout.error);
-  const numreplicas = parseWith(IntegerSchema, rawReplicas);
-  return 'error' in numreplicas ? reject(ctx, numreplicas.error) : { numreplicas: numreplicas.value, timeout: timeout.value };
+  const timeout = parseArg(WaitTimeoutSchema, rawTimeout);
+  if (!timeout.ok) return reject(ctx, timeout.error);
+  const numreplicas = parseArg(IntegerSchema, rawReplicas);
+  return numreplicas.ok ? { numreplicas: numreplicas.value, timeout: timeout.value } : reject(ctx, numreplicas.error);
 });
 
 /** WAITAOF numlocal numreplicas timeout: the timeout is checked first, as in Redis. */
 export const WaitAofDTO = z.tuple([z.string(), z.string(), z.string()]).transform(([rawLocal, rawReplicas, rawTimeout], ctx) => {
-  const timeout = parseWith(WaitTimeoutSchema, rawTimeout);
-  if ('error' in timeout) return reject(ctx, timeout.error);
-  const numlocal = parseWith(NonNegativeSchema, rawLocal);
-  if ('error' in numlocal) return reject(ctx, numlocal.error);
-  const numreplicas = parseWith(NonNegativeSchema, rawReplicas);
-  if ('error' in numreplicas) return reject(ctx, numreplicas.error);
+  const timeout = parseArg(WaitTimeoutSchema, rawTimeout);
+  if (!timeout.ok) return reject(ctx, timeout.error);
+  const numlocal = parseArg(NonNegativeSchema, rawLocal);
+  if (!numlocal.ok) return reject(ctx, numlocal.error);
+  const numreplicas = parseArg(NonNegativeSchema, rawReplicas);
+  if (!numreplicas.ok) return reject(ctx, numreplicas.error);
   return { numlocal: numlocal.value, numreplicas: numreplicas.value, timeout: timeout.value };
 });
 
@@ -263,8 +244,8 @@ export const LolwutDTO = z.array(z.string()).transform((args, ctx) => {
   let version = Number(REDIS_VERSION.split('.')[0]);
   let rest = args;
   if (args.length >= 2 && args[0].toLowerCase() === 'version') {
-    const v = parseWith(IntegerSchema, args[1]);
-    if ('error' in v) return reject(ctx, v.error);
+    const v = parseArg(IntegerSchema, args[1]);
+    if (!v.ok) return reject(ctx, v.error);
     version = v.value;
     rest = args.slice(2);
   }
@@ -275,8 +256,8 @@ export const LolwutDTO = z.array(z.string()).transform((args, ctx) => {
       dims.push(def);
       continue;
     }
-    const n = parseWith(IntegerSchema, rest[i]);
-    if ('error' in n) return reject(ctx, n.error);
+    const n = parseArg(IntegerSchema, rest[i]);
+    if (!n.ok) return reject(ctx, n.error);
     dims.push(Math.min(Math.max(n.value, 1), max));
   }
   return { version, cols: dims[0], perRow: dims[1], perCol: dims[2] };

@@ -5,6 +5,9 @@ import CommandReplyService from './command.reply.service';
 
 export { CommandBlockingService, CommandKeysService, CommandLookupService, CommandReplyService };
 
+/** The commands-layer toolkit every `<module>.commands.ts` routes with (DTO handlers, key extraction, blocking replies). */
+export { Block, NO_REPLY, bySubcommand, keysAt, validated, withDTO } from './command.handler';
+
 /** The command module's public API: one flat facade over the sub-services (other modules import only this class). */
 export default class CommandService {
   // Lookup — the metadata table, (sub)command lookup, arity
@@ -27,6 +30,5 @@ export default class CommandService {
   static subcommandSyntaxMessage = CommandReplyService.subcommandSyntaxMessage.bind(CommandReplyService);
 
   // Blocking — the shared shape of blocking commands
-  static parseTimeoutSeconds = CommandBlockingService.parseTimeoutSeconds.bind(CommandBlockingService);
   static blockingCommand = CommandBlockingService.blockingCommand.bind(CommandBlockingService);
 }

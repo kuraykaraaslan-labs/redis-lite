@@ -1,7 +1,7 @@
 import { NULL_ARRAY, RespDouble, RespPairs } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { blockingCommand } from '@/modules/command/command.blocking';
+import CommandService from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 
 import type { BZMPopInput, BZPopInput, ZMPopInput, ZPopInput } from './zsets.dto';
@@ -47,7 +47,7 @@ export default class ZSetsPopService {
 
   /** BZPOPMIN / BZPOPMAX: [key, member, score] from the first non-empty key, or block. */
   static blockingPop(ctx: CommandContext, { keys, timeoutMs, max }: BZPopInput): HandlerResult {
-    return blockingCommand(ctx, keys, timeoutMs, () => {
+    return CommandService.blockingCommand(ctx, keys, timeoutMs, () => {
       for (const key of keys) {
         const [entry] = ZSetsPopService.popEntries(ctx, key, 1, max);
         if (!entry) continue;
@@ -63,6 +63,6 @@ export default class ZSetsPopService {
   }
 
   static blockingMPop(ctx: CommandContext, { timeoutMs, keys, max, count }: BZMPopInput): HandlerResult {
-    return blockingCommand(ctx, keys, timeoutMs, () => ZSetsPopService.mPopAttempt(ctx, keys, max, count));
+    return CommandService.blockingCommand(ctx, keys, timeoutMs, () => ZSetsPopService.mPopAttempt(ctx, keys, max, count));
   }
 }

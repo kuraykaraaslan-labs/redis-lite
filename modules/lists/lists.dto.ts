@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { formatMessage } from '@/libs/message-format';
 import { isInteger } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
+import { BlockTimeoutSchema, IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
 
 import { InsertPositionEnum, LPosOptionEnum, ListSideEnum } from './lists.enums';
 import type { ListSide } from './lists.enums';
@@ -22,17 +22,6 @@ import ListsMessages from './lists.messages';
 const SideSchema = z.string().transform((raw, ctx) => {
   const side = ListSideEnum.safeParse(raw.toLowerCase());
   return side.success ? side.data : reject(ctx, RespMessages.SYNTAX);
-});
-
-/**
- * A blocking timeout in seconds (fractions allowed) → ms; 0 = wait forever. Candidate for `@/libs/schemas` (the same
- * rule as `parseTimeoutSeconds` in the command module, used by zsets and streams too).
- */
-export const TimeoutSchema = z.string().transform((raw, ctx) => {
-  const n = Number(raw);
-  if (raw.trim() === '' || Number.isNaN(n) || !Number.isFinite(n)) return reject(ctx, RespMessages.TIMEOUT_NOT_FLOAT);
-  if (n < 0) return reject(ctx, RespMessages.TIMEOUT_NEGATIVE);
-  return n === 0 ? 0 : Math.max(1, Math.round(n * 1000));
 });
 
 /** `numkeys key… LEFT|RIGHT [COUNT n]` (LMPOP, and BLMPOP after its timeout). */
@@ -157,7 +146,7 @@ export const RPopLPushDTO = z
 /** BLPOP / BRPOP key [key …] timeout */
 function BPopDTO(left: boolean) {
   return z.array(z.string()).transform((args, ctx) => {
-    const timeout = TimeoutSchema.safeParse(args[args.length - 1]);
+    const timeout = BlockTimeoutSchema.safeParse(args[args.length - 1]);
     if (!timeout.success) return reject(ctx, firstIssue(timeout.error));
     return { keys: args.slice(0, -1), timeoutMs: timeout.data, left };
   });
@@ -167,18 +156,18 @@ export const BLPopDTO = BPopDTO(true);
 export const BRPopDTO = BPopDTO(false);
 
 /** BLMPOP timeout numkeys key… LEFT|RIGHT [COUNT n]: the timeout is checked first. */
-export const BLMPopDTO = z.tuple([TimeoutSchema], z.string()).transform(([timeoutMs, ...rest], ctx) => {
+export const BLMPopDTO = z.tuple([BlockTimeoutSchema], z.string()).transform(([timeoutMs, ...rest], ctx) => {
   const parsed = MPopSchema.safeParse(rest);
   return parsed.success ? { ...parsed.data, timeoutMs } : reject(ctx, firstIssue(parsed.error));
 });
 
 /** BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout: the sides are checked before the timeout. */
 export const BLMoveDTO = z
-  .tuple([KeySchema, KeySchema, SideSchema, SideSchema, TimeoutSchema])
+  .tuple([KeySchema, KeySchema, SideSchema, SideSchema, BlockTimeoutSchema])
   .transform(([source, destination, from, to, timeoutMs]) => ({ source, destination, from, to, timeoutMs }));
 
 export const BRPopLPushDTO = z
-  .tuple([KeySchema, KeySchema, TimeoutSchema])
+  .tuple([KeySchema, KeySchema, BlockTimeoutSchema])
   .transform(([source, destination, timeoutMs]) => ({
     source,
     destination,

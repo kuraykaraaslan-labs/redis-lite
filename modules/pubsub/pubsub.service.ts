@@ -4,7 +4,7 @@ import { formatMessage } from '@/libs/message-format';
 import { RespMap, RespPush } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { NO_REPLY } from '@/modules/command/command.handler';
+import { NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 
 import type { ChannelsInput, PubSubInput, PublishInput } from './pubsub.dto';

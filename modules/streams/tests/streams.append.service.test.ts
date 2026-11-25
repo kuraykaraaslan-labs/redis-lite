@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { useServer } from '@/tests/helpers';
 
-import { arity, bulk, entry, err, INVALID_ID, NOT_INT, openResp3, WRONGTYPE } from './streams.test_helpers';
+import { arity, bulk, err, INVALID_ID, NOT_INT, openResp3, WRONGTYPE } from './streams.test_helpers';
 
 /**
  * XADD, XDEL, XTRIM (streams.append.service).
