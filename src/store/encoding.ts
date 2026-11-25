@@ -11,8 +11,13 @@ const sticky = new WeakMap<object, string>();
 
 /** Redis string2ll: the exact integer forms Redis accepts (no '+', no leading zeros, no spaces, fits int64). */
 export function isRedisInteger(s: string): boolean {
-  if (s.length === 0 || s.length > 20) return false;
+  const len = s.length;
+  if (len === 0 || len > 20) return false;
+  // Fast rejection: integers start with a digit or '-'.
+  const c = s.charCodeAt(0);
+  if (c !== 45 && (c < 48 || c > 57)) return false;
   if (!/^(0|-?[1-9]\d*)$/.test(s)) return false;
+  if (len < 19) return true;
   const n = BigInt(s);
   return n >= -(2n ** 63n) && n <= 2n ** 63n - 1n;
 }
@@ -31,12 +36,12 @@ function backlenSize(len: number): number {
 export function listpackEntrySize(value: string): number {
   let body: number;
   if (isRedisInteger(value)) {
-    const n = BigInt(value);
-    if (n >= 0n && n <= 127n) body = 1;
-    else if (n >= -4096n && n <= 4095n) body = 2;
-    else if (n >= -32768n && n <= 32767n) body = 3;
-    else if (n >= -8388608n && n <= 8388607n) body = 4;
-    else if (n >= -2147483648n && n <= 2147483647n) body = 5;
+    const n = Number(value);
+    if (n >= 0 && n <= 127) body = 1;
+    else if (n >= -4096 && n <= 4095) body = 2;
+    else if (n >= -32768 && n <= 32767) body = 3;
+    else if (n >= -8388608 && n <= 8388607) body = 4;
+    else if (n >= -2147483648 && n <= 2147483647) body = 5;
     else body = 9;
   } else if (value.length < 64) body = 1 + value.length;
   else if (value.length < 4096) body = 2 + value.length;
@@ -107,11 +112,35 @@ function naturalEncoding(v: RedisValue, config: ServerConfig, hasFieldTtl: boole
   }
 }
 
-/** Re-evaluates the encoding after a write, applying Redis's one-way conversion rules. */
+/** Smallest possible listpack bytes for n entries (2 bytes each + header/terminator). */
+function minListpackBytes(n: number): number {
+  return 7 + 2 * n;
+}
+
+/**
+ * Re-evaluates the encoding after a write, applying Redis's one-way conversion rules.
+ * Cost is bounded: once an aggregate reached its full encoding (hashtable / skiplist) nothing is scanned again,
+ * and compact encodings are small by definition. Lists are only rescanned when they could fit a listpack again.
+ */
 export function updateEncoding(v: RedisValue, config: ServerConfig, hasFieldTtl = false): void {
   if (v.type === 'string' || v.type === 'stream') return;
   const holder = v.value as object;
   const current = sticky.get(holder);
+  if (current === 'hashtable' || current === 'skiplist') return;
+  if (current === 'quicklist' && v.type === 'list') {
+    const limit = listLimit(config);
+    const n = v.value.length;
+    if (n > limit.entries / 2 || (limit.bytes !== Infinity && minListpackBytes(n) > limit.bytes / 2)) return;
+  }
+  if (current === 'listpack' && v.type === 'list') {
+    const limit = listLimit(config);
+    const n = v.value.length;
+    // Definitely too big for a listpack: convert without scanning.
+    if (n > limit.entries || (limit.bytes !== Infinity && minListpackBytes(n) > limit.bytes)) {
+      sticky.set(holder, 'quicklist');
+      return;
+    }
+  }
   const natural = naturalEncoding(v, config, hasFieldTtl);
   if (current === undefined) {
     sticky.set(holder, natural);
