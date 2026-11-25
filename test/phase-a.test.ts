@@ -71,7 +71,7 @@ describe('object encodings follow Redis conversion rules', () => {
 
   it('CONFIG SET thresholds take effect', async () => {
     expect(await call('CONFIG', 'SET', 'hash-max-listpack-entries', 2)).toBe('OK');
-    expect(await call('CONFIG', 'GET', 'hash-max-ziplist-entries')).toEqual(['hash-max-listpack-entries', '2']);
+    expect(await call('CONFIG', 'GET', 'hash-max-ziplist-entries')).toEqual(['hash-max-ziplist-entries', '2']);
     await redis.hset('h3', 'a', '1', 'b', '2', 'c', '3');
     expect(await enc('h3')).toBe('hashtable');
     await call('CONFIG', 'SET', 'hash-max-listpack-entries', 128);

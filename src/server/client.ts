@@ -2,7 +2,7 @@ import type { Socket } from 'node:net';
 
 import type { Reply } from '../resp';
 import type { Protocol } from '../resp';
-import { encode } from '../resp';
+import { encode, RespPush } from '../resp';
 
 export interface Waiter {
   client: Client;
@@ -25,14 +25,19 @@ export class Client {
   authenticated: boolean;
   readonly createdAt = Date.now();
   lastActiveAt = Date.now();
+  /** Full name (`client|info`) of the last command run, for CLIENT LIST `cmd=`. */
   lastCommand = 'NULL';
+  /** Commands run by this connection (CLIENT LIST `tot-cmds`). */
+  commandsProcessed = 0;
+  /** Bytes read / written (CLIENT LIST `tot-net-in` / `tot-net-out`). */
+  netIn = 0;
+  netOut = 0;
 
   /** MULTI state: null when not in a transaction. */
   multi: string[][] | null = null;
   multiError = false;
   /** WATCHed `${db}:${key}` → version at WATCH time. */
   readonly watched = new Map<string, number>();
-  watchEpoch = 0;
 
   readonly channels = new Set<string>();
   readonly patterns = new Set<string>();
@@ -41,6 +46,22 @@ export class Client {
   noTouch = false;
   /** In MONITOR mode: receives every command the server runs. */
   monitor = false;
+  /** CLIENT TRACKING ON (accepted, invalidation messages are not implemented) and its REDIRECT target (0 = none). */
+  tracking = false;
+  trackingRedirect = 0;
+  /** CLIENT NO-EVICT ON. */
+  noEvict = false;
+  /** CLIENT REPLY OFF: no replies at all. */
+  replyOff = false;
+  /** CLIENT REPLY SKIP: the next command's reply is suppressed. */
+  skipNext = false;
+  /** The reply of the command being run is suppressed (CLIENT REPLY SKIP / OFF itself). */
+  skipCurrent = false;
+  /** Close the connection once the current reply is written (CLIENT KILL of oneself). */
+  closeAfterReply = false;
+  /** Protocol error that stopped the request parser; sent once the commands before it have been served. */
+  protocolError: string | null = null;
+  protocolErrorSent = false;
 
   blocked: Waiter | null = null;
   readonly pending: string[][] = [];
@@ -62,8 +83,12 @@ export class Client {
     return this.socket ? `${this.socket.remoteAddress ?? '?'}:${this.socket.remotePort ?? 0}` : 'internal';
   }
 
-  write(reply: Reply): void {
+  /** Sends a reply. CLIENT REPLY OFF / SKIP suppress everything except out-of-band pushes, unless `force`. */
+  write(reply: Reply, force = false): void {
     if (this.closed || !this.socket) return;
-    this.socket.write(encode(reply, this.resp));
+    if (!force && (this.replyOff || this.skipCurrent) && !(reply instanceof RespPush)) return;
+    const data = encode(reply, this.resp);
+    this.netOut += data.length;
+    this.socket.write(data);
   }
 }

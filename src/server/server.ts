@@ -3,11 +3,13 @@ import { createServer } from 'node:net';
 import type { AddressInfo, Server, Socket } from 'node:net';
 
 import { COMMANDS } from '../commands';
-import type { CommandContext, CommandSpec } from '../commands/types';
+import type { CommandMeta } from '../commands/meta';
+import { arityOk, lookupCommand } from '../commands/meta';
+import type { CommandContext } from '../commands/types';
 import { Block, NO_REPLY } from '../commands/types';
 import { CommandError } from '../errors';
 import { LuaEngine } from '../lua/engine';
-import { RespMessages, unknownCommand, wrongArity } from '../messages';
+import { RespMessages, unknownCommand, unknownSubcommand, wrongArity } from '../messages';
 import type { Reply } from '../resp';
 import { NULL_ARRAY, OK, QUEUED, RespError, RespParser, RespPush, Status } from '../resp';
 import { hashHasFieldTtl } from '../commands/hashes';
@@ -53,6 +55,66 @@ const MULTI_IMMEDIATE = new Set(['exec', 'discard', 'multi', 'watch', 'quit', 'r
 /** Commands allowed in RESP2 subscriber mode. */
 const SUBSCRIBER_ALLOWED = new Set(['subscribe', 'psubscribe', 'unsubscribe', 'punsubscribe', 'ssubscribe', 'sunsubscribe', 'ping', 'quit', 'reset']);
 
+/** Per-command statistics (INFO commandstats). */
+export interface CommandStat {
+  calls: number;
+  usec: number;
+  rejected: number;
+  failed: number;
+}
+
+/** One SLOWLOG entry. */
+export interface SlowlogEntry {
+  id: number;
+  time: number;
+  usec: number;
+  argv: string[];
+  addr: string;
+  name: string;
+}
+
+const SLOWLOG_ENTRY_MAX_ARGC = 32;
+const SLOWLOG_ENTRY_MAX_STRING = 128;
+
+/** Redis slowlogCreateEntry(): at most 32 arguments, each at most 128 bytes. */
+function slowlogArgv(argv: string[]): string[] {
+  const argc = Math.min(argv.length, SLOWLOG_ENTRY_MAX_ARGC);
+  const out: string[] = [];
+  for (let i = 0; i < argc; i++) {
+    if (argc !== argv.length && i === argc - 1) {
+      out.push(`... (${argv.length - argc + 1} more arguments)`);
+    } else if (argv[i].length > SLOWLOG_ENTRY_MAX_STRING) {
+      out.push(`${argv[i].slice(0, SLOWLOG_ENTRY_MAX_STRING)}... (${argv[i].length - SLOWLOG_ENTRY_MAX_STRING} more bytes)`);
+    } else out.push(argv[i]);
+  }
+  return out;
+}
+
+const REPR_ESCAPES: Record<string, string> = { '\\': '\\\\', '"': '\\"', '\n': '\\n', '\r': '\\r', '\t': '\\t', '\x07': '\\a', '\b': '\\b' };
+
+/** Redis sdscatrepr() body (MONITOR): C escapes for \\ " \n \r \t \a \b, \xHH for other non-printable bytes. */
+function reprString(s: string): string {
+  return s.replace(/[\\"\x00-\x1f\x7f-\xff]/g, (c) => REPR_ESCAPES[c] ?? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+
+/** Arguments Redis replaces with "(redacted)" in SLOWLOG and MONITOR (passwords). */
+function redact(argv: string[]): string[] {
+  const name = argv[0].toLowerCase();
+  if (name === 'auth') return argv.map((a, i) => (i === 0 ? a : '(redacted)'));
+  if (name === 'hello') {
+    const out = [...argv];
+    for (let i = 2; i < out.length; i++) {
+      if (out[i].toLowerCase() === 'auth' && i + 2 < out.length) {
+        out[i + 1] = '(redacted)';
+        out[i + 2] = '(redacted)';
+        i += 2;
+      } else if (out[i].toLowerCase() === 'setname') i++;
+    }
+    return out;
+  }
+  return argv;
+}
+
 /** The redis-lite server: one in-memory keyspace, one command at a time (which is what makes every command atomic). */
 export class RedisLiteServer {
   readonly runId = randomBytes(20).toString('hex');
@@ -64,11 +126,19 @@ export class RedisLiteServer {
   readonly patterns = new Map<string, Set<Client>>();
   readonly shardChannels = new Map<string, Set<Client>>();
   readonly monitors = new Set<Client>();
-  readonly stats = { commands: 0, connections: 0, expired: 0 };
+  readonly stats = { commands: 0, connections: 0, expired: 0, errorReplies: 0, netIn: 0, netOut: 0 };
+  /** INFO commandstats, by full command name (`client|id`). */
+  readonly commandStats = new Map<string, CommandStat>();
+  /** INFO errorstats, by error code (`ERR`, `WRONGTYPE`…). */
+  readonly errorStats = new Map<string, number>();
+  readonly slowlog: SlowlogEntry[] = [];
+  private slowlogNextId = 0;
+  /** Unix ms of the last SAVE / BGSAVE (LASTSAVE, INFO rdb_last_save_time). */
+  lastSave = Date.now();
+  /** Writes since the last save (INFO rdb_changes_since_last_save). */
+  dirty = 0;
   lua!: LuaEngine;
   readonly config: ServerConfig;
-  /** Bumped by FLUSHDB/FLUSHALL: invalidates every WATCH. */
-  epoch = 0;
 
   private readonly versions = new Map<string, number>();
   private readonly waiters = new Map<string, Waiter[]>();
@@ -101,7 +171,9 @@ export class RedisLiteServer {
       for (const db of this.databases) db.sweep(now, 200);
     }, 100);
     this.sweepTimer.unref();
-    return net.address() as AddressInfo;
+    const address = net.address() as AddressInfo;
+    this.config.set('port', String(address.port));
+    return address;
   }
 
   /** Runs `listener` once the server has closed (also after SHUTDOWN). */
@@ -139,20 +211,16 @@ export class RedisLiteServer {
 
   private accept(socket: Socket): void {
     socket.setNoDelay(true);
-    const client = new Client(this.nextClientId++, socket, Boolean(this.options.password));
+    const client = new Client(this.nextClientId++, socket, Boolean(this.config.get('requirepass')));
     this.clients.add(client);
     this.stats.connections++;
-    const parser = new RespParser();
+    const parser = new RespParser({ maxBulkLen: () => this.config.num('proto-max-bulk-len') });
     socket.on('data', (chunk: Buffer) => {
-      let commands: string[][];
-      try {
-        commands = parser.feed(chunk);
-      } catch (error) {
-        client.write(new RespError(`ERR ${(error as Error).message}`));
-        socket.end();
-        return;
-      }
+      client.netIn += chunk.length;
+      if (client.protocolError) return;
+      const { commands, error } = parser.parse(chunk);
       client.pending.push(...commands);
+      if (error !== null) client.protocolError = error;
       this.drain(client);
     });
     const cleanup = () => this.disconnect(client);
@@ -160,8 +228,16 @@ export class RedisLiteServer {
     socket.on('error', cleanup);
   }
 
+  /** Closes a connection at once (CLIENT KILL) and forgets its state. */
+  killClient(client: Client): void {
+    this.disconnect(client);
+    client.socket?.destroy();
+  }
+
   private disconnect(client: Client): void {
     if (client.closed) return;
+    this.stats.netIn += client.netIn;
+    this.stats.netOut += client.netOut;
     client.closed = true;
     this.clients.delete(client);
     if (client.blocked) this.unblock(client.blocked);
@@ -176,16 +252,79 @@ export class RedisLiteServer {
     while (!client.closed && !client.blocked && client.pending.length) {
       const argv = client.pending.shift() as string[];
       this.runTopLevel(client, argv);
+      if (client.closeAfterReply) {
+        client.pending.length = 0;
+        client.socket?.end();
+        this.disconnect(client);
+      }
     }
+    if (client.protocolError && !client.closed && !client.blocked && !client.pending.length && !client.protocolErrorSent) {
+      client.protocolErrorSent = true;
+      client.write(new RespError(`ERR ${client.protocolError}`), true);
+      client.socket?.end();
+    }
+  }
+
+  /** An error reply produced outside a command (NOAUTH, queueing errors…): counted in INFO errorstats. */
+  private replyError(client: Client, message: string): void {
+    this.countError(message);
+    client.write(new RespError(message));
+  }
+
+  /** INFO errorstats / total_error_replies. */
+  countError(message: string): void {
+    this.stats.errorReplies++;
+    const space = message.indexOf(' ');
+    const code = space < 0 ? message : message.slice(0, space);
+    if (this.errorStats.has(code) || this.errorStats.size < 128) this.errorStats.set(code, (this.errorStats.get(code) ?? 0) + 1);
+  }
+
+  private commandStat(name: string): CommandStat {
+    let stat = this.commandStats.get(name);
+    if (!stat) this.commandStats.set(name, (stat = { calls: 0, usec: 0, rejected: 0, failed: 0 }));
+    return stat;
+  }
+
+  /** CONFIG RESETSTAT. */
+  resetStats(): void {
+    this.stats.commands = 0;
+    this.stats.connections = 0;
+    this.stats.expired = 0;
+    this.stats.errorReplies = 0;
+    this.stats.netIn = 0;
+    this.stats.netOut = 0;
+    this.commandStats.clear();
+    this.errorStats.clear();
+  }
+
+  slowlogReset(): void {
+    this.slowlog.length = 0;
+  }
+
+  private slowlogPush(client: Client, argv: string[], usec: number): void {
+    const threshold = this.config.num('slowlog-log-slower-than');
+    const maxLen = this.config.num('slowlog-max-len');
+    if (threshold < 0 || maxLen === 0 || usec < threshold) return;
+    this.slowlog.unshift({
+      id: this.slowlogNextId++,
+      time: Math.floor(Date.now() / 1000),
+      usec,
+      argv: slowlogArgv(redact(argv)),
+      addr: client.address,
+      name: client.name,
+    });
+    if (this.slowlog.length > maxLen) this.slowlog.length = maxLen;
   }
 
   private runTopLevel(client: Client, argv: string[]): void {
     const name = argv[0].toLowerCase();
-    const args = argv.slice(1);
     client.lastActiveAt = Date.now();
-    client.lastCommand = name;
+    // CLIENT REPLY SKIP suppresses the reply of the command after it
+    client.skipCurrent = client.skipNext;
+    client.skipNext = false;
 
     if (name === 'quit') {
+      client.lastCommand = 'quit';
       client.write(OK);
       client.socket?.end();
       return;
@@ -193,19 +332,20 @@ export class RedisLiteServer {
 
     const spec = COMMANDS.get(name);
     if (!client.authenticated && !spec?.flags?.noauth) {
-      client.write(new RespError(RespMessages.NOAUTH));
+      this.replyError(client, RespMessages.NOAUTH);
       return;
     }
     if (client.resp === 2 && client.subscriptionCount > 0 && !SUBSCRIBER_ALLOWED.has(name)) {
-      client.write(new RespError(RespMessages.SUBSCRIBE_CONTEXT.replace('%s', name)));
+      this.replyError(client, RespMessages.SUBSCRIBE_CONTEXT.replace('%s', name));
       return;
     }
 
     if (client.multi && !MULTI_IMMEDIATE.has(name)) {
-      const problem = spec ? this.checkArity(spec, args) : unknownCommand(argv[0], args);
+      const checked = this.reject(argv);
+      const problem = checked.error ?? (checked.meta?.flagSet.has('no_multi') ? 'ERR Command not allowed inside a transaction' : null);
       if (problem) {
         client.multiError = true;
-        client.write(new RespError(problem));
+        this.replyError(client, problem);
         return;
       }
       client.multi.push(argv);
@@ -219,10 +359,21 @@ export class RedisLiteServer {
     this.serveReadyKeys();
   }
 
-  private checkArity(spec: CommandSpec, args: string[]): string | null {
-    const argc = args.length + 1;
-    if (spec.arity > 0 ? argc !== spec.arity : argc < -spec.arity) return wrongArity(spec.name);
-    return null;
+  /** Redis processCommand() checks before running a command: unknown command / subcommand, arity. */
+  private reject(argv: string[]): { error: string | null; meta?: CommandMeta; statName?: string } {
+    const name = argv[0].toLowerCase();
+    const args = argv.slice(1);
+    const spec = COMMANDS.get(name);
+    if (!spec) return { error: unknownCommand(argv[0], args) };
+    const { meta, base } = lookupCommand(argv);
+    if (base && base.subcommands.size && argv.length > 1 && !meta) {
+      return { error: unknownSubcommand(argv[1].slice(0, 128), argv[0]), statName: name };
+    }
+    const isSub = Boolean(meta && meta !== base);
+    const arity = isSub && meta ? meta.arity : spec.arity;
+    const fullname = meta?.fullname ?? name;
+    if (!arityOk(arity, argv.length)) return { error: wrongArity(fullname), meta, statName: fullname };
+    return { error: null, meta, statName: fullname };
   }
 
   // ---- command execution ---------------------------------------------------------------------------------------
@@ -232,34 +383,54 @@ export class RedisLiteServer {
     const name = argv[0].toLowerCase();
     const args = argv.slice(1);
     const spec = COMMANDS.get(name);
-    if (!spec) {
-      this.log('warn', `unknown command: ${name}`);
-      return new RespError(unknownCommand(argv[0], args));
+    const checked = this.reject(argv);
+    if (!spec || checked.error !== null) {
+      const message = checked.error ?? unknownCommand(argv[0], args);
+      if (!spec) this.log('warn', `unknown command: ${name}`);
+      if (checked.statName) this.commandStat(checked.statName).rejected++;
+      if (!mode.inScript) this.countError(message);
+      return new RespError(message);
     }
-    const arity = this.checkArity(spec, args);
-    if (arity) return new RespError(arity);
+    const meta = checked.meta;
+    const fullname = checked.statName ?? name;
     if (mode.inScript && spec.flags?.noscript) return new RespError(RespMessages.NOT_ALLOWED_FROM_SCRIPT);
 
-    if (this.monitors.size) this.feedMonitors(client, argv, mode.inScript);
+    if (this.monitors.size && !meta?.flagSet.has('skip_monitor') && !meta?.flagSet.has('admin')) this.feedMonitors(client, argv, mode.inScript);
     this.stats.commands++;
+    client.commandsProcessed++;
+    if (!mode.inScript) client.lastCommand = fullname;
     const db = this.databases[client.dbIndex];
     const ctx: CommandContext = { server: this, client, db, inScript: mode.inScript, noBlock: mode.noBlock, noop: false };
     db.touchOnRead = !client.noTouch || name === 'touch';
+    const started = process.hrtime.bigint();
+    let result: Reply | Block | typeof NO_REPLY;
     try {
-      const result = spec.handler(ctx, args);
+      result = spec.handler(ctx, args);
       if (spec.flags?.write && spec.keys && !ctx.noop && !isNoop(name, args, result)) {
         for (const key of spec.keys(args)) this.touch(client.dbIndex, key);
       }
-      return result;
     } catch (error) {
-      if (error instanceof CommandError) return new RespError(error.message);
-      this.log('warn', `internal error in ${name}: ${(error as Error).stack ?? String(error)}`);
-      return new RespError(`ERR ${(error as Error).message}`);
+      if (error instanceof CommandError) result = new RespError(error.message);
+      else {
+        this.log('warn', `internal error in ${name}: ${(error as Error).stack ?? String(error)}`);
+        result = new RespError(`ERR ${(error as Error).message}`);
+      }
     }
+    const usec = Number((process.hrtime.bigint() - started) / 1000n);
+    const stat = this.commandStat(fullname);
+    stat.calls++;
+    stat.usec += usec;
+    if (result instanceof RespError) {
+      stat.failed++;
+      if (!mode.inScript) this.countError(result.message);
+    }
+    if (!mode.inScript && !meta?.flagSet.has('skip_slowlog')) this.slowlogPush(client, argv, usec);
+    return result;
   }
 
   /** Marks a key modified: invalidates WATCH and wakes clients blocked on it. */
   touch(dbIndex: number, key: string): void {
+    this.dirty++;
     const value = this.databases[dbIndex]?.peek(key);
     if (value) updateEncoding(value, this.config, value.type === 'hash' && hashHasFieldTtl(value.value));
     const k = `${dbIndex}:${key}`;
@@ -297,8 +468,26 @@ export class RedisLiteServer {
     return replies;
   }
 
+  /**
+   * FLUSHDB / FLUSHALL / SWAPDB (Redis touchAllWatchedKeysInDb): invalidates the WATCHes on keys of `dbIndex` that exist there (or,
+   * for SWAPDB, in `other`). Call it before the database changes. Watched keys that did not exist are left alone (Redis 7.0+).
+   */
+  signalFlushedDb(dbIndex: number, other?: number): void {
+    const prefix = `${dbIndex}:`;
+    const bumped = new Set<string>();
+    for (const c of this.clients) {
+      for (const k of c.watched.keys()) {
+        if (!k.startsWith(prefix) || bumped.has(k)) continue;
+        const key = k.slice(prefix.length);
+        const exists = this.databases[dbIndex].peek(key) !== undefined || (other !== undefined && this.databases[other].peek(key) !== undefined);
+        if (!exists) continue;
+        bumped.add(k);
+        this.versions.set(k, (this.versions.get(k) ?? 0) + 1);
+      }
+    }
+  }
+
   private isWatchDirty(client: Client): boolean {
-    if (client.watched.size && client.watchEpoch !== this.epoch) return true;
     for (const [k, v] of client.watched) if ((this.versions.get(k) ?? 0) !== v) return true;
     return false;
   }
@@ -430,15 +619,21 @@ export class RedisLiteServer {
     const now = Date.now();
     const ts = `${Math.floor(now / 1000)}.${String((now % 1000) * 1000).padStart(6, '0')}`;
     const origin = inScript ? 'lua' : client.address;
-    const args = argv.map((a) => `"${a.replace(/[\\"]/g, '\\$&').replace(/[\x00-\x1f\x7f-\xff]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`)}"`);
+    const args = redact(argv).map((a) => `"${reprString(a)}"`);
     const line = new Status(`${ts} [${client.dbIndex} ${origin}] ${args.join(' ')}`);
     for (const m of this.monitors) if (m !== client) m.write(line);
   }
 
-  /** SWAPDB: exchanges the contents of two databases and invalidates WATCHes. */
+  /** SWAPDB: exchanges the contents of two databases, invalidates WATCHes and serves clients blocked on keys that now exist. */
   swapDatabases(a: number, b: number): void {
+    this.signalFlushedDb(a, b);
+    if (a !== b) this.signalFlushedDb(b, a);
     this.databases[a].swapWith(this.databases[b]);
-    this.epoch++;
+    for (const k of this.waiters.keys()) {
+      const sep = k.indexOf(':');
+      const db = Number(k.slice(0, sep));
+      if ((db === a || db === b) && this.databases[db].peek(k.slice(sep + 1)) !== undefined) this.readyKeys.add(k);
+    }
   }
 
   publish(channel: string, message: string): number {

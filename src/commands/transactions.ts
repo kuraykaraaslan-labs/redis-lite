@@ -34,7 +34,6 @@ export const transactionCommands: CommandSpec[] = [
     flags: { noscript: true },
     handler: (ctx, args) => {
       if (ctx.client.multi) throw new CommandError(RespMessages.WATCH_IN_MULTI);
-      if (!ctx.client.watched.size) ctx.client.watchEpoch = ctx.server.epoch;
       for (const key of args) {
         ctx.db.lookup(key); // expire first, so an already-expired key does not count as a change later
         const k = `${ctx.client.dbIndex}:${key}`;

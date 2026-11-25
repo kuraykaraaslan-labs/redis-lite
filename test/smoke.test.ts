@@ -127,7 +127,7 @@ return {1, n + 1}`;
 
   it('info and client list', async () => {
     const info = await redis.info();
-    expect(info).toContain('redis_version:7.2.0');
+    expect(info).toContain('redis_version:8.8.4');
     expect(info).toContain('maxmemory_policy:noeviction');
     await redis.client('SETNAME', 'tester');
     expect(await redis.client('LIST')).toContain('name=tester');

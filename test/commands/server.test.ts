@@ -696,8 +696,10 @@ describe('CONFIG', () => {
   });
 
   it('SET of the same parameter twice is rejected', async () => {
-    // unverified: exact wording of the duplicate parameter error
-    expect.soft(await errOf(t.call('CONFIG', 'SET', 'maxmemory', '1', 'maxmemory', '2'))).toBe('ERR Duplicate parameter - maxmemory');
+    // Redis configSetCommand(): errstr "duplicate parameter", reported as "CONFIG SET failed (possibly related to argument '%s') - %s"
+    expect.soft(await errOf(t.call('CONFIG', 'SET', 'maxmemory', '1', 'maxmemory', '2'))).toBe(
+      "ERR CONFIG SET failed (possibly related to argument 'maxmemory') - duplicate parameter",
+    );
   });
 
   it('RESETSTAT resets the stats', async () => {

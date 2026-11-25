@@ -57,7 +57,7 @@ const CONNECTION: Row[] = [
       ['id', 2, 'noscript loading stale', 'connection', '', '5.0.0', 'Returns the unique client ID of the connection.', 'O(1)'],
       ['info', 2, 'noscript loading stale', 'connection', '', '6.2.0', 'Returns information about the connection.', 'O(1)', undefined, { tips: 'nondeterministic_output' }],
       ['kill', -3, 'admin noscript loading stale', 'connection', '', '2.4.0', 'Terminates open connections.', 'O(N) where N is the number of client connections',
-        'filter:oneof(old-format:string{2.8.12} new-format:oneof(ID=client-id:integer...{2.8.12} TYPE=client-type:oneof(!NORMAL{2.8.12} !MASTER{3.2.0} !SLAVE{2.8.12} !REPLICA{5.0.0} !PUBSUB{2.8.12}) USER=username:string ADDR=addr:string LADDR=laddr:string{6.2.0} SKIPME=skipme:oneof(!YES !NO) MAXAGE=maxage:integer{7.4.0})...)'],
+        'filter:oneof(old-format:string{2.8.12} new-format:oneof(ID=client-id:integer{2.8.12} TYPE=client-type:oneof(!NORMAL{2.8.12} !MASTER{3.2.0} !SLAVE{2.8.12} !REPLICA{5.0.0} !PUBSUB{2.8.12}) USER=username:string ADDR=addr:string LADDR=laddr:string{6.2.0} SKIPME=skipme:oneof(!YES !NO) MAXAGE=maxage:integer{7.4.0})...)'],
       ['list', -2, 'admin noscript loading stale', 'connection', '', '2.4.0', 'Lists open connections.', 'O(N) where N is the number of client connections',
         '?TYPE=client-type:oneof(!NORMAL !MASTER !REPLICA !PUBSUB){5.0.0} ?ID=client-id:integer...{6.2.0}', { tips: 'nondeterministic_output' }],
       ['no-evict', 3, 'admin noscript loading stale', 'connection', '', '7.0.0', 'Sets the client eviction mode of the connection.', 'O(1)', 'enabled:oneof(!ON !OFF)'],
@@ -625,14 +625,14 @@ const SORTED_SET: Row[] = [
     `destination:key0 numkeys:integer key:key1... ${ZAGG}`],
 ];
 
-const XTRIM_ARG = 'trim:block(strategy:oneof(!MAXLEN !MINID{6.2.0}) ?operator:oneof(!= !~) threshold:string ?LIMIT=count:integer{6.2.0})';
+const XTRIM_ARG = 'trim:block(strategy:oneof(!MAXLEN !MINID{6.2.0}) ?operator:oneof(equal!= approximately!~) threshold:string ?LIMIT=count:integer{6.2.0})';
 const STREAM: Row[] = [
   ['xack', -4, 'write fast', 'stream', 'RW update|1', '5.0.0',
     'Returns the number of messages that were successfully acknowledged by the consumer group member of a stream.', 'O(1) for each message ID processed.',
     'key group:string id:string...'],
   ['xadd', -5, 'write denyoom fast', 'stream', 'RW insert|1', '5.0.0', "Appends a new message to a stream. Creates the key if it doesn't exist.",
     'O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.',
-    `key ?!NOMKSTREAM{6.2.0} ?${XTRIM_ARG} id-selector:oneof(!* id:string) data:block(field:string value:string)...`, { tips: 'nondeterministic_output' }],
+    `key ?!NOMKSTREAM{6.2.0} ?${XTRIM_ARG} id-selector:oneof(auto-id!* id:string) data:block(field:string value:string)...`, { tips: 'nondeterministic_output' }],
   ['xautoclaim', -6, 'write fast', 'stream', 'RW update|1', '6.2.0',
     'Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to as consumer group member.', 'O(1) if COUNT is small.',
     'key group:string consumer:string min-idle-time:string start:string ?COUNT=count:integer ?!JUSTID', { tips: 'nondeterministic_output' }],
@@ -699,7 +699,7 @@ const HYPERLOGLOG: Row[] = [
     'Returns the approximated cardinality of the set(s) observed by the HyperLogLog key(s).',
     'O(1) with a very small average constant time when called with a single key. O(N) with N being the number of keys, and much bigger constant times, when called with multiple keys.',
     'key...'],
-  ['pfdebug', 3, 'write denyoom admin', 'hyperloglog', 'RW access|2', '2.8.9', 'Internal commands for debugging HyperLogLog values.', 'N/A',
+  ['pfdebug', -3, 'write denyoom admin', 'hyperloglog', 'RW access|2', '2.8.9', 'Internal commands for debugging HyperLogLog values.', 'N/A',
     'subcommand:string key', { docFlags: 'syscmd' }],
   ['pfmerge', -2, 'write denyoom', 'hyperloglog', 'RW access insert|1;RO access|2|-1', '2.8.9', 'Merges one or more HyperLogLog values into a single key.',
     'O(N) to merge N HyperLogLogs, but with high constant times.', 'destkey:key0 ?sourcekey:key1...'],

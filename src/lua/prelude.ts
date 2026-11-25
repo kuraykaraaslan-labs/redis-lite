@@ -62,7 +62,7 @@ redis.REPL_NONE, redis.REPL_AOF, redis.REPL_SLAVE, redis.REPL_REPLICA, redis.REP
 redis.breakpoint = function() return false end
 redis.debug = function(...) end
 redis.acl_check_cmd = function() return true end
-redis.REDIS_VERSION = '7.2.0'
+redis.REDIS_VERSION = '8.8.4'
 
 -- ---------- Redis Functions (FUNCTION LOAD / FCALL) ----------
 __rl_functions = {}
@@ -146,7 +146,7 @@ function __rl_call(name, keys, args)
   if f == nil then return redis.error_reply('ERR Function not found') end
   return f(keys, args)
 end
-redis.REDIS_VERSION_NUM = 0x070200
+redis.REDIS_VERSION_NUM = 0x080804
 
 -- ---------- bit (LuaBitOp, 32-bit) ----------
 local function tobit(x)
