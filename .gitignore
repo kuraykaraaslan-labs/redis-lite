@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# test and coverage output
+coverage/
+.vitest/
+
+# reference Redis build used for differential tests
+.oracle/
+
+# redis-lite / Redis data files
+*.rdb
+*.aof
+appendonlydir/
+
+# logs
+*.log
+npm-debug.log*
+
+# environment
+.env
+.env.*
+
+# editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

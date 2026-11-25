@@ -1,0 +1,48 @@
+{
+  "name": "@kuraykaraaslan/redis-lite",
+  "version": "0.1.0",
+  "description": "Minimal in-memory Redis-compatible server for Node.js dev and tests. Runs ioredis, BullMQ and socket.io adapter without Redis.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "redis-lite": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "start": "node dist/cli.js",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "keywords": [
+    "redis",
+    "bullmq",
+    "ioredis",
+    "in-memory",
+    "mock",
+    "dev"
+  ],
+  "dependencies": {
+    "fengari": "^0.1.5",
+    "wasmoon": "^1.16.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.10",
+    "bullmq": "^5.66.2",
+    "ioredis": "^5.8.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
