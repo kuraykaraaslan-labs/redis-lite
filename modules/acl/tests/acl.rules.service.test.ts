@@ -269,7 +269,7 @@ describe('helpers', () => {
   it('CAT', () => {
     const acl = makeAcl();
     expect(acl.categories()).toEqual([...AclCategoryEnum.options]);
-    expect(acl.categories()).toHaveLength(21);
+    expect(acl.categories()).toHaveLength(22);
     expect(acl.commandsInCategory('ADMIN')).toEqual(['config|get', 'config|set', 'client|kill']);
     expect(errorOf(() => acl.commandsInCategory('nope'))).toBe("ERR Unknown category 'nope'");
   });

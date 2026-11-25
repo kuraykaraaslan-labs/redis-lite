@@ -7,6 +7,7 @@ import PersistenceBytesCodec, { RdbReader } from './persistence.bytes.codec';
 import { QUICKLIST_CONTAINER, RDB_TYPE } from './persistence.enums';
 import PersistenceListpackCodec from './persistence.listpack.codec';
 import PersistenceMessages from './persistence.messages';
+import PersistenceModuleTypeCodec from './persistence.module_type.codec';
 import PersistenceRdbIoCodec from './persistence.rdb_io.codec';
 import type { DecodedObject, FieldExpires } from './persistence.types';
 
@@ -252,8 +253,9 @@ export default class PersistenceObjectDecoderCodec {
       case RDB_TYPE.STREAM_LISTPACKS_2:
       case RDB_TYPE.STREAM_LISTPACKS_3:
         return { value: { type: 'stream', value: D.readStream(r, type) } };
-      case RDB_TYPE.MODULE_PRE_GA:
       case RDB_TYPE.MODULE_2:
+        return { value: PersistenceModuleTypeCodec.decodeModule(r) };
+      case RDB_TYPE.MODULE_PRE_GA:
         throw new Error(PersistenceMessages.MODULE_TYPES_UNSUPPORTED);
       default:
         throw bad();

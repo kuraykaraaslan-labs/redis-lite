@@ -7,6 +7,7 @@ import type { PendingEntry, StreamEntry, StreamId } from '@/modules/streams/stre
 import PersistenceBytesCodec, { RdbWriter } from './persistence.bytes.codec';
 import { QUICKLIST_CONTAINER, RDB_TYPE } from './persistence.enums';
 import PersistenceListpackCodec from './persistence.listpack.codec';
+import PersistenceModuleTypeCodec from './persistence.module_type.codec';
 import PersistenceRdbIoCodec from './persistence.rdb_io.codec';
 import type { EncodedObject, FieldExpires, ListpackEntry, RdbOptions } from './persistence.types';
 
@@ -326,6 +327,9 @@ export default class PersistenceObjectEncoderCodec {
         return E.encodeHash(w, value.value, o, fieldExpires);
       case 'stream':
         return E.encodeStream(w, value.value, o);
+      case 'timeseries':
+        PersistenceModuleTypeCodec.encodeTimeseries(w, value.value);
+        return RDB_TYPE.MODULE_2;
     }
   }
 

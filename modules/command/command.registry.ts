@@ -13,6 +13,7 @@ import { serverCommands } from '@/modules/server/server.commands';
 import { setCommands } from '@/modules/sets/sets.commands';
 import { streamCommands } from '@/modules/streams/streams.commands';
 import { stringCommands } from '@/modules/strings/strings.commands';
+import { timeseriesCommands } from '@/modules/timeseries/timeseries.commands';
 import { transactionCommands } from '@/modules/transactions/transactions.commands';
 import { zsetCommands } from '@/modules/zsets/zsets.commands';
 
@@ -39,6 +40,7 @@ export const COMMANDS: ReadonlyMap<string, CommandSpec> = new Map(
     ...transactionCommands,
     ...scriptingCommands,
     ...functionCommands,
+    ...timeseriesCommands,
   ].map((spec) => [spec.name, spec]),
 );
 

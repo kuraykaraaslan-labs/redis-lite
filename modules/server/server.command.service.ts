@@ -39,7 +39,7 @@ export default class ServerCommandService {
     if (!filter) return all.map((m) => m.fullname);
     const value = filter.value;
     let keep: (m: CommandMeta) => boolean;
-    if (filter.kind === 'module') keep = () => false;
+    if (filter.kind === 'module') keep = (m) => m.module !== undefined && m.module === value.toLowerCase();
     else if (filter.kind === 'aclcat') keep = (m) => m.acl.includes(value.toLowerCase());
     else keep = (m) => matchGlob(value.toLowerCase(), m.fullname);
     return all.filter(keep).map((m) => m.fullname);

@@ -845,8 +845,74 @@ const SCRIPTING: Row[] = [
   }],
 ];
 
-/** Every command table, with its COMMAND DOCS group. */
-export const COMMAND_TABLE: Array<[group: string, rows: Row[]]> = [
+// ============================================================================
+// Time series module (TS.*): group `module`, module `timeseries`. Flags, ACL categories and complexities are best
+// recollection of the Redis 8 command docs ("unsure"); `since` is the RedisTimeSeries version that added the command.
+// ============================================================================
+
+const TS_CREATE_OPTS =
+  '?RETENTION=retention-period:integer ?ENCODING=enc:oneof(!COMPRESSED !UNCOMPRESSED) ?CHUNK_SIZE=size:integer ' +
+  '?DUPLICATE_POLICY=policy:oneof(!BLOCK !FIRST !LAST !MIN !MAX !SUM) ' +
+  '?IGNORE=ignore:block(ignore-max-time-diff:integer ignore-max-val-diff:double) ?LABELS=labels:block(label:string value:string)...';
+const TS_AGGREGATOR = 'aggregator:oneof(!AVG !SUM !MIN !MAX !RANGE !COUNT !FIRST !LAST !STD.P !STD.S !VAR.P !VAR.S !TWA !COUNTNAN !COUNTALL)';
+const TS_RANGE_OPTS =
+  '?!LATEST ?FILTER_BY_TS=timestamp:integer... ?FILTER_BY_VALUE=filter-by-value:block(min:double max:double) ?COUNT=count:integer';
+const TS_AGGREGATION_OPTS =
+  `?aggregation-block:block(?ALIGN=align:string AGGREGATION=aggregation:block(${TS_AGGREGATOR} bucket-duration:integer) ` +
+  '?BUCKETTIMESTAMP=buckettimestamp:string ?!EMPTY)';
+const TS_LABELS_OPTS = '?labels-selection:oneof(!WITHLABELS SELECTED_LABELS=label:string...)';
+const TS_RANGE_COMPLEXITY = 'O(n/m+k) where n = Number of data points, m = Chunk size (data points per chunk), k = Number of data points that are in the requested range';
+
+const TIMESERIES: Row[] = [
+  ['ts.add', -4, 'write denyoom module fast', 'timeseries', 'RW insert|1', '1.0.0', 'Append a sample to a time series',
+    'O(M) when M is the amount of compaction rules or O(1) with no compaction',
+    `key timestamp:string value:double ${TS_CREATE_OPTS.replace('?LABELS', '?ON_DUPLICATE=policy-ovr:oneof(!BLOCK !FIRST !LAST !MIN !MAX !SUM) ?LABELS')}`],
+  ['ts.alter', -2, 'write denyoom module', 'timeseries', 'RW update|1', '1.0.0',
+    'Update the retention, chunk size, duplicate policy, and labels of an existing time series',
+    'O(N) where N is the number of labels requested to update',
+    `key ${TS_CREATE_OPTS.replace(/\?ENCODING=enc:oneof\(!COMPRESSED !UNCOMPRESSED\) /, '')}`],
+  ['ts.create', -2, 'write denyoom module', 'timeseries', 'RW insert|1', '1.0.0', 'Create a new time series', 'O(1)', `key ${TS_CREATE_OPTS}`],
+  ['ts.createrule', -6, 'write denyoom module', 'timeseries', 'RW access update|1;RW insert|2', '1.0.0', 'Create a compaction rule', 'O(1)',
+    `source-key:key dest-key:key1 AGGREGATION=aggregation:block(${TS_AGGREGATOR} bucket-duration:integer) ?align-timestamp:integer{1.8.0}`],
+  ['ts.decrby', -3, 'write denyoom module fast', 'timeseries', 'RW update|1', '1.0.0',
+    'Decrease the value of the sample with the maximum existing timestamp, or create a new sample with a value equal to the value of the sample with the maximum existing timestamp with a given decrement',
+    'O(M) when M is the amount of compaction rules or O(1) with no compaction',
+    `key subtrahend:double ?TIMESTAMP=timestamp:string ${TS_CREATE_OPTS}`],
+  ['ts.del', 4, 'write module', 'timeseries', 'RW delete|1', '1.6.0', 'Delete all samples between two timestamps for a given time series',
+    'O(N) where N is the number of data points that will be removed', 'key from-timestamp:integer to-timestamp:integer'],
+  ['ts.deleterule', 3, 'write module', 'timeseries', 'RW access update|1;RW update|2', '1.0.0', 'Delete a compaction rule', 'O(1)',
+    'source-key:key dest-key:key1'],
+  ['ts.get', -2, 'readonly module fast', 'timeseries', 'RO access|1', '1.0.0', 'Get the sample with the highest timestamp from a given time series',
+    'O(1)', 'key ?!LATEST{1.8.0}'],
+  ['ts.incrby', -3, 'write denyoom module fast', 'timeseries', 'RW update|1', '1.0.0',
+    'Increase the value of the sample with the maximum existing timestamp, or create a new sample with a value equal to the value of the sample with the maximum existing timestamp with a given increment',
+    'O(M) when M is the amount of compaction rules or O(1) with no compaction',
+    `key addend:double ?TIMESTAMP=timestamp:string ${TS_CREATE_OPTS}`],
+  ['ts.info', -2, 'readonly module', 'timeseries', 'RO|1', '1.0.0', 'Returns information and statistics for a time series', 'O(1)', 'key ?!DEBUG'],
+  ['ts.madd', -4, 'write denyoom module', 'timeseries', 'RW insert|1|-3/3', '1.0.0', 'Append new samples to one or more time series',
+    'O(N*M) when N is the amount of series updated and M is the amount of compaction rules or O(N) with no compaction',
+    'ktv:block(key timestamp:string value:double)...'],
+  ['ts.mget', -3, 'readonly module', 'timeseries', '', '1.0.0',
+    'Get the sample with the highest timestamp from each time series matching a specific filter', 'O(n) where n is the number of time-series that match the filters',
+    `?!LATEST{1.8.0} ${TS_LABELS_OPTS} FILTER=filter-expr:string...`],
+  ['ts.mrange', -5, 'readonly module', 'timeseries', '', '1.0.0', 'Query a range across multiple time series by filters in forward direction',
+    TS_RANGE_COMPLEXITY,
+    `from-timestamp:string to-timestamp:string ${TS_RANGE_OPTS} ${TS_LABELS_OPTS} ${TS_AGGREGATION_OPTS} FILTER=filter-expr:string... ` +
+    '?GROUPBY=groupby:block(label:string REDUCE=reducer:string)'],
+  ['ts.mrevrange', -5, 'readonly module', 'timeseries', '', '1.4.0', 'Query a range across multiple time-series by filters in reverse direction',
+    TS_RANGE_COMPLEXITY,
+    `from-timestamp:string to-timestamp:string ${TS_RANGE_OPTS} ${TS_LABELS_OPTS} ${TS_AGGREGATION_OPTS} FILTER=filter-expr:string... ` +
+    '?GROUPBY=groupby:block(label:string REDUCE=reducer:string)'],
+  ['ts.queryindex', -2, 'readonly module', 'timeseries', '', '1.0.0', 'Get all time series keys matching a filter list',
+    'O(n) where n is the number of time-series that match the filters', 'filter-expr:string...'],
+  ['ts.range', -4, 'readonly module', 'timeseries', 'RO access|1', '1.0.0', 'Query a range in forward direction', TS_RANGE_COMPLEXITY,
+    `key from-timestamp:string to-timestamp:string ${TS_RANGE_OPTS} ${TS_AGGREGATION_OPTS}`],
+  ['ts.revrange', -4, 'readonly module', 'timeseries', 'RO access|1', '1.4.0', 'Query a range in reverse direction', TS_RANGE_COMPLEXITY,
+    `key from-timestamp:string to-timestamp:string ${TS_RANGE_OPTS} ${TS_AGGREGATION_OPTS}`],
+];
+
+/** Every command table, with its COMMAND DOCS group and, for module commands, the module name. */
+export const COMMAND_TABLE: Array<[group: string, rows: Row[], module?: string]> = [
   ['connection', CONNECTION],
   ['cluster', CLUSTER],
   ['server', SERVER],
@@ -863,6 +929,7 @@ export const COMMAND_TABLE: Array<[group: string, rows: Row[]]> = [
   ['pubsub', PUBSUB],
   ['transactions', TRANSACTIONS],
   ['scripting', SCRIPTING],
+  ['module', TIMESERIES, 'timeseries'],
 ];
 
 export const HELP_TEXT: Record<string, string[]> = {

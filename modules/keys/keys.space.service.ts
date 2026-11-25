@@ -7,6 +7,8 @@ import type { CommandContext } from '@/modules/command/command.types';
 import type { Database } from '@/modules/database/database.service';
 import DatabaseService from '@/modules/database/database.service';
 import { Stream } from '@/modules/streams/streams.structure';
+import TimeseriesService from '@/modules/timeseries/timeseries.service';
+import { TSDB_TYPE_NAME } from '@/modules/timeseries/timeseries.structure';
 import { ZSet } from '@/modules/zsets/zsets.structure';
 import type { RedisValue } from '@/modules/database/database.types';
 
@@ -43,7 +45,16 @@ export default class KeysSpaceService {
         s.maxDeletedId = v.value.maxDeletedId;
         return { type: 'stream', value: s };
       }
+      case 'timeseries':
+        // the copy has the samples and labels, but is neither a compaction source nor a destination
+        return { type: 'timeseries', value: v.value.clone(false) };
     }
+  }
+
+  /** TYPE's name of a value: the type, or the module type name for module values (`TSDB-TYPE`). */
+  private static typeName(v: RedisValue | undefined): string {
+    if (!v) return 'none';
+    return v.type === 'timeseries' ? TSDB_TYPE_NAME : v.type;
   }
 
   /** COPY's target database: each DB option must name an existing database, checked in argument order. */
@@ -81,7 +92,7 @@ export default class KeysSpaceService {
   }
 
   static type(ctx: CommandContext, { key }: KeyInput): Status {
-    return new Status(ctx.db.peek(key)?.type ?? 'none');
+    return new Status(KeysSpaceService.typeName(ctx.db.peek(key)));
   }
 
   /** RENAME (nx = false) / RENAMENX (nx = true): moves the value and its TTL. */
@@ -94,6 +105,7 @@ export default class KeysSpaceService {
     ctx.db.remove(source);
     ctx.db.set(destination, v);
     if (at !== undefined) ctx.db.setExpire(destination, at);
+    if (v.type === 'timeseries') TimeseriesService.renamed(ctx.db, source, destination, v.value);
     return nx ? 1 : OK;
   }
 
@@ -118,7 +130,7 @@ export default class KeysSpaceService {
   /** SCAN: MATCH and TYPE filter after the page is taken, so pages can be short or empty, as in Redis. */
   static scan(ctx: CommandContext, { cursor, match, type, count }: ScanInput): Reply {
     const { next, page } = DatabaseService.scanPage(ctx.db.keys(), cursor, count);
-    return [String(next), page.filter((k) => matchGlob(match, k) && (!type || ctx.db.peek(k)?.type === type))];
+    return [String(next), page.filter((k) => matchGlob(match, k) && (!type || KeysSpaceService.typeName(ctx.db.peek(k)).toLowerCase() === type))];
   }
 
   static randomKey(ctx: CommandContext): string | null {

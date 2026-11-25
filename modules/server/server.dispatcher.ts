@@ -8,7 +8,7 @@ import { unknownCommand, unknownSubcommand, wrongArity } from '@/libs/resp/messa
 import AclService from '@/modules/acl/acl.service';
 import { COMMANDS } from '@/modules/command/command.registry';
 import CommandService, { Block, NO_REPLY } from '@/modules/command/command.service';
-import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
+import type { CommandContext, CommandSpec, HandlerResult } from '@/modules/command/command.types';
 import MemoryMessages from '@/modules/memory/memory.messages';
 import NotificationsService from '@/modules/notifications/notifications.service';
 import TrackingService from '@/modules/tracking/tracking.service';
@@ -38,6 +38,9 @@ const EMPTY_IS_NOOP = new Set([
 /** Commands a client in MULTI runs right away instead of queueing. */
 const MULTI_IMMEDIATE = new Set(['exec', 'discard', 'multi', 'watch', 'quit', 'reset']);
 
+/** How a command sent by a client runs (not from a script, may block). Shared: nothing writes to it. */
+const TOP_LEVEL_MODE: ExecuteMode = Object.freeze({ inScript: false, noBlock: false });
+
 /** Commands allowed in RESP2 subscriber mode. */
 const SUBSCRIBER_ALLOWED = new Set(['subscribe', 'psubscribe', 'unsubscribe', 'punsubscribe', 'ssubscribe', 'sunsubscribe', 'ping', 'quit', 'reset']);
 
@@ -59,7 +62,12 @@ function isNoop(name: string, args: string[], reply: Reply, existed: boolean): b
 export function specKeys(extract: ((args: string[]) => string[]) | undefined, args: string[]): string[] {
   if (!extract) return [];
   try {
-    return extract(args).filter((k): k is string => typeof k === 'string');
+    const keys = extract(args);
+    // the usual case: every key is a string, and the extractor built a new array (no copy needed)
+    for (let i = 0; i < keys.length; i++) {
+      if (typeof keys[i] !== 'string') return keys.filter((k): k is string => typeof k === 'string');
+    }
+    return keys === args ? keys.slice() : keys;
   } catch {
     return [];
   }
@@ -184,9 +192,12 @@ export class ServerDispatcher {
   /** Redis processCommand() checks before running a command: unknown command / subcommand, arity. */
   precheck(argv: string[]): Precheck {
     const name = argv[0].toLowerCase();
-    const args = argv.slice(1);
-    const spec = COMMANDS.get(name);
-    if (!spec) return { error: unknownCommand(argv[0], args) };
+    return this.precheckSpec(argv, name, COMMANDS.get(name));
+  }
+
+  /** precheck() of a command whose lowercased name and table entry were already looked up. */
+  private precheckSpec(argv: string[], name: string, spec: CommandSpec | undefined): Precheck {
+    if (!spec) return { error: unknownCommand(argv[0], argv.slice(1)) };
     const { meta, base } = CommandService.lookupCommand(argv);
     if (base && base.subcommands.size && argv.length > 1 && !meta) {
       return { error: unknownSubcommand(argv[1].slice(0, 128), argv[0]), statName: name };
@@ -198,71 +209,15 @@ export class ServerDispatcher {
     return { error: null, meta, statName: fullname };
   }
 
-  /** Redis processCommand(): existence/arity, auth, no_multi, ACL, subscriber context, then queue (MULTI) or run. */
-  runTopLevel(client: Client, argv: string[]): void {
+  /** The run itself (after the checks): handler, side effects, stats. */
+  private run(client: Client, argv: string[], name: string, spec: CommandSpec, mode: ExecuteMode, checked: Precheck): HandlerResult {
     const server = this.server;
-    const name = argv[0].toLowerCase();
-    client.lastActiveAt = Date.now();
-    // CLIENT REPLY SKIP suppresses the reply of the command after it
-    client.skipCurrent = client.skipNext;
-    client.skipNext = false;
-
-    if (name === 'quit') {
-      client.lastCommand = 'quit';
-      client.write(OK);
-      client.socket?.end();
-      return;
-    }
-
-    const checked = this.precheck(argv);
-    const spec = COMMANDS.get(name);
-    if (!spec || checked.error !== null) {
-      if (!spec) Logger.warn('[ServerDispatcher.runTopLevel] Unknown command', { command: name });
-      this.rejectCommand(client, checked.error ?? unknownCommand(argv[0], argv.slice(1)), checked.statName);
-      return;
-    }
-    if (this.refused(client, argv, name, checked, Boolean(spec.flags?.noauth))) return;
-
-    if (client.multi && !MULTI_IMMEDIATE.has(name)) {
-      client.multi.push(argv);
-      client.write(QUEUED);
-      return;
-    }
-
-    server.tracking.current = client;
-    let result: HandlerResult;
-    try {
-      result = this.execute(client, argv, { inScript: false, noBlock: false }, checked);
-    } finally {
-      server.tracking.current = null;
-    }
-    if (result instanceof Block) server.blocking.block(client, result, argv);
-    else if (result !== NO_REPLY) client.write(result);
-    TrackingService.flushDeferred(server.tracking, client);
-    // CLIENT CACHING applies to the next command only (a whole transaction counts as one)
-    if (!client.multi && !(name === 'client' && argv[1]?.toLowerCase() === 'caching')) client.trackingCaching = null;
-    TrackingService.enforceLimit(server.tracking);
-    server.serveReadyKeys();
-  }
-
-  /** Runs one command. Used by sockets, EXEC and Lua `redis.call`. */
-  execute(client: Client, argv: string[], mode: ExecuteMode, prechecked?: Precheck): HandlerResult {
-    const server = this.server;
-    const name = argv[0].toLowerCase();
     const args = argv.slice(1);
-    const spec = COMMANDS.get(name);
-    const checked = prechecked ?? this.precheck(argv);
-    if (!spec || checked.error !== null) {
-      const message = checked.error ?? unknownCommand(argv[0], args);
-      if (!spec) Logger.warn('[ServerDispatcher.execute] Unknown command', { command: name });
-      if (checked.statName) server.observer.commandStat(checked.statName).rejected++;
-      if (!mode.inScript) server.countError(message);
-      return new RespError(message);
-    }
     const meta = checked.meta;
     const fullname = checked.statName ?? name;
+    const write = spec.flags?.write === true;
     if (mode.inScript) {
-      const refusal = this.scriptRefusal(client, argv, checked, Boolean(spec.flags?.write), Boolean(spec.flags?.noscript));
+      const refusal = this.scriptRefusal(client, argv, checked, write, Boolean(spec.flags?.noscript));
       if (refusal) return refusal;
     }
 
@@ -281,20 +236,21 @@ export class ServerDispatcher {
     let keys: string[] = [];
     if (spec.keys) keys = specKeys(spec.keys, args);
     else if (notify && meta) keys = CommandService.keyNames(meta, argv);
-    const propagator = server.persistence.propagator;
+    const persistence = server.persistence;
+    const propagator = persistence.propagator;
     propagator.enter(name);
     let result: HandlerResult;
     const started = process.hrtime.bigint();
     try {
       // the state of the command's keys before it runs: `new` / `keymiss` events, and SET … GET's no-op test
       const before = notify || name === 'set' ? server.keyspace.keyStates(db, keys) : null;
-      const dirtyBefore = server.persistence.dirty;
+      const dirtyBefore = persistence.dirty;
       let noop = false;
       try {
         result = spec.handler(ctx, args);
         if (!(result instanceof Block) && result !== NO_REPLY) {
           noop = ctx.noop || isNoop(name, args, result, before?.get(keys[0])?.exists ?? false);
-          if (spec.flags?.write && !noop) for (const key of keys) server.touch(dbIndex, key);
+          if (write && !noop) for (let i = 0; i < keys.length; i++) server.touch(dbIndex, keys[i]);
         }
       } catch (error) {
         if (error instanceof AppError) result = new RespError(error.message);
@@ -304,10 +260,8 @@ export class ServerDispatcher {
         }
       }
       if (!(result instanceof Block) && result !== NO_REPLY) {
-        propagator.record(dbIndex, argv, result, server.persistence.dirty - dirtyBefore);
-        if (notify && before) {
-          server.keyspace.notifyCommand(dbIndex, name, args, result, before, { write: Boolean(spec.flags?.write), noop, meta });
-        }
+        propagator.record(dbIndex, argv, result, persistence.dirty - dirtyBefore);
+        if (notify && before) server.keyspace.notifyCommand(dbIndex, name, args, result, before, { write, noop, meta });
       }
       if (client.tracking && meta?.flagSet.has('readonly')) TrackingService.remember(server.tracking, client, CommandService.keyNames(meta, argv));
     } finally {
@@ -323,5 +277,68 @@ export class ServerDispatcher {
     }
     if (!mode.inScript && !meta?.flagSet.has('skip_slowlog')) server.observer.slowlogPush(client, argv, usec);
     return result;
+  }
+
+  /** Redis processCommand(): existence/arity, auth, no_multi, ACL, subscriber context, then queue (MULTI) or run. */
+  runTopLevel(client: Client, argv: string[]): void {
+    const server = this.server;
+    const name = argv[0].toLowerCase();
+    client.lastActiveAt = Date.now();
+    // CLIENT REPLY SKIP suppresses the reply of the command after it
+    client.skipCurrent = client.skipNext;
+    client.skipNext = false;
+
+    if (name === 'quit') {
+      client.lastCommand = 'quit';
+      client.write(OK);
+      client.socket?.end();
+      return;
+    }
+
+    const spec = COMMANDS.get(name);
+    const checked = this.precheckSpec(argv, name, spec);
+    if (!spec || checked.error !== null) {
+      if (!spec) Logger.warn('[ServerDispatcher.runTopLevel] Unknown command', { command: name });
+      this.rejectCommand(client, checked.error ?? unknownCommand(argv[0], argv.slice(1)), checked.statName);
+      return;
+    }
+    if (this.refused(client, argv, name, checked, Boolean(spec.flags?.noauth))) return;
+
+    if (client.multi && !MULTI_IMMEDIATE.has(name)) {
+      client.multi.push(argv);
+      client.write(QUEUED);
+      return;
+    }
+
+    server.tracking.current = client;
+    let result: HandlerResult;
+    try {
+      result = this.run(client, argv, name, spec, TOP_LEVEL_MODE, checked);
+    } finally {
+      server.tracking.current = null;
+    }
+    if (result instanceof Block) server.blocking.block(client, result, argv);
+    else if (result !== NO_REPLY) client.write(result);
+    TrackingService.flushDeferred(server.tracking, client);
+    // CLIENT CACHING applies to the next command only (a whole transaction counts as one)
+    if (!client.multi && !(name === 'client' && argv[1]?.toLowerCase() === 'caching')) client.trackingCaching = null;
+    TrackingService.enforceLimit(server.tracking);
+    server.serveReadyKeys();
+  }
+
+  /** Runs one command. Used by sockets, EXEC and Lua `redis.call`. */
+  execute(client: Client, argv: string[], mode: ExecuteMode, prechecked?: Precheck): HandlerResult {
+    const server = this.server;
+    const name = argv[0].toLowerCase();
+    const spec = COMMANDS.get(name);
+    const checked = prechecked ?? this.precheckSpec(argv, name, spec);
+    if (!spec || checked.error !== null) {
+      const message = checked.error ?? unknownCommand(argv[0], argv.slice(1));
+      if (!spec) Logger.warn('[ServerDispatcher.execute] Unknown command', { command: name });
+      if (checked.statName) server.observer.commandStat(checked.statName).rejected++;
+      if (!mode.inScript) server.countError(message);
+      return new RespError(message);
+    }
+    return this.run(client, argv, name, spec, mode, checked);
   }
 }

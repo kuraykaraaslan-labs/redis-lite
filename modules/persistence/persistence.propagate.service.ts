@@ -4,6 +4,7 @@ import { NULL_ARRAY, RespError } from '@/libs/resp';
 import PropagateBaseRules from './persistence.propagate_base.rules';
 import PropagateHashRules from './persistence.propagate_hashes.rules';
 import PropagateStreamRules from './persistence.propagate_streams.rules';
+import PropagateTimeseriesRules from './persistence.propagate_timeseries.rules';
 import type { PropagateContext, PropagatedOp } from './persistence.types';
 
 /**
@@ -266,6 +267,15 @@ export default class PersistencePropagateService {
         return PropagateStreamRules.xclaim(argv, reply, ctx);
       case 'xautoclaim':
         return PropagateStreamRules.xautoclaim(argv, reply, ctx);
+
+      // ---- time series -------------------------------------------------------------------------------------------
+      case 'ts.add':
+        return PropagateTimeseriesRules.add(argv, reply, ctx);
+      case 'ts.madd':
+        return PropagateTimeseriesRules.mAdd(argv, reply, ctx);
+      case 'ts.incrby':
+      case 'ts.decrby':
+        return PropagateTimeseriesRules.incrBy(argv, reply, ctx);
 
       default:
         return verbatim();

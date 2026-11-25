@@ -106,6 +106,8 @@ export interface CommandMeta {
   replacedBy?: string;
   args: ArgDoc[];
   parent?: CommandMeta;
+  /** The module a module command belongs to (COMMAND DOCS `module`, COMMAND LIST FILTERBY MODULE). */
+  module?: string;
 }
 
 /** A key found in a command line: its argv index and the key spec flags (RO, RW, access, update…). */

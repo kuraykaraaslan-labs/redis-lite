@@ -33,7 +33,7 @@ export class ServerConnections {
       client.netIn += chunk.length;
       if (client.protocolError) return;
       const { commands, error } = parser.parse(chunk);
-      client.pending.push(...commands);
+      for (let i = 0; i < commands.length; i++) client.pending.push(commands[i]);
       if (error !== null) client.protocolError = error;
       this.drain(client);
     });
@@ -70,21 +70,30 @@ export class ServerConnections {
     server.pubsub.forget(client);
   }
 
-  /** Runs the client's queued commands until it blocks. */
+  /**
+   * Runs the client's queued commands until it blocks. The socket is corked meanwhile, so the replies of a pipelined
+   * batch leave in one write instead of one syscall each (same bytes, same order; `end()` flushes a corked socket).
+   */
   drain(client: Client): void {
-    while (!client.closed && !client.blocked && client.pending.length) {
-      const argv = client.pending.shift() as string[];
-      this.server.dispatcher.runTopLevel(client, argv);
-      if (client.closeAfterReply) {
-        client.pending.length = 0;
-        client.socket?.end();
-        this.disconnect(client);
+    const socket = client.socket;
+    socket?.cork();
+    try {
+      while (!client.closed && !client.blocked && client.pending.length) {
+        const argv = client.pending.shift() as string[];
+        this.server.dispatcher.runTopLevel(client, argv);
+        if (client.closeAfterReply) {
+          client.pending.length = 0;
+          socket?.end();
+          this.disconnect(client);
+        }
       }
-    }
-    if (client.protocolError && !client.closed && !client.blocked && !client.pending.length && !client.protocolErrorSent) {
-      client.protocolErrorSent = true;
-      client.write(new RespError(formatMessage(ServerMessages.GENERIC_ERROR, { message: client.protocolError })), true);
-      client.socket?.end();
+      if (client.protocolError && !client.closed && !client.blocked && !client.pending.length && !client.protocolErrorSent) {
+        client.protocolErrorSent = true;
+        client.write(new RespError(formatMessage(ServerMessages.GENERIC_ERROR, { message: client.protocolError })), true);
+        socket?.end();
+      }
+    } finally {
+      if (socket && socket.writableCorked > 0) socket.uncork();
     }
   }
 

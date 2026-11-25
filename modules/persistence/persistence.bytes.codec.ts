@@ -1,5 +1,6 @@
 import { formatMessage } from '@/libs/message-format';
 
+import { RDB_VERSION } from './persistence.enums';
 import PersistenceMessages from './persistence.messages';
 
 /**
@@ -161,6 +162,15 @@ export default class PersistenceBytesCodec {
   /** The error every malformed RDB / DUMP body raises. */
   static badFormat(): Error {
     return new Error(PersistenceMessages.BAD_DATA_FORMAT);
+  }
+
+  /** A DUMP payload's footer: appends the RDB version (2 bytes LE) and the CRC-64 (8 bytes LE) of everything before it. */
+  static sealPayload(body: Buffer): Buffer {
+    const head = Buffer.concat([body, Buffer.alloc(2)]);
+    head.writeUInt16LE(RDB_VERSION, head.length - 2);
+    const crc = Buffer.alloc(8);
+    crc.writeBigUInt64LE(PersistenceBytesCodec.crc64(head), 0);
+    return Buffer.concat([head, crc]);
   }
 
   /** Redis CRC-64 (as used by RDB files and DUMP payloads). `crc` continues a previous value. */

@@ -1,9 +1,9 @@
 import { z } from 'zod';
 
-/** ACL categories in the order Redis lists them (ACL CAT). */
+/** ACL categories in the order Redis lists them (ACL CAT); module categories (time series) follow the built-in ones. */
 export const AclCategoryEnum = z.enum([
   'keyspace', 'read', 'write', 'set', 'sortedset', 'list', 'hash', 'string', 'bitmap', 'hyperloglog', 'geo', 'stream',
-  'pubsub', 'admin', 'fast', 'slow', 'blocking', 'dangerous', 'connection', 'transaction', 'scripting',
+  'pubsub', 'admin', 'fast', 'slow', 'blocking', 'dangerous', 'connection', 'transaction', 'scripting', 'timeseries',
 ]);
 
 /** What a permission check denied: the command itself, one of its keys, or one of its channels. */

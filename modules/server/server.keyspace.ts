@@ -13,7 +13,7 @@ import type { RedisValue } from '@/modules/database/database.types';
 import type { RedisLiteServer } from './server.core';
 import type { KeyState } from './server.types';
 
-/** Element count of a value (stream entries, list / set / hash / zset elements, string bytes). */
+/** Element count of a value (stream entries, list / set / hash / zset elements, time series samples, string bytes). */
 function valueSize(v: RedisValue | undefined): number {
   if (!v) return 0;
   switch (v.type) {
@@ -26,6 +26,8 @@ function valueSize(v: RedisValue | undefined): number {
       return v.value.size;
     case 'stream':
       return v.value.length;
+    case 'timeseries':
+      return v.value.totalSamples;
   }
 }
 

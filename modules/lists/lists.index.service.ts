@@ -8,6 +8,7 @@ import type { CommandContext } from '@/modules/command/command.types';
 import type { KeyInput, KeyRangeInput, LIndexInput, LInsertInput, LPosInput, LRemInput, LSetInput } from './lists.dto';
 import ListsMessages from './lists.messages';
 import ListStore from './lists.structure';
+import type { ListValue } from './lists.types';
 
 /**
  * Elements by position or value: LLEN, LRANGE, LINDEX, LSET, LREM, LTRIM, LINSERT, LPOS. Most of them run on the list
@@ -20,7 +21,7 @@ export default class ListsIndexService {
   // ──────────────────────────────────────────────
 
   /** LSET's read step: the list must exist. */
-  static readExisting(ctx: CommandContext, key: string): string[] {
+  static readExisting(ctx: CommandContext, key: string): ListValue {
     const l = ListStore.read(ctx, key);
     if (!l) throw new AppError(ListsMessages.NO_SUCH_KEY);
     return l;
@@ -34,27 +35,29 @@ export default class ListsIndexService {
     return ListStore.read(ctx, key)?.length ?? 0;
   }
 
-  static lRange(l: string[] | undefined, { start, stop }: KeyRangeInput): string[] {
-    const list = l ?? [];
-    const r = normalizeRange(start, stop, list.length);
-    return r ? list.slice(r[0], r[1] + 1) : [];
+  static lRange(l: ListValue | undefined, { start, stop }: KeyRangeInput): string[] {
+    if (!l) return [];
+    const r = normalizeRange(start, stop, l.length);
+    return r ? l.slice(r[0], r[1] + 1) : [];
   }
 
-  static lIndex(l: string[] | undefined, { index }: LIndexInput): string | null {
-    const list = l ?? [];
-    return list[index < 0 ? list.length + index : index] ?? null;
+  static lIndex(l: ListValue | undefined, { index }: LIndexInput): string | null {
+    if (!l) return null;
+    const i = index < 0 ? l.length + index : index;
+    return i >= 0 && i < l.length ? (l.at(i) ?? null) : null;
   }
 
   /** LPOS: the index of the rank-th match (nil), or with COUNT an array of up to `count` indexes (0 = all). */
-  static lPos(l: string[] | undefined, { element, rank, count, maxLen }: LPosInput): Reply {
-    const list = l ?? [];
+  static lPos(l: ListValue | undefined, { element, rank, count, maxLen }: LPosInput): Reply {
+    if (!l) return count === null ? null : [];
+    const list = l;
     const matches: number[] = [];
     const want = count === null ? 1 : count === 0 ? Infinity : count;
     let skip = Math.abs(rank) - 1;
     const forward = rank > 0;
     for (let step = 0; step < list.length && (maxLen === 0 || step < maxLen) && matches.length < want; step++) {
       const i = forward ? step : list.length - 1 - step;
-      if (list[i] !== element) continue;
+      if (list.at(i) !== element) continue;
       if (skip > 0) {
         skip--;
         continue;
@@ -68,40 +71,34 @@ export default class ListsIndexService {
   // Writes
   // ──────────────────────────────────────────────
 
-  static lSet(l: string[], { index, element }: LSetInput): Status {
+  static lSet(l: ListValue, { index, element }: LSetInput): Status {
     const i = index < 0 ? l.length + index : index;
     if (i < 0 || i >= l.length) throw new AppError(ListsMessages.INDEX_OUT_OF_RANGE);
-    l[i] = element;
+    ListStore.setAt(l, i, element);
     return OK;
   }
 
   /** LREM: removes `count` matches from the head (> 0), from the tail (< 0) or all of them (0). */
-  static lRem(ctx: CommandContext, l: string[], { key, count, element }: LRemInput): number {
-    let removed = 0;
+  static lRem(ctx: CommandContext, l: ListValue, { key, count, element }: LRemInput): number {
     const limit = count === 0 ? Infinity : Math.abs(count);
+    const drop: number[] = [];
     if (count >= 0) {
-      for (let i = 0; i < l.length && removed < limit; ) {
-        if (l[i] === element) {
-          l.splice(i, 1);
-          removed++;
-        } else i++;
-      }
+      for (let i = 0; i < l.length && drop.length < limit; i++) if (l.at(i) === element) drop.push(i);
     } else {
-      for (let i = l.length - 1; i >= 0 && removed < limit; i--) {
-        if (l[i] === element) {
-          l.splice(i, 1);
-          removed++;
-        }
-      }
+      for (let i = l.length - 1; i >= 0 && drop.length < limit; i--) if (l.at(i) === element) drop.push(i);
+      drop.reverse();
     }
+    ListStore.removeAt(l, drop);
     ctx.db.removeIfEmpty(key);
-    return removed;
+    return drop.length;
   }
 
-  static lTrim(ctx: CommandContext, l: string[], { key, start, stop }: KeyRangeInput): Status {
+  static lTrim(ctx: CommandContext, l: ListValue, { key, start, stop }: KeyRangeInput): Status {
     const r = normalizeRange(start, stop, l.length);
-    const kept = r ? l.slice(r[0], r[1] + 1) : [];
-    l.splice(0, l.length, ...kept);
+    if (r) {
+      l.splice(r[1] + 1);
+      l.splice(0, r[0]);
+    } else l.splice(0);
     ctx.db.removeIfEmpty(key);
     return OK;
   }

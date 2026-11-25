@@ -72,6 +72,7 @@ export default class CommandReplyService {
   static commandDocsReply(m: CommandMeta): RespMap {
     const flat: Reply[] = ['summary', m.summary, 'since', m.since, 'group', m.group];
     if (m.complexity) flat.push('complexity', m.complexity);
+    if (m.module) flat.push('module', m.module);
     if (m.docFlags.length) flat.push('doc_flags', CommandReplyService.statuses(m.docFlags));
     if (m.deprecatedSince) flat.push('deprecated_since', m.deprecatedSince);
     if (m.replacedBy) flat.push('replaced_by', m.replacedBy);

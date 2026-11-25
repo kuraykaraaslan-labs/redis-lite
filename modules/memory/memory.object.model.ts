@@ -186,6 +186,9 @@ export default class MemoryObjectModel {
         return O.hashSize(kv, value.value, encoding, limit, opts.fieldTtls);
       case 'stream':
         return O.streamSize(kv, value.value, limit, opts.streamNodeMaxEntries ?? 100, opts.streamNodeMaxBytes ?? 4096);
+      case 'timeseries':
+        // a module value: the kvobj plus what the series reports as its own memory (TS.INFO memoryUsage)
+        return kv + value.value.memoryUsage();
     }
   }
 }

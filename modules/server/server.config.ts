@@ -1,4 +1,8 @@
 import { formatMessage } from '@/libs/message-format';
+import { toFloat } from '@/libs/number';
+
+import TimeseriesService from '@/modules/timeseries/timeseries.service';
+import TimeseriesMessages from '@/modules/timeseries/timeseries.messages';
 
 import ServerMessages from './server.messages';
 
@@ -61,6 +65,19 @@ function normalizeSave(value: string): string | { error: string } {
   if (parts.length % 2 || parts.some((p) => !/^\d+$/.test(p))) return { error: ServerMessages.CONFIG_SAVE };
   return parts.map((p) => String(Number(p))).join(' ');
 }
+
+/** ts-ignore-max-val-diff: a non-negative double. */
+function normalizeNonNegativeDouble(value: string): string | { error: string } {
+  const n = toFloat(value);
+  return n === null || n < 0 || n === Infinity ? { error: TimeseriesMessages.BAD_IGNORE_MAX_VAL_DIFF } : value;
+}
+
+/** ts-compaction-policy: `aggregator:bucket:retention[:align]` rules separated by `;`, or "". */
+function normalizeCompactionPolicy(value: string): string | { error: string } {
+  return TimeseriesService.parseCompactionPolicy(value) === null ? { error: TimeseriesMessages.BAD_COMPACTION_POLICY } : value;
+}
+
+const TS_DUPLICATE_POLICIES = ['block', 'first', 'last', 'min', 'max', 'sum'];
 
 export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'active-expire-effort': int(1, 1n, 10n),
@@ -136,6 +153,15 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'tcp-keepalive': int(300, 0n, INT_MAX),
   timeout: int(0, 0n, INT_MAX),
   'tracking-table-max-keys': int(1000000, 0n, LONG_MAX),
+  // time series module (Redis 8 module configs)
+  'ts-chunk-size-bytes': int(4096, 48n, 1048576n),
+  'ts-compaction-policy': { type: { kind: 'special', normalize: normalizeCompactionPolicy }, default: '' },
+  'ts-duplicate-policy': oneOf('block', TS_DUPLICATE_POLICIES),
+  'ts-encoding': oneOf('compressed', ['compressed', 'uncompressed']),
+  'ts-ignore-max-time-diff': int(0, 0n, LONG_MAX),
+  'ts-ignore-max-val-diff': { type: { kind: 'special', normalize: normalizeNonNegativeDouble }, default: '0' },
+  'ts-num-threads': int(3, 1n, 16n, true),
+  'ts-retention-policy': int(0, 0n, LONG_MAX),
   unixsocket: str('', true),
   'zset-max-listpack-entries': { ...int(128, 0n, LONG_MAX), aliases: ['zset-max-ziplist-entries'] },
   'zset-max-listpack-value': { ...mem(64), aliases: ['zset-max-ziplist-value'] },

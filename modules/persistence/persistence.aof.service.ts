@@ -1,6 +1,8 @@
 import { idToString } from '@/modules/streams/streams.structure';
 
+import PersistenceBytesCodec from './persistence.bytes.codec';
 import PersistenceMessages from './persistence.messages';
+import PersistenceObjectEncoderCodec from './persistence.object_encoder.codec';
 import type { AofParseStep, RdbKeyEntry, Snapshot } from './persistence.types';
 
 /** AOF text: RESP multibulk records, their parser, and the command-form base file of an AOF rewrite. */
@@ -64,6 +66,14 @@ export default class PersistenceAofService {
             }
           }
         }
+        break;
+      }
+      case 'timeseries': {
+        // A module value: no command rebuilds it exactly (rules, open compaction buckets), so the base file restores
+        // redis-lite's own DUMP payload of it.
+        const { type, body } = PersistenceObjectEncoderCodec.encodeObject(v);
+        const payload = PersistenceBytesCodec.sealPayload(Buffer.concat([Buffer.from([type]), body]));
+        out.push(encode(['RESTORE', key, '0', payload.toString('latin1'), 'REPLACE']));
         break;
       }
     }

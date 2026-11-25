@@ -87,6 +87,9 @@ export default class DatabaseEncodingService {
       }
       case 'stream':
         return 'stream';
+      case 'timeseries':
+        // module values are reported as raw-encoded objects
+        return 'raw';
     }
   }
 
@@ -138,7 +141,7 @@ export default class DatabaseEncodingService {
    */
   static updateEncoding(v: RedisValue, config: ServerConfig, hasFieldTtl = false): void {
     const self = DatabaseEncodingService;
-    if (v.type === 'string' || v.type === 'stream') return;
+    if (v.type === 'string' || v.type === 'stream' || v.type === 'timeseries') return;
     const holder = v.value as object;
     const current = self.sticky.get(holder);
     if (current === 'hashtable' || current === 'skiplist') return;
@@ -179,7 +182,7 @@ export default class DatabaseEncodingService {
   /** OBJECT ENCODING: the current encoding (fixed on first use for aggregates). */
   static objectEncoding(v: RedisValue, config: ServerConfig, hasFieldTtl = false): string {
     const self = DatabaseEncodingService;
-    if (v.type === 'string' || v.type === 'stream') return self.naturalEncoding(v, config, hasFieldTtl);
+    if (v.type === 'string' || v.type === 'stream' || v.type === 'timeseries') return self.naturalEncoding(v, config, hasFieldTtl);
     const current = self.sticky.get(v.value as object);
     if (current !== undefined) return current;
     const natural = self.naturalEncoding(v, config, hasFieldTtl);

@@ -16,11 +16,7 @@ export default class PersistenceDumpService {
 
   /** Appends the RDB version and the CRC-64 of everything before it. */
   private static seal(body: Buffer): Buffer {
-    const head = Buffer.concat([body, Buffer.alloc(2)]);
-    head.writeUInt16LE(RDB_VERSION, head.length - 2);
-    const crc = Buffer.alloc(8);
-    crc.writeBigUInt64LE(PersistenceBytesCodec.crc64(head), 0);
-    return Buffer.concat([head, crc]);
+    return PersistenceBytesCodec.sealPayload(body);
   }
 
   // ──────────────────────────────────────────────

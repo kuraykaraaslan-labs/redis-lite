@@ -150,7 +150,7 @@ export default class CommandLookupService {
   // Private Helpers: building
   // ──────────────────────────────────────────────
 
-  private static build(row: Row, group: string, parent?: CommandMeta): CommandMeta {
+  private static build(row: Row, group: string, parent?: CommandMeta, module?: string): CommandMeta {
     const [name, arity, flagStr, aclStr, ksStr, since, summary, complexity, argStr, extra] = row;
     const keySpecs = CommandLookupService.parseKeySpecs(ksStr);
     const flagSet = new Set(flagStr.split(' ').filter(Boolean));
@@ -190,9 +190,10 @@ export default class CommandLookupService {
       replacedBy: extra?.dep?.[1],
       args: CommandLookupService.parseArgs(argStr),
       parent,
+      module,
     };
     for (const sub of extra?.subs ?? []) {
-      const m = CommandLookupService.build(sub, group, meta);
+      const m = CommandLookupService.build(sub, group, meta, module);
       meta.subcommands.set(m.name, m);
     }
     return meta;
@@ -212,7 +213,7 @@ export default class CommandLookupService {
   private static metaTable(): Map<string, CommandMeta> {
     if (CommandLookupService.table) return CommandLookupService.table;
     const all = new Map<string, CommandMeta>();
-    for (const [group, rows] of COMMAND_TABLE) for (const row of rows) all.set(row[0], CommandLookupService.build(row, group));
+    for (const [group, rows, module] of COMMAND_TABLE) for (const row of rows) all.set(row[0], CommandLookupService.build(row, group, undefined, module));
     // only the commands redis-lite implements are reported
     const out = new Map<string, CommandMeta>();
     for (const name of CommandLookupService.commands.keys()) {

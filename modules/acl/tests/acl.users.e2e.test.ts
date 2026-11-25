@@ -203,7 +203,8 @@ describe('ACL replies', () => {
   it('CAT, GENPASS, HELP and syntax errors', async () => {
     const cats = (await t.call('ACL', 'CAT')) as string[];
     expect(cats[0]).toBe('keyspace');
-    expect(cats).toHaveLength(21);
+    expect(cats).toHaveLength(22);
+    expect(cats[21]).toBe('timeseries');
     expect(await t.call('ACL', 'CAT', 'hyperloglog')).toEqual(expect.arrayContaining(['pfadd', 'pfcount', 'pfmerge']));
     expect(await errOf(t.call('ACL', 'CAT', 'nope'))).toBe("ERR Unknown category 'nope'");
     expect(await t.call('ACL', 'GENPASS', '128')).toMatch(/^[0-9a-f]{32}$/);

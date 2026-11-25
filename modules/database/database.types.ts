@@ -1,4 +1,5 @@
 import type { Stream } from '@/modules/streams/streams.structure';
+import type { TimeSeries } from '@/modules/timeseries/timeseries.structure';
 import type { ZSet } from '@/modules/zsets/zsets.structure';
 
 // ============================================================================
@@ -12,7 +13,9 @@ export type RedisValue =
   | { type: 'list'; value: string[] }
   | { type: 'set'; value: Set<string> }
   | { type: 'zset'; value: ZSet }
-  | { type: 'stream'; value: Stream };
+  | { type: 'stream'; value: Stream }
+  /** The time series module type (TYPE reports its module type name, `TSDB-TYPE`). */
+  | { type: 'timeseries'; value: TimeSeries };
 
 /** The in-memory value of each Redis type. */
 export interface ValueMap {
@@ -22,6 +25,7 @@ export interface ValueMap {
   set: Set<string>;
   zset: ZSet;
   stream: Stream;
+  timeseries: TimeSeries;
 }
 
 export type ValueType = keyof ValueMap;
