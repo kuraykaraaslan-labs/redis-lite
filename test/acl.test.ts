@@ -614,3 +614,24 @@ describe('ACL SAVE / LOAD with an aclfile', () => {
     expect(await r.send('ACL', 'LOAD')).toBe(err(`ERR Error loading ACLs, opening file '${file}': No such file or directory`));
   });
 });
+
+describe('redis.acl_check_cmd', () => {
+  it("answers for the user running the script, per the Lua API docs", async () => {
+    await t.call('ACL', 'SETUSER', 'luacheck', 'on', '>pw', '~cache:*', '+eval', '+get', '+set', '-del');
+    const c = await Conn.open(t.server.port);
+    await c.send('AUTH', 'luacheck', 'pw');
+    const check = (...argv: string[]) =>
+      c.send('EVAL', `return redis.acl_check_cmd(${argv.map((a) => `'${a}'`).join(', ')}) and 'yes' or 'no'`, '0');
+    expect(await check('GET', 'cache:1')).toBe('$3\r\nyes\r\n');
+    expect(await check('GET', 'other')).toBe('$2\r\nno\r\n');
+    expect(await check('SET', 'cache:1', 'v')).toBe('$3\r\nyes\r\n');
+    expect(await check('DEL', 'cache:1')).toBe('$2\r\nno\r\n');
+    expect(await check('HSET', 'cache:1', 'f', 'v')).toBe('$2\r\nno\r\n');
+    expect(await c.send('EVAL', "return redis.acl_check_cmd('NOSUCHCMD')", '0')).toMatch(/^-ERR Invalid command passed to redis\.acl_check_cmd\(\)/);
+    expect(await c.send('EVAL', 'return redis.acl_check_cmd()', '0')).toMatch(/^-ERR Please specify at least one argument for this redis lib call/);
+    // the default user has every permission
+    expect(await t.call('EVAL', "return redis.acl_check_cmd('FLUSHALL') and 1 or 0", '0')).toBe(1);
+    c.close();
+    await t.call('ACL', 'DELUSER', 'luacheck');
+  });
+});

@@ -61,7 +61,12 @@ redis.replicate_commands = function() return true end
 redis.REPL_NONE, redis.REPL_AOF, redis.REPL_SLAVE, redis.REPL_REPLICA, redis.REPL_ALL = 0, 1, 2, 2, 3
 redis.breakpoint = function() return false end
 redis.debug = function(...) end
-redis.acl_check_cmd = function() return true end
+local __acl_check = __redis_acl_check_cmd
+redis.acl_check_cmd = function(...)
+  local ok, r = __acl_check(...)
+  if ok then return r end
+  error(r, 0)
+end
 redis.REDIS_VERSION = '8.8.4'
 
 -- ---------- Redis Functions (FUNCTION LOAD / FCALL) ----------

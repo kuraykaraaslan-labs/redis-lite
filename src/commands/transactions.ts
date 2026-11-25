@@ -35,7 +35,7 @@ export const transactionCommands: CommandSpec[] = [
     handler: (ctx, args) => {
       if (ctx.client.multi) throw new CommandError(RespMessages.WATCH_IN_MULTI);
       for (const key of args) {
-        ctx.db.lookup(key); // expire first, so an already-expired key does not count as a change later
+        ctx.db.peek(key); // expire first, so an already-expired key does not count as a change later (no LRU/LFU touch)
         const k = `${ctx.client.dbIndex}:${key}`;
         if (!ctx.client.watched.has(k)) ctx.client.watched.set(k, ctx.server.keyVersion(ctx.client.dbIndex, key));
       }

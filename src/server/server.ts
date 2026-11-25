@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
+import { resolve as resolvePath } from 'node:path';
 import { createServer } from 'node:net';
 import type { AddressInfo, Server, Socket } from 'node:net';
 
@@ -14,17 +15,25 @@ import { LuaEngine } from '../lua/engine';
 import { RespMessages, unknownCommand, unknownSubcommand, wrongArity } from '../messages';
 import type { Reply } from '../resp';
 import { NULL_ARRAY, OK, QUEUED, RespError, RespParser, RespPush, Status } from '../resp';
-import { hashFieldExpires, hashHasFieldTtl } from '../commands/hashes';
+import { hashHasFieldTtl } from '../commands/hashes';
 import { Database } from '../store/database';
-import { objectEncoding, updateEncoding } from '../store/encoding';
-import { clientMemory, computeMemory } from '../store/memory';
-import type { KeyRecord, MemoryReport } from '../store/memory';
+import type { RedisValue } from '../store/database';
+import { updateEncoding } from '../store/encoding';
+import { clientMemory, computeMemory, memoryForEviction } from '../store/memory';
+import type { MemoryReport } from '../store/memory';
 import { matchGlob } from '../util';
 import { Acl, aclDenialMessage, noPermError } from './acl';
 import type { AclDenial, AclLogContext, AclLogInput, AclUser, KeyAccess } from './acl';
 import { Client } from './client';
 import { ServerConfig } from './config';
 import type { Waiter } from './client';
+import { Evictor, OOM_ERROR } from './eviction';
+import { MemoryTracker } from './memory-tracker';
+import { keyspaceEvents, notificationMessages, parseNotifyFlags, setWrote } from './notifications';
+import type { KeyEvent, NotifyFlags } from './notifications';
+import { Persistence } from './persistence';
+import type { Propagator } from './propagate';
+import { Tracking } from './tracking';
 
 export interface ServerOptions {
   port: number;
@@ -34,7 +43,19 @@ export interface ServerOptions {
   logLevel: 'silent' | 'warn' | 'info' | 'debug';
   /** ACL file (the immutable `aclfile` config): loaded at startup, used by ACL LOAD / ACL SAVE. */
   aclfile?: string;
+  /**
+   * Load the RDB / AOF at startup and keep the configured save points. False (the default for embedded servers): the
+   * server stays in memory (`save ""`, `appendonly no`, nothing loaded) unless `config` says otherwise.
+   */
+  persistence?: boolean;
+  /** Initial config values (redis.conf directives / CONFIG SET names), validated like CONFIG SET. */
+  config?: Record<string, string>;
+  /** Absolute path of the redis.conf the server was started with (INFO config_file). */
+  configFile?: string;
 }
+
+/** Configs that change how the memory model sizes existing keys. */
+const MEMORY_MODEL_CONFIGS = /max-listpack|max-intset|max-ziplist|stream-node|list-compress/;
 
 /** Hooks other modules plug into DEBUG (the persistence engine provides RELOAD / LOADAOF). */
 export interface DebugHooks {
@@ -93,13 +114,17 @@ const ZERO_IS_NOOP = new Set([
 ]);
 /** Write commands whose null / empty reply means nothing was modified. */
 const EMPTY_IS_NOOP = new Set([
-  'set', 'lpop', 'rpop', 'spop', 'zpopmin', 'zpopmax', 'getdel', 'getex', 'lmove', 'rpoplpush', 'lmpop', 'zmpop', 'blpop', 'brpop',
+  'lpop', 'rpop', 'spop', 'zpopmin', 'zpopmax', 'getdel', 'getex', 'lmove', 'rpoplpush', 'lmpop', 'zmpop', 'blpop', 'brpop',
   'blmove', 'brpoplpush', 'blmpop', 'bzpopmin', 'bzpopmax', 'bzmpop', 'xadd',
 ]);
 
-/** Redis only signals a key as modified (WATCH, client tracking) when the command really wrote to it. */
-function isNoop(name: string, args: string[], reply: unknown): boolean {
+/**
+ * Redis only signals a key as modified (WATCH, client tracking) when the command really wrote to it. `existed`: whether
+ * the command's first key existed before it ran (SET … GET replies the old value, so only that tells whether it wrote).
+ */
+function isNoop(name: string, args: string[], reply: Reply, existed: boolean): boolean {
   if (reply instanceof RespError) return true;
+  if (name === 'set') return !setWrote(['set', ...args], reply, existed);
   if (reply === 0 && ZERO_IS_NOOP.has(name)) return true;
   if (EMPTY_IS_NOOP.has(name) && (reply === null || reply === NULL_ARRAY || (Array.isArray(reply) && reply.length === 0))) return true;
   if (name === 'getex' && args.length === 1) return true;
@@ -119,6 +144,49 @@ function strerror(e: unknown): string {
     ENOSPC: 'No space left on device',
   };
   return (code && texts[code]) ?? (e as Error).message;
+}
+
+/** Redis chdir()s into `dir`: it must be an existing directory. The absolute path, or the strerror text. */
+export function resolveDir(dir: string): { path: string } | { error: string } {
+  const path = resolvePath(dir);
+  try {
+    if (!statSync(path).isDirectory()) return { error: 'Not a directory' };
+  } catch (e) {
+    return { error: strerror(e) };
+  }
+  return { path };
+}
+
+function checkDir(dir: string): string {
+  const r = resolveDir(dir);
+  if ('error' in r) throw new Error(`Can't chdir to '${dir}': ${r.error}`);
+  return r.path;
+}
+
+/** Element count of a value (stream entries, list / set / hash / zset elements, string bytes). */
+function valueSize(v: RedisValue | undefined): number {
+  if (!v) return 0;
+  switch (v.type) {
+    case 'string':
+    case 'list':
+      return v.value.length;
+    case 'hash':
+    case 'set':
+    case 'zset':
+      return v.value.size;
+    case 'stream':
+      return v.value.length;
+  }
+}
+
+/** Keys of a command from its key extractor; a malformed command (rejected by the handler) has none. */
+function specKeys(extract: ((args: string[]) => string[]) | undefined, args: string[]): string[] {
+  if (!extract) return [];
+  try {
+    return extract(args).filter((k): k is string => typeof k === 'string');
+  } catch {
+    return [];
+  }
 }
 
 /** Commands a client in MULTI runs right away instead of queueing. */
@@ -209,11 +277,15 @@ export class RedisLiteServer {
   readonly errorStats = new Map<string, number>();
   readonly slowlog: SlowlogEntry[] = [];
   private slowlogNextId = 0;
-  /** Unix ms of the last SAVE / BGSAVE (LASTSAVE, INFO rdb_last_save_time). */
-  lastSave = Date.now();
-  /** Writes since the last save (INFO rdb_changes_since_last_save). */
-  dirty = 0;
   lua!: LuaEngine;
+  /** RDB / AOF, the dirty counter and command propagation. */
+  readonly persistence: Persistence;
+  /** maxmemory eviction. */
+  readonly evictor: Evictor;
+  /** CLIENT TRACKING (client-side caching). */
+  readonly tracking: Tracking;
+  /** Incremental used-memory accounting. */
+  private readonly memory: MemoryTracker;
   readonly config: ServerConfig;
   /** Users, permissions and ACL LOG. */
   readonly acl: Acl;
@@ -238,11 +310,14 @@ export class RedisLiteServer {
   private servingReady = false;
   private closing: Promise<void> | null = null;
   private readonly closeListeners: Array<() => void> = [];
-  /** Bumped by every change that can alter memory accounting (cache key of memoryReport()). */
-  private memoryEpoch = 0;
-  private memoryCache: { key: string; report: MemoryReport } | null = null;
   /** Standalone Redis allocates a db's dicts on first use and keeps them (MEMORY STATS db.N). */
   private readonly dbAllocated: boolean[];
+  private readonly clientsById = new Map<number, Client>();
+  /** The eviction pass before the current top-level command could not get under maxmemory (scripts check it too). */
+  private preCommandOom = false;
+  /** SHUTDOWN already ran the persistence shutdown steps. */
+  private shutdownPrepared = false;
+  private notifyCache: { raw: string; flags: NotifyFlags | null } = { raw: '', flags: null };
 
   constructor(readonly options: ServerOptions) {
     this.config = new ServerConfig({
@@ -252,8 +327,38 @@ export class RedisLiteServer {
       requirepass: options.password ?? '',
       aclfile: options.aclfile ?? '',
     });
-    this.databases = Array.from({ length: options.databases }, (_, i) => new Database((key) => this.onExpired(i, key), this.config));
+    if (!options.persistence) {
+      // embedded servers stay in memory unless told otherwise
+      this.config.set('save', '');
+      this.config.set('appendonly', 'no');
+    }
+    this.databases = Array.from(
+      { length: options.databases },
+      (_, i) => new Database((key) => this.onExpired(i, key), this.config, (key) => this.memory.changed(i, key)),
+    );
+    this.memory = new MemoryTracker(this.databases, this.config);
     this.dbAllocated = this.databases.map(() => false);
+    this.persistence = new Persistence(this);
+    this.evictor = new Evictor(this);
+    this.tracking = new Tracking(this);
+    this.debugHooks.reload = (_client, args) => {
+      const opts = { merge: false, noflush: false, nosave: false };
+      for (const a of args) {
+        const o = a.toLowerCase();
+        if (o === 'merge') opts.merge = true;
+        else if (o === 'noflush') opts.noflush = true;
+        else if (o === 'nosave') opts.nosave = true;
+        else throw new CommandError('ERR DEBUG RELOAD only supports the MERGE, NOFLUSH and NOSAVE options.');
+      }
+      const reply = this.persistence.debugReload(opts);
+      this.evictor.clearPool();
+      return reply;
+    };
+    this.debugHooks.loadaof = () => {
+      const reply = this.persistence.debugLoadAof();
+      this.evictor.clearPool();
+      return reply;
+    };
     this.acl = new Acl({
       allCommands: () => allCommandsDeep().map((m) => m.fullname),
       categoriesOf: (name) => (getCommandMeta(name)?.acl ?? []).map((c) => `@${c}`),
@@ -261,6 +366,36 @@ export class RedisLiteServer {
       pubsubDefault: this.config.get('acl-pubsub-default') === 'allchannels' ? 'allchannels' : 'resetchannels',
       logMaxLen: this.config.num('acllog-max-len'),
     });
+    for (const [name, value] of Object.entries(options.config ?? {})) this.initConfig(name, value);
+  }
+
+  /** A startup config value (constructor `config`, redis.conf): validated like CONFIG SET. */
+  private initConfig(name: string, value: string): void {
+    if (!this.config.has(name)) throw new Error(`Bad directive or wrong number of arguments: '${name}'`);
+    const r = this.config.validate(name, value);
+    if ('error' in r) throw new Error(`Invalid value for '${name}': ${r.error}`);
+    let v = r.value;
+    if (ServerConfig.canonical(name) === 'dir') v = checkDir(v);
+    this.config.set(name, v);
+    this.applyConfig(name, v);
+  }
+
+  /** Writes since the last save (INFO rdb_changes_since_last_save). */
+  get dirty(): number {
+    return this.persistence.dirty;
+  }
+
+  /** Unix ms of the last successful save (LASTSAVE). */
+  get lastSave(): number {
+    return this.persistence.lastSave;
+  }
+
+  get propagator(): Propagator {
+    return this.persistence.propagator;
+  }
+
+  clientById(id: number): Client | undefined {
+    return this.clientsById.get(id);
   }
 
   /** The `default` ACL user (it can never be deleted). */
@@ -274,15 +409,23 @@ export class RedisLiteServer {
     const aclfile = this.config.get('aclfile') ?? '';
     if (aclfile) this.loadAclFile(aclfile);
     this.lua = await LuaEngine.create(this);
+    if (this.options.persistence) this.persistence.loadAtStartup();
+    this.persistence.start();
     const net = createServer((socket) => this.accept(socket));
     this.net = net;
-    await new Promise<void>((resolve, reject) => {
-      net.once('error', reject);
-      net.listen(this.options.port, this.options.host, () => {
-        net.off('error', reject);
-        resolve();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        net.once('error', reject);
+        net.listen(this.options.port, this.options.host, () => {
+          net.off('error', reject);
+          resolve();
+        });
       });
-    });
+    } catch (error) {
+      this.persistence.stop();
+      this.net = null;
+      throw error;
+    }
     this.sweepTimer = setInterval(() => {
       if (!this.activeExpire) return;
       const now = Date.now();
@@ -306,7 +449,21 @@ export class RedisLiteServer {
     return this.closing;
   }
 
+  /**
+   * SHUTDOWN: the persistence steps (final save per the save points / SAVE / NOSAVE, AOF flush) then the close. False
+   * when saving failed and FORCE was not given: the server keeps running.
+   */
+  shutdown(opts: { save?: boolean; nosave?: boolean; force?: boolean }): boolean {
+    if (!this.persistence.prepareShutdown(opts)) return false;
+    this.shutdownPrepared = true;
+    setImmediate(() => void this.close());
+    return true;
+  }
+
   private async doClose(): Promise<void> {
+    // like SIGTERM: final save when save points are configured; an embedded close never refuses to stop
+    if (!this.shutdownPrepared) this.persistence.prepareShutdown({ force: true });
+    this.evictor.stop();
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     for (const list of this.waiters.values()) for (const w of list) if (w.timer) clearTimeout(w.timer);
     this.waiters.clear();
@@ -315,6 +472,7 @@ export class RedisLiteServer {
       client.socket?.destroy();
     }
     this.clients.clear();
+    this.clientsById.clear();
     const net = this.net;
     this.net = null;
     if (net) await new Promise<void>((resolve) => net.close(() => resolve()));
@@ -332,6 +490,7 @@ export class RedisLiteServer {
     // clientSetDefaultAuth(): logged in as default when default is `on nopass`
     const client = new Client(this.nextClientId++, socket, !this.acl.defaultLoginAllowed(), this.defaultUser);
     this.clients.add(client);
+    this.clientsById.set(client.id, client);
     this.stats.connections++;
     const parser = new RespParser({ maxBulkLen: () => this.config.num('proto-max-bulk-len') });
     socket.on('data', (chunk: Buffer) => {
@@ -359,6 +518,8 @@ export class RedisLiteServer {
     this.stats.netOut += client.netOut;
     client.closed = true;
     this.clients.delete(client);
+    this.clientsById.delete(client.id);
+    if (client.tracking) this.tracking.disable(client);
     if (client.blocked) this.unblock(client.blocked);
     for (const ch of client.channels) this.removeSubscriber(this.channels, ch, client);
     for (const p of client.patterns) this.removeSubscriber(this.patterns, p, client);
@@ -474,21 +635,56 @@ export class RedisLiteServer {
       this.rejectCommand(client, noPermError(denial, client.user.name), fullname, name === 'exec');
       return;
     }
+    const queueing = Boolean(client.multi) && !MULTI_IMMEDIATE.has(name);
+    // performEvictions(): before every command while maxmemory is set; denyoom commands are refused when it fails
+    if (this.config.num('maxmemory') > 0) {
+      this.preCommandOom = this.evictor.perform() === 'fail';
+      // queueing in MULTI could grow memory without bound, so any queued command is refused too
+      const denyoom = queueing || meta?.flagSet.has('denyoom') || (name === 'exec' && this.queuedHasFlag(client, 'denyoom'));
+      if (this.preCommandOom && denyoom) {
+        this.rejectCommand(client, OOM_ERROR, fullname, name === 'exec');
+        return;
+      }
+    } else this.preCommandOom = false;
+    // MISCONF: a failed BGSAVE / AOF write stops writes (and PING)
+    const diskError = this.persistence.writeDeniedError();
+    if (diskError !== null) {
+      const write = meta?.flagSet.has('write') || name === 'ping' || (name === 'exec' && this.queuedHasFlag(client, 'write'));
+      if (write) {
+        this.rejectCommand(client, diskError, fullname, name === 'exec');
+        return;
+      }
+    }
     if (client.resp === 2 && client.subscriptionCount > 0 && !SUBSCRIBER_ALLOWED.has(name)) {
       this.rejectCommand(client, RespMessages.SUBSCRIBE_CONTEXT.replace('%s', name), fullname);
       return;
     }
 
-    if (client.multi && !MULTI_IMMEDIATE.has(name)) {
+    if (queueing && client.multi) {
       client.multi.push(argv);
       client.write(QUEUED);
       return;
     }
 
-    const result = this.execute(client, argv, { inScript: false, noBlock: false }, checked);
+    this.tracking.current = client;
+    let result: Reply | Block | typeof NO_REPLY;
+    try {
+      result = this.execute(client, argv, { inScript: false, noBlock: false }, checked);
+    } finally {
+      this.tracking.current = null;
+    }
     if (result instanceof Block) this.block(client, result, argv);
     else if (result !== NO_REPLY) client.write(result);
+    this.tracking.flushDeferred(client);
+    // CLIENT CACHING applies to the next command only (a whole transaction counts as one)
+    if (!client.multi && !(name === 'client' && argv[1]?.toLowerCase() === 'caching')) client.trackingCaching = null;
+    this.tracking.enforceLimit();
     this.serveReadyKeys();
+  }
+
+  /** Whether a command queued in the client's transaction has a Redis command flag (EXEC inherits write / denyoom). */
+  private queuedHasFlag(client: Client, flag: string): boolean {
+    return (client.multi ?? []).some((argv) => lookupCommand(argv).meta?.flagSet.has(flag));
   }
 
   /**
@@ -597,45 +793,21 @@ export class RedisLiteServer {
 
   // ---- memory --------------------------------------------------------------------------------------------------
 
-  private keyRecords(db: Database): KeyRecord[] {
-    const out: KeyRecord[] = [];
-    for (const key of db.keys()) {
-      const value = db.peek(key);
-      if (!value) continue;
-      const fieldTtls = value.type === 'hash' ? hashFieldExpires(value.value) : undefined;
-      out.push({
-        key,
-        value,
-        encoding: objectEncoding(value, this.config, fieldTtls !== undefined),
-        hasExpire: db.getExpire(key) !== undefined,
-        fieldTtls,
-      });
-    }
-    return out;
-  }
-
   /** used_memory and friends (getMemoryOverheadData over the whole dataset); also tracks used_memory_peak. */
   memoryReport(): MemoryReport {
-    const clientsNormal = this.clients.size * clientMemory();
-    const key = `${this.memoryEpoch}|${clientsNormal}`;
-    let report = this.memoryCache?.key === key ? this.memoryCache.report : null;
-    if (!report) {
-      const databases = this.databases.map((db, id) => {
-        const keys = this.keyRecords(db);
-        if (keys.length) this.dbAllocated[id] = true;
-        return { id, keys, allocated: this.dbAllocated[id] };
-      });
-      report = computeMemory({
-        databases,
-        clientsNormal,
-        sizes: {
-          listMaxListpackSize: this.config.num('list-max-listpack-size'),
-          streamNodeMaxEntries: this.config.num('stream-node-max-entries'),
-          streamNodeMaxBytes: this.config.num('stream-node-max-bytes'),
-        },
-      });
-      this.memoryCache = { key, report };
-    }
+    const databases = this.memory.snapshots((id, keys) => {
+      if (keys) this.dbAllocated[id] = true;
+      return this.dbAllocated[id];
+    });
+    let report = computeMemory({
+      databases,
+      clientsNormal: this.clients.size * clientMemory(),
+      sizes: {
+        listMaxListpackSize: this.config.num('list-max-listpack-size'),
+        streamNodeMaxEntries: this.config.num('stream-node-max-entries'),
+        streamNodeMaxBytes: this.config.num('stream-node-max-bytes'),
+      },
+    });
     if (report.usedMemory > this.memoryPeak) {
       this.memoryPeak = report.usedMemory;
       this.memoryPeakTime = Math.floor(Date.now() / 1000);
@@ -647,10 +819,35 @@ export class RedisLiteServer {
     return report;
   }
 
+  /** used_memory as maxmemory sees it. */
+  usedMemoryForEviction(): number {
+    return memoryForEviction(this.memoryReport());
+  }
+
+  /** Evicts one key (maxmemory): delete, propagate DEL / UNLINK, `evicted` event, WATCH and tracking invalidation. */
+  evictKey(dbIndex: number, key: string): void {
+    const db = this.databases[dbIndex];
+    if (!db.remove(key)) return;
+    this.persistence.propagator.also(dbIndex, [this.config.get('lazyfree-lazy-eviction') === 'yes' ? 'UNLINK' : 'DEL', key]);
+    this.notify(dbIndex, [{ cls: 'e', event: 'evicted', key }]);
+    const k = `${dbIndex}:${key}`;
+    this.versions.set(k, (this.versions.get(k) ?? 0) + 1);
+    this.tracking.invalidate(key, null);
+  }
+
   /** CONFIG SET side effects. */
   applyConfig(name: string, value: string): void {
-    this.memoryEpoch++;
-    switch (ServerConfig.canonical(name)) {
+    const canonical = ServerConfig.canonical(name);
+    // the memory tracker may not exist yet while the constructor applies startup configs
+    if (MEMORY_MODEL_CONFIGS.test(canonical)) this.memory?.invalidateAll();
+    switch (canonical) {
+      case 'maxmemory':
+        // lowering maxmemory evicts right away
+        if (this.evictor && Number(value) > 0) this.evictor.perform();
+        break;
+      case 'maxmemory-policy':
+        this.evictor?.clearPool();
+        break;
       case 'requirepass':
         this.acl.setRequirePass(value);
         break;
@@ -712,26 +909,59 @@ export class RedisLiteServer {
       }
     }
 
+    if (mode.inScript) {
+      // the checks processCommand() makes for top-level commands, for redis.call
+      if (spec.flags?.write || meta?.flagSet.has('write')) {
+        const diskError = this.persistence.writeDeniedError();
+        if (diskError !== null) return new RespError(diskError);
+      }
+      if (this.preCommandOom && meta?.flagSet.has('denyoom')) return new RespError(OOM_ERROR);
+    }
+
     if (this.monitors.size && !meta?.flagSet.has('skip_monitor') && !meta?.flagSet.has('admin')) this.feedMonitors(client, argv, mode.inScript);
     this.stats.commands++;
     client.commandsProcessed++;
     if (!mode.inScript) client.lastCommand = fullname;
-    const db = this.databases[client.dbIndex];
+    const dbIndex = client.dbIndex;
+    const db = this.databases[dbIndex];
     const ctx: CommandContext = { server: this, client, db, inScript: mode.inScript, noBlock: mode.noBlock, noop: false, name: argv[0] };
     db.touchOnRead = !client.noTouch || name === 'touch';
-    const started = process.hrtime.bigint();
+    const notify = this.notifyFlags();
+    // read commands only need their keys for keyspace notifications (keymiss)
+    let keys: string[] = [];
+    if (spec.keys) keys = specKeys(spec.keys, args);
+    else if (notify && meta) keys = (keysFromSpecs(meta, argv) ?? []).map((r) => argv[r.index]);
+    const propagator = this.persistence.propagator;
+    propagator.enter(name);
     let result: Reply | Block | typeof NO_REPLY;
+    const started = process.hrtime.bigint();
     try {
-      result = spec.handler(ctx, args);
-      if (spec.flags?.write && spec.keys && !ctx.noop && !isNoop(name, args, result)) {
-        for (const key of spec.keys(args)) this.touch(client.dbIndex, key);
+      // the state of the command's keys before it runs: `new` / `keymiss` events, and SET … GET's no-op test
+      const before = notify || name === 'set' ? this.keyStates(db, keys) : null;
+      const dirtyBefore = this.persistence.dirty;
+      let noop = false;
+      try {
+        result = spec.handler(ctx, args);
+        if (!(result instanceof Block) && result !== NO_REPLY) {
+          noop = ctx.noop || isNoop(name, args, result, before?.get(keys[0])?.exists ?? false);
+          if (spec.flags?.write && !noop) for (const key of keys) this.touch(dbIndex, key);
+        }
+      } catch (error) {
+        if (error instanceof CommandError) result = new RespError(error.message);
+        else {
+          this.log('warn', `internal error in ${name}: ${(error as Error).stack ?? String(error)}`);
+          result = new RespError(`ERR ${(error as Error).message}`);
+        }
       }
-    } catch (error) {
-      if (error instanceof CommandError) result = new RespError(error.message);
-      else {
-        this.log('warn', `internal error in ${name}: ${(error as Error).stack ?? String(error)}`);
-        result = new RespError(`ERR ${(error as Error).message}`);
+      if (!(result instanceof Block) && result !== NO_REPLY) {
+        propagator.record(dbIndex, argv, result, this.persistence.dirty - dirtyBefore);
+        if (notify && before) this.notifyCommand(dbIndex, name, args, result, keys, before, Boolean(spec.flags?.write), noop, meta);
       }
+      if (client.tracking && meta?.flagSet.has('readonly')) {
+        this.tracking.remember(client, (keysFromSpecs(meta, argv) ?? []).map((r) => argv[r.index]));
+      }
+    } finally {
+      propagator.exit();
     }
     const usec = Number((process.hrtime.bigint() - started) / 1000n);
     const stat = this.commandStat(fullname);
@@ -745,10 +975,102 @@ export class RedisLiteServer {
     return result;
   }
 
+  // ---- keyspace notifications ----------------------------------------------------------------------------------
+
+  /** Parsed notify-keyspace-events, or null when no notification can be published (or while loading). */
+  private notifyFlags(): NotifyFlags | null {
+    const raw = this.config.get('notify-keyspace-events') ?? '';
+    if (raw !== this.notifyCache.raw) {
+      const flags = parseNotifyFlags(raw);
+      this.notifyCache = { raw, flags: (flags.keyspace || flags.keyevent) && flags.classes.size ? flags : null };
+    }
+    return this.persistence.loading ? null : this.notifyCache.flags;
+  }
+
+  /** Publishes keyspace / keyevent messages for events in database `dbIndex` (an event may name another db). */
+  notify(dbIndex: number, events: readonly KeyEvent[]): void {
+    const flags = this.notifyFlags();
+    if (!flags || !events.length) return;
+    for (const e of events) for (const [channel, message] of notificationMessages(flags, e.db ?? dbIndex, e)) this.publish(channel, message);
+  }
+
+  private keyStates(db: Database, keys: readonly string[]): Map<string, { exists: boolean; size: number }> {
+    const out = new Map<string, { exists: boolean; size: number }>();
+    for (const key of keys) {
+      if (out.has(key)) continue;
+      const v = db.peek(key);
+      out.set(key, { exists: v !== undefined, size: valueSize(v) });
+    }
+    return out;
+  }
+
+  /** Events of one executed command: `new` for created keys, the command's own events, `keymiss` for missed reads. */
+  private notifyCommand(
+    dbIndex: number,
+    name: string,
+    args: string[],
+    reply: Reply,
+    keys: readonly string[],
+    before: Map<string, { exists: boolean; size: number }>,
+    write: boolean,
+    noop: boolean,
+    meta: CommandMeta | undefined,
+  ): void {
+    if (reply instanceof RespError) return;
+    const db = this.databases[dbIndex];
+    const exists = (key: string): boolean => db.peek(key) !== undefined;
+    const events: KeyEvent[] = [];
+    if (write && !noop) {
+      for (const key of before.keys()) if (!before.get(key)?.exists && exists(key)) events.push({ cls: 'n', event: 'new', key });
+      events.push(
+        ...keyspaceEvents({
+          name,
+          args,
+          reply,
+          existedBefore: (key) => before.get(key)?.exists ?? false,
+          existsAfter: exists,
+          sizeBefore: (key) => before.get(key)?.size ?? 0,
+          sizeAfter: (key) => valueSize(db.peek(key)),
+        }),
+      );
+    }
+    if (!write && meta?.flagSet.has('readonly')) {
+      for (const [key, state] of before) if (!state.exists) events.push({ cls: 'm', event: 'keymiss', key });
+    }
+    this.notify(dbIndex, events);
+  }
+
+  /** Hash fields expired lazily (hash field TTL): `hexpired`, plus `del` when the hash is gone. */
+  fieldsExpired(dbIndex: number, key: string, keyDeleted: boolean): void {
+    this.memory.changed(dbIndex, key);
+    const events: KeyEvent[] = [{ cls: 'h', event: 'hexpired', key }];
+    if (keyDeleted) events.push({ cls: 'g', event: 'del', key });
+    this.notify(dbIndex, events);
+  }
+
+  /**
+   * FLUSHDB / FLUSHALL: empties the databases, counts the removed keys as changes, invalidates WATCHes and every
+   * tracking client's cache. FLUSHALL also kills a running BGSAVE and saves at once when save points are configured.
+   */
+  flushDatabases(indexes: readonly number[], all: boolean): void {
+    for (const i of indexes) {
+      this.persistence.markDirty(this.databases[i].keys().length);
+      this.signalFlushedDb(i);
+      this.databases[i].flush();
+    }
+    this.tracking.flushed();
+    this.evictor.clearPool();
+    if (all) {
+      this.persistence.afterFlushAll();
+      this.persistence.markDirty(1);
+    }
+  }
+
   /** Marks a key modified: invalidates WATCH and wakes clients blocked on it. */
   touch(dbIndex: number, key: string): void {
-    this.dirty++;
-    this.memoryEpoch++;
+    this.persistence.markDirty(1);
+    this.memory.changed(dbIndex, key);
+    this.tracking.invalidate(key, this.tracking.current);
     const value = this.databases[dbIndex]?.peek(key);
     if (value) this.dbAllocated[dbIndex] = true;
     if (value) updateEncoding(value, this.config, value.type === 'hash' && hashHasFieldTtl(value.value));
@@ -761,11 +1083,14 @@ export class RedisLiteServer {
     return this.versions.get(`${dbIndex}:${key}`) ?? 0;
   }
 
+  /** A key expired (on access or by the active cycle): DEL / UNLINK propagation, `expired` event, invalidation. */
   private onExpired(dbIndex: number, key: string): void {
     this.stats.expired++;
-    this.memoryEpoch++;
     const k = `${dbIndex}:${key}`;
     this.versions.set(k, (this.versions.get(k) ?? 0) + 1);
+    this.persistence.propagator.expired(dbIndex, key);
+    this.notify(dbIndex, [{ cls: 'x', event: 'expired', key }]);
+    this.tracking.invalidate(key, null);
   }
 
   // ---- transactions --------------------------------------------------------------------------------------------
@@ -811,8 +1136,7 @@ export class RedisLiteServer {
    */
   signalFlushedDb(dbIndex: number, other?: number): void {
     // the peak is sampled on demand; take a sample before a database is emptied
-    if (other === undefined && this.databases[dbIndex]?.keys().length) this.memoryReport();
-    this.memoryEpoch++;
+    if (other === undefined && this.databases[dbIndex]?.storedKeys) this.memoryReport();
     const prefix = `${dbIndex}:`;
     const bumped = new Set<string>();
     for (const c of this.clients) {
@@ -902,10 +1226,11 @@ export class RedisLiteServer {
               released.push(waiter.client);
               continue;
             }
-            const reply = waiter.retry();
+            const reply = this.retryBlocked(waiter);
             if (reply === undefined) continue;
             this.unblock(waiter);
             waiter.client.write(reply);
+            this.tracking.flushDeferred(waiter.client);
             released.push(waiter.client);
           }
         }
@@ -915,6 +1240,35 @@ export class RedisLiteServer {
     }
     for (const client of released) this.drain(client);
     if (this.readyKeys.size) this.serveReadyKeys();
+  }
+
+  /**
+   * Tries to serve a blocked client. A served command is its own execution unit: it is propagated (as its non-blocking
+   * form) and its keyspace events are published, like a command that just ran.
+   */
+  private retryBlocked(waiter: Waiter): Reply | undefined {
+    const { client, argv } = waiter;
+    const db = this.databases[client.dbIndex];
+    const name = argv?.[0].toLowerCase() ?? '';
+    const spec = COMMANDS.get(name);
+    const keys = argv ? specKeys(spec?.keys, argv.slice(1)) : [];
+    const notify = argv ? this.notifyFlags() : null;
+    const before = notify ? this.keyStates(db, keys) : null;
+    const dirtyBefore = this.persistence.dirty;
+    const propagator = this.persistence.propagator;
+    propagator.enter(name);
+    this.tracking.current = client;
+    try {
+      const reply = waiter.retry();
+      if (reply !== undefined && argv) {
+        propagator.record(client.dbIndex, argv, reply, this.persistence.dirty - dirtyBefore);
+        if (before) this.notifyCommand(client.dbIndex, name, argv.slice(1), reply, keys, before, true, false, lookupCommand(argv).meta);
+      }
+      return reply;
+    } finally {
+      this.tracking.current = null;
+      propagator.exit();
+    }
   }
 
   /** A blocked command is re-checked against the ACLs before it is served (Redis reprocesses it): NOPERM when revoked. */
@@ -985,7 +1339,6 @@ export class RedisLiteServer {
 
   /** SWAPDB: exchanges the contents of two databases, invalidates WATCHes and serves clients blocked on keys that now exist. */
   swapDatabases(a: number, b: number): void {
-    this.memoryEpoch++;
     this.signalFlushedDb(a, b);
     if (a !== b) this.signalFlushedDb(b, a);
     this.databases[a].swapWith(this.databases[b]);

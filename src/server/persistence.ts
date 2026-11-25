@@ -126,7 +126,7 @@ export function formatG17(n: number): string {
 // ---- manifest --------------------------------------------------------------------------------------------------
 
 /** sdssplitargs(): space-separated words, "double quoted" with C escapes or 'single quoted'. */
-function splitArgs(line: string): string[] | null {
+export function splitArgs(line: string): string[] | null {
   const out: string[] = [];
   let i = 0;
   while (i < line.length) {

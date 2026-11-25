@@ -54,9 +54,19 @@ export class Client {
   noTouch = false;
   /** In MONITOR mode: receives every command the server runs. */
   monitor = false;
-  /** CLIENT TRACKING ON (accepted, invalidation messages are not implemented) and its REDIRECT target (0 = none). */
+  /** CLIENT TRACKING ON and its REDIRECT target (0 = none). */
   tracking = false;
   trackingRedirect = 0;
+  /** Tracking options: BCAST, OPTIN, OPTOUT, NOLOOP; the BCAST prefixes ('' = every key). */
+  trackingBcast = false;
+  trackingOptin = false;
+  trackingOptout = false;
+  trackingNoloop = false;
+  readonly trackingPrefixes = new Set<string>();
+  /** CLIENT CACHING YES / NO, for the next command (or transaction / script) only. */
+  trackingCaching: 'yes' | 'no' | null = null;
+  /** The REDIRECT client went away (CLIENT LIST flag R, TRACKINGINFO broken_redirect). */
+  trackingRedirectBroken = false;
   /** CLIENT NO-EVICT ON. */
   noEvict = false;
   /** CLIENT REPLY OFF: no replies at all. */

@@ -652,7 +652,10 @@ export interface KeyRecord {
 
 export interface DbSnapshot {
   id: number;
-  keys: Iterable<KeyRecord>;
+  /** The keys to size; ignored when `totals` is given. */
+  keys?: Iterable<KeyRecord>;
+  /** Already-summed figures (incremental accounting keeps them up to date instead of rescanning the keys). */
+  totals?: { keys: number; expires: number; dataset: number };
   /**
    * Whether the db's dicts are allocated. Standalone Redis allocates a db's dicts on first use and keeps them after
    * the db empties (shown in MEMORY STATS as db.N). Default: the db has keys.
@@ -690,10 +693,10 @@ export interface DbSizeOptions {
 
 /** Per-db dataset bytes and hash-table overhead, as getMemoryOverheadData computes them. */
 export function dbOverhead(db: DbSnapshot, opts: DbSizeOptions = {}): DbOverhead {
-  let keys = 0;
-  let expires = 0;
-  let dataset = 0;
-  for (const r of db.keys) {
+  let keys = db.totals?.keys ?? 0;
+  let expires = db.totals?.expires ?? 0;
+  let dataset = db.totals?.dataset ?? 0;
+  for (const r of db.totals ? [] : (db.keys ?? [])) {
     keys++;
     if (r.hasExpire) expires++;
     dataset += objectSize(r.key, r.value, r.encoding, {

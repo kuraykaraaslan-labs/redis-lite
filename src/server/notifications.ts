@@ -1,3 +1,6 @@
+/**
+ * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
+ */
 import type { Reply } from '../resp';
 import { NULL_ARRAY, RespError } from '../resp';
 
@@ -16,6 +19,8 @@ export interface KeyEvent {
   cls: string;
   event: string;
   key: string;
+  /** Database the event belongs to when it is not the command's own (MOVE / COPY … DB). */
+  db?: number;
 }
 
 /** What the server knows about one execution, for deriving events. */
@@ -29,15 +34,32 @@ export interface Execution {
   existsAfter: (key: string) => boolean;
   /** Keys whose TTL was set by the command (EX/PX/… options), for the extra `expire` event. */
   hadTtlOption?: boolean;
+  /** Number of elements of a key before / after the command (streams: entries), when known. */
+  sizeBefore?: (key: string) => number;
+  sizeAfter?: (key: string) => number;
 }
 
-const ev = (cls: string, event: string, key: string): KeyEvent => ({ cls, event, key });
+const ev = (cls: string, event: string, key: string, db?: number): KeyEvent => (db === undefined ? { cls, event, key } : { cls, event, key, db });
+
+/**
+ * Whether SET stored its value. Without GET the reply tells (OK / null); with GET the reply is the old value, so the
+ * NX / XX condition is evaluated against whether the key existed before.
+ */
+export function setWrote(args: readonly string[], reply: Reply, existedBefore: boolean): boolean {
+  if (reply instanceof RespError) return false;
+  const opts = args.slice(2).map((a) => a.toLowerCase());
+  if (!opts.includes('get')) return reply !== null;
+  if (opts.includes('nx')) return !existedBefore;
+  if (opts.includes('xx')) return existedBefore;
+  return true;
+}
 
 function ok(reply: Reply): boolean {
   return !(reply instanceof RespError) && reply !== null && reply !== NULL_ARRAY;
 }
 
 function positive(reply: Reply): boolean {
+  if (Array.isArray(reply) && reply.length === 0) return false;
   return typeof reply === 'number' ? reply > 0 : typeof reply === 'bigint' ? reply > 0n : ok(reply);
 }
 
@@ -61,8 +83,12 @@ const EMITTERS: Record<string, Emitter> = {
   unlink: (x) => x.args.filter((k) => x.existedBefore(k) && !x.existsAfter(k)).map((k) => ev('g', 'del', k)),
   rename: (x) => (ok(x.reply) ? [ev('g', 'rename_from', x.args[0]), ev('g', 'rename_to', x.args[1])] : []),
   renamenx: (x) => (x.reply === 1 ? [ev('g', 'rename_from', x.args[0]), ev('g', 'rename_to', x.args[1])] : []),
-  move: (x) => (x.reply === 1 ? [ev('g', 'move_from', x.args[0]), ev('g', 'move_to', x.args[0])] : []),
-  copy: (x) => (x.reply === 1 ? [ev('g', 'copy_to', x.args[1])] : []),
+  move: (x) => (x.reply === 1 ? [ev('g', 'move_from', x.args[0]), ev('g', 'move_to', x.args[0], Number(x.args[1]))] : []),
+  copy: (x) => {
+    if (x.reply !== 1) return [];
+    const i = x.args.findIndex((a, j) => j >= 2 && a.toLowerCase() === 'db');
+    return [ev('g', 'copy_to', x.args[1], i >= 0 ? Number(x.args[i + 1]) : undefined)];
+  },
   restore: (x) => (ok(x.reply) ? [ev('g', 'restore', x.args[0])] : []),
   expire: (x) => expireEvents(x),
   pexpire: (x) => expireEvents(x),
@@ -78,7 +104,7 @@ const EMITTERS: Record<string, Emitter> = {
 
   // ---- strings ----
   set: (x) => {
-    if (!ok(x.reply) && !x.args.some((a) => a.toLowerCase() === 'get')) return [];
+    if (!setWrote(['set', ...x.args], x.reply, x.existedBefore(x.args[0]))) return [];
     if (!x.existsAfter(x.args[0])) return [];
     const out = [ev('$', 'set', x.args[0])];
     if (ttlOption(x.args, 2)) out.push(ev('g', 'expire', x.args[0]));
@@ -97,9 +123,10 @@ const EMITTERS: Record<string, Emitter> = {
   },
   setrange: (x) => (x.existsAfter(x.args[0]) && x.args[2] !== '' ? [ev('$', 'setrange', x.args[0])] : []),
   incr: (x) => (ok(x.reply) ? [ev('$', 'incrby', x.args[0])] : []),
-  decr: (x) => (ok(x.reply) ? [ev('$', 'decrby', x.args[0])] : []),
+  // the docs: "INCR, DECR, INCRBY, DECRBY commands all generate incrby events"
+  decr: (x) => (ok(x.reply) ? [ev('$', 'incrby', x.args[0])] : []),
   incrby: (x) => (ok(x.reply) ? [ev('$', 'incrby', x.args[0])] : []),
-  decrby: (x) => (ok(x.reply) ? [ev('$', 'decrby', x.args[0])] : []),
+  decrby: (x) => (ok(x.reply) ? [ev('$', 'incrby', x.args[0])] : []),
   incrbyfloat: (x) => (ok(x.reply) ? [ev('$', 'incrbyfloat', x.args[0])] : []),
   append: (x) => (ok(x.reply) ? [ev('$', 'append', x.args[0])] : []),
   setbit: (x) => (ok(x.reply) ? [ev('$', 'setbit', x.args[0])] : []),
@@ -141,7 +168,19 @@ const EMITTERS: Record<string, Emitter> = {
   hexpireat: (x) => fieldTtlEvents(x),
   hpexpireat: (x) => fieldTtlEvents(x),
   hpersist: (x) => (Array.isArray(x.reply) && x.reply.includes(1) ? [ev('h', 'hpersist', x.args[0])] : []),
-  hsetex: (x) => (x.reply === 1 ? [ev('h', 'hset', x.args[0])] : []),
+  hsetex: (x) => {
+    if (x.reply !== 1) return [];
+    const out = [ev('h', 'hset', x.args[0])];
+    if (x.args.some((a) => /^(ex|px|exat|pxat)$/i.test(a))) out.push(ev('h', 'hexpire', x.args[0]));
+    return out;
+  },
+  hgetex: (x) => {
+    if (!Array.isArray(x.reply) || !x.reply.some((r) => r !== null)) return [];
+    const opt = x.args.find((a) => /^(ex|px|exat|pxat|persist)$/i.test(a));
+    if (!opt) return [];
+    if (!x.existsAfter(x.args[0])) return withDel([ev('h', 'hdel', x.args[0])], x, x.args[0]);
+    return [ev('h', opt.toLowerCase() === 'persist' ? 'hpersist' : 'hexpire', x.args[0])];
+  },
 
   // ---- sets ----
   sadd: same('s', 'sadd'),
@@ -179,15 +218,19 @@ const EMITTERS: Record<string, Emitter> = {
   xadd: (x) => {
     if (!ok(x.reply)) return [];
     const out = [ev('t', 'xadd', x.args[0])];
-    if (x.args.some((a) => /^(maxlen|minid)$/i.test(a))) out.push(ev('t', 'xtrim', x.args[0]));
+    // xtrim follows only when the trimming option really removed entries
+    const key = x.args[0];
+    const trimmed = x.sizeBefore && x.sizeAfter ? x.sizeAfter(key) < x.sizeBefore(key) + 1 : x.args.some((a) => /^(maxlen|minid)$/i.test(a));
+    if (trimmed && x.args.some((a) => /^(maxlen|minid)$/i.test(a))) out.push(ev('t', 'xtrim', key));
     return out;
   },
   xdel: same('t', 'xdel'),
   xtrim: same('t', 'xtrim'),
   xsetid: (x) => (ok(x.reply) ? [ev('t', 'xsetid', x.args[0])] : []),
   xgroup: (x) => {
-    if (!ok(x.reply) || x.reply === 0) return [];
     const sub = (x.args[0] ?? '').toLowerCase();
+    // DELCONSUMER replies the consumer's pending count, which may be 0
+    if (!ok(x.reply) || (x.reply === 0 && sub !== 'delconsumer')) return [];
     const names: Record<string, string> = {
       create: 'xgroup-create',
       createconsumer: 'xgroup-createconsumer',
@@ -238,7 +281,7 @@ function storeEvents(x: Execution, cls: string, event: string): KeyEvent[] {
   return x.existedBefore(dst) ? [ev('g', 'del', dst)] : [];
 }
 
-/** Events for one executed command (without the `new` / `keymiss` classes, which the server adds itself). */
+/** Events for one executed command (without the `new` / `keymiss` / `expired` / `evicted` classes, which the server adds itself). */
 export function keyspaceEvents(x: Execution): KeyEvent[] {
   if (x.reply instanceof RespError) return [];
   const emit = EMITTERS[x.name];

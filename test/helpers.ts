@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
 import type { Socket } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import Redis from 'ioredis';
 import { afterAll, beforeAll } from 'vitest';
@@ -26,11 +29,20 @@ export interface TestServer {
   raw: () => Promise<RawClient>;
 }
 
+/** A fresh temporary directory, removed when the test file ends (servers never write into the repository). */
+export function tempDir(prefix = 'redis-lite-test-'): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 export function useServer(options: RedisLiteOptions = {}): TestServer {
   const extra: Array<{ close(): void }> = [];
   const t = {} as TestServer;
+  const dir = tempDir();
   beforeAll(async () => {
-    t.server = await RedisLite.start({ port: 0, ...options });
+    // a temp dir for SAVE / BGSAVE / AOF; no save points unless the test asks for them
+    t.server = await RedisLite.start({ port: 0, dir, save: '', ...options });
     t.redis = new Redis(t.server.url, { maxRetriesPerRequest: null });
     t.call = (...args) => t.redis.call(String(args[0]), ...args.slice(1).map((a) => (Buffer.isBuffer(a) ? a : String(a))));
     t.client = () => {

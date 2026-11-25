@@ -5,6 +5,7 @@ import type { Protocol } from '../resp';
 import { OK, PONG, RespError, RespMap, RespSet, RespVerbatim, Status } from '../resp';
 import type { Client } from '../server/client';
 import type { RedisLiteServer } from '../server/server';
+import { parseTrackingArgs } from '../server/tracking';
 import { parseInteger } from '../util';
 import { HELP_TEXT } from './meta-table';
 import type { CommandContext, CommandSpec } from './types';
@@ -58,6 +59,8 @@ function clientFlags(c: Client): string {
   if (c.multi) f += 'x';
   if (c.blocked) f += 'b';
   if (c.tracking) f += 't';
+  if (c.trackingRedirectBroken) f += 'R';
+  if (c.trackingBcast) f += 'B';
   if (c.closeAfterReply) f += 'c';
   if (c.noEvict) f += 'e';
   if (c.noTouch) f += 'T';
@@ -214,25 +217,16 @@ function client(ctx: CommandContext, args: string[]): Reply | typeof NO_REPLY {
     }
     case 'getredir':
       return c.tracking ? c.trackingRedirect : -1;
-    case 'trackinginfo':
-      return RespMap.from(['flags', new RespSet([c.tracking ? 'on' : 'off']), 'redirect', c.tracking ? c.trackingRedirect : -1, 'prefixes', []]);
-    case 'tracking': {
-      const on = parseOnOff(args[1]);
-      let redirect = 0;
-      for (let i = 2; i < args.length; i++) {
-        const opt = args[i].toLowerCase();
-        if (opt === 'redirect' && i + 1 < args.length) {
-          redirect = parseInteger(args[++i]);
-          if (![...ctx.server.clients].some((x) => x.id === redirect)) throw new CommandError('ERR The client ID you want redirect to does not exist');
-        } else if (opt === 'prefix' && i + 1 < args.length) i++;
-        else if (opt !== 'bcast' && opt !== 'optin' && opt !== 'optout' && opt !== 'noloop') throw new CommandError(RespMessages.SYNTAX);
-      }
-      c.tracking = on;
-      c.trackingRedirect = on ? redirect : 0;
-      return OK;
+    case 'trackinginfo': {
+      const info = ctx.server.tracking.info(c);
+      return RespMap.from(['flags', new RespSet(info.flags), 'redirect', info.redirect, 'prefixes', info.prefixes]);
     }
+    case 'tracking':
+      ctx.server.tracking.configure(c, parseTrackingArgs(args.slice(1)));
+      return OK;
     case 'caching':
-      throw new CommandError('ERR CLIENT CACHING can be called only when the client is in tracking mode with OPTIN or OPTOUT mode enabled');
+      ctx.server.tracking.caching(c, args[1]);
+      return OK;
     case 'help':
       return helpReply('client', HELP_TEXT.client);
     case 'no-touch':
@@ -320,8 +314,7 @@ function reset(ctx: CommandContext): Reply {
   c.resp = 2;
   c.noTouch = false;
   c.noEvict = false;
-  c.tracking = false;
-  c.trackingRedirect = 0;
+  ctx.server.tracking.disable(c);
   c.replyOff = false;
   c.skipNext = false;
   c.skipCurrent = false;

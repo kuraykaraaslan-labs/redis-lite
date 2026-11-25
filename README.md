@@ -6,7 +6,7 @@
 
 **A Redis-compatible server written in TypeScript. Run your Redis-backed Node.js app without installing Redis.**
 
-redis-lite speaks the Redis protocol (RESP2 and RESP3) and aims to behave **exactly like Redis 8.8**: the same replies, the same error texts, the same object encodings and the same binary formats. Point `REDIS_URL` at it and your code keeps working, including **BullMQ**, Lua scripts, Redis Functions, streams with consumer groups, geo, bitmaps and HyperLogLog. It supports **241 commands** and needs no Docker, no native build and no code changes.
+redis-lite speaks the Redis protocol (RESP2 and RESP3) and aims to behave **exactly like Redis 8.8**: the same replies, the same error texts, the same object encodings and the same binary formats. Point `REDIS_URL` at it and your code keeps working, including **BullMQ**, Lua scripts, Redis Functions, streams with consumer groups, geo, bitmaps and HyperLogLog. It supports **242 commands** and needs no Docker, no native build and no code changes.
 
 ```bash
 npx @kuraykaraaslan/redis-lite
@@ -18,7 +18,7 @@ npx @kuraykaraaslan/redis-lite
 >
 > **Good fits:** development, CI, tests, and small single-node installs. **Not a fit:** high-volume production traffic, or anything that needs replication or clustering (not available yet).
 >
-> **Data is in memory only for now.** RDB and AOF persistence are implemented and tested but not yet wired into the server, so a restart loses everything (see [Status](#status)).
+> **Persistence:** the CLI persists like Redis (RDB save points on, AOF off, files in the current directory). Servers started from code stay in memory unless you pass persistence options (see [From code](#from-code)).
 
 ---
 
@@ -42,6 +42,7 @@ Requires Node.js 20 or newer. Pure JavaScript plus a WASM Lua engine: no native 
 
 ```bash
 npx @kuraykaraaslan/redis-lite --port 6379
+npx @kuraykaraaslan/redis-lite /path/to/redis.conf --port 6380
 ```
 
 | Option | Env variable | Default |
@@ -50,7 +51,13 @@ npx @kuraykaraaslan/redis-lite --port 6379
 | `-h, --host <addr>` | `REDIS_LITE_HOST` | `127.0.0.1` |
 | `--password <pw>` | `REDIS_LITE_PASSWORD` | none (the `default` user is `nopass`) |
 | `--databases <n>` | | `16` |
+| `--dir <path>` | `REDIS_LITE_DIR` | current directory |
+| `--dbfilename <name>` | `REDIS_LITE_DBFILENAME` | `dump.rdb` |
+| `--appendonly yes\|no` | `REDIS_LITE_APPENDONLY` | `no` |
+| `--save "<seconds> <changes> ..."` | `REDIS_LITE_SAVE` | `"3600 1 300 100 60 10000"` (`""` disables RDB snapshots) |
 | `--log-level <level>` | `REDIS_LITE_LOG_LEVEL` | `warn` (`silent`, `warn`, `info`, `debug`) |
+
+**Config file.** An optional `redis.conf` path can be given as the first argument. It uses the redis.conf syntax: one `name value` directive per line, `#` comments, quoted arguments (`"double"` with escapes, `'single'`), `include <path>`, and repeated `save` lines that add save points (`save ""` clears them). `port`, `bind` (first address), `requirepass`, `databases`, `aclfile`, `dir`, `dbfilename`, `appendonly` and `save` map to the options above; every other directive redis-lite knows is applied as with `CONFIG SET`. Directives redis-lite does not support are reported on stderr and ignored (Redis refuses to start). Precedence: command-line options, then the config file, then the environment.
 
 With `--log-level warn`, any command redis-lite doesn't support is logged, so gaps show up quickly. Runtime settings are changed with `CONFIG SET`, as in Redis.
 
@@ -78,7 +85,13 @@ console.log(server.url);                          // redis://127.0.0.1:53817
 await server.close();
 ```
 
-`RedisLite.start(options)` accepts the same options as the CLI: `port`, `host`, `password`, `databases`, `logLevel`.
+`RedisLite.start(options)` accepts `port`, `host`, `password`, `databases`, `logLevel`, `aclfile`, the persistence options `dir`, `dbfilename`, `appendonly` (boolean or `'yes'`/`'no'`) and `save`, and `config` (any other config directive, e.g. `{ 'maxmemory': '100mb', 'maxmemory-policy': 'allkeys-lru' }`).
+
+Without any of `dir`, `dbfilename`, `appendonly` or `save`, the server stays **in memory**: no save points, no AOF, nothing loaded at startup. Giving any of them turns persistence on with Redis's defaults for the rest (save points `3600 1 300 100 60 10000`, `appendonly no`, `dir` = current directory): the RDB / AOF in `dir` is loaded at startup and `close()` saves like a `SIGTERM` does.
+
+```ts
+const server = await RedisLite.start({ port: 6379, dir: './data', appendonly: true });
+```
 
 ### In tests (Vitest / Jest)
 
@@ -124,7 +137,7 @@ await queue.add('welcome', { to: 'someone@example.com' }, { attempts: 3, backoff
 
 ## Compatibility
 
-redis-lite reports itself as **Redis 8.8.4** (`INFO`, `HELLO`, `LOLWUT`, Lua's `redis.REDIS_VERSION`) with `maxmemory-policy noeviction`, so version and eviction-policy checks pass.
+redis-lite reports itself as **Redis 8.8.4** (`INFO`, `HELLO`, `LOLWUT`, Lua's `redis.REDIS_VERSION`) with `maxmemory-policy noeviction` by default, so version and eviction-policy checks pass.
 
 Tested end to end with real clients:
 
@@ -148,13 +161,17 @@ The test suite has **over 1,000 tests**, most of them written from the Redis doc
 - **LRU/LFU** access tracking: `OBJECT IDLETIME`, `OBJECT FREQ` (Redis's logarithmic counter and decay), `CLIENT NO-TOUCH`.
 - **Observability:** `INFO` with Redis's sections including `commandstats` and `errorstats`, a real `SLOWLOG`, `COMMAND INFO` / `DOCS` / `GETKEYS` driven by full command metadata (key specs, ACL categories, tips).
 - **`CONFIG`:** Redis's config table with types, bounds, memory units, aliases and error texts; settings take effect.
+- **Persistence:** RDB snapshots (`SAVE`, `BGSAVE [SCHEDULE]`, save points, `LASTSAVE`, load at startup, `DEBUG RELOAD`), the multi-part AOF of Redis 7+ (manifest, base + incr files, `appendfsync`, `BGREWRITEAOF`, automatic rewrites, `DEBUG LOADAOF`, `aof-load-truncated`), `SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT]`, `MISCONF` write denial after a failed save, `INFO persistence`. Commands are propagated the way Redis propagates them (relative expires made absolute, scripts and `MULTI` as one `MULTI … EXEC` unit, blocking pops as their non-blocking forms, expired keys as `DEL`).
+- **Eviction:** `maxmemory` with every `maxmemory-policy` (`noeviction`, `allkeys-`/`volatile-` `lru`, `lfu`, `random`, `volatile-ttl`), approximated by sampling `maxmemory-samples` keys into a candidate pool, `maxmemory-eviction-tenacity`, the `OOM command not allowed when used memory > 'maxmemory'.` error for `denyoom` commands (also inside `MULTI` and scripts), `evicted_keys`, the `evicted` keyspace event and `DEL` propagation. Used memory follows Redis's accounting and is tracked incrementally.
+- **Keyspace notifications:** `notify-keyspace-events` with every class, including `new` (`n`), `expired` (`x`), `evicted` (`e`) and `keymiss` (`m`), for commands run directly, in `MULTI`, in scripts and when a blocked client is served.
+- **Client-side caching:** `CLIENT TRACKING` default mode, `BCAST` with `PREFIX`, `OPTIN` / `OPTOUT` with `CLIENT CACHING`, `NOLOOP`, `REDIRECT` (RESP2 via `__redis__:invalidate`), RESP3 `invalidate` pushes, null invalidation on flush, `tracking-redir-broken`, `tracking-table-max-keys`, `CLIENT GETREDIR` / `TRACKINGINFO`.
 
 ### Supported commands
 
 | Group | Commands |
 |---|---|
-| Connection | `PING` `ECHO` `SELECT` `AUTH` `HELLO` `RESET` `QUIT` `READONLY` `READWRITE` `CLIENT` (`SETNAME` `GETNAME` `ID` `LIST` `INFO` `SETINFO` `KILL` `UNBLOCK` `GETREDIR` `TRACKINGINFO` `NO-EVICT` `NO-TOUCH` `REPLY` `PAUSE` `UNPAUSE` `HELP`) |
-| Server | `INFO` `CONFIG` (`GET` `SET` `RESETSTAT` `REWRITE`) `TIME` `DBSIZE` `FLUSHDB` `FLUSHALL` `COMMAND` (`COUNT` `LIST` `INFO` `DOCS` `GETKEYS` `GETKEYSANDFLAGS`) `ACL` `MONITOR` `SLOWLOG` `LATENCY` `MEMORY` `WAIT` `WAITAOF` `ROLE` `SAVE` `BGSAVE` `LASTSAVE` `SHUTDOWN` `DEBUG` `LOLWUT` |
+| Connection | `PING` `ECHO` `SELECT` `AUTH` `HELLO` `RESET` `QUIT` `READONLY` `READWRITE` `CLIENT` (`SETNAME` `GETNAME` `ID` `LIST` `INFO` `SETINFO` `KILL` `UNBLOCK` `TRACKING` `CACHING` `GETREDIR` `TRACKINGINFO` `NO-EVICT` `NO-TOUCH` `REPLY` `PAUSE` `UNPAUSE` `HELP`) |
+| Server | `INFO` `CONFIG` (`GET` `SET` `RESETSTAT` `REWRITE`) `TIME` `DBSIZE` `FLUSHDB` `FLUSHALL` `COMMAND` (`COUNT` `LIST` `INFO` `DOCS` `GETKEYS` `GETKEYSANDFLAGS`) `ACL` `MONITOR` `SLOWLOG` `LATENCY` `MEMORY` `WAIT` `WAITAOF` `ROLE` `SAVE` `BGSAVE` `BGREWRITEAOF` `LASTSAVE` `SHUTDOWN` `DEBUG` `LOLWUT` |
 | Keys | `DEL` `UNLINK` `EXISTS` `TYPE` `TOUCH` `RENAME` `RENAMENX` `COPY` `MOVE` `SWAPDB` `KEYS` `SCAN` `RANDOMKEY` `SORT` `SORT_RO` `DUMP` `RESTORE` `OBJECT` `EXPIRE` `PEXPIRE` `EXPIREAT` `PEXPIREAT` `TTL` `PTTL` `EXPIRETIME` `PEXPIRETIME` `PERSIST` |
 | Strings | `GET` `SET` (all options) `SETEX` `PSETEX` `SETNX` `GETSET` `GETDEL` `GETEX` `MGET` `MSET` `MSETNX` `INCR` `INCRBY` `DECR` `DECRBY` `INCRBYFLOAT` `APPEND` `STRLEN` `GETRANGE` `SETRANGE` `SUBSTR` `LCS` |
 | Bitmaps | `SETBIT` `GETBIT` `BITCOUNT` `BITPOS` `BITOP` (incl. `DIFF` `DIFF1` `ANDOR` `ONE`) `BITFIELD` `BITFIELD_RO` |
@@ -177,7 +194,7 @@ Any other command gets `ERR unknown command '<name>'`, the same reply Redis give
 
 Scripts and functions run on Lua 5.4 (compiled to WASM), with a compatibility layer that makes it behave like the Lua 5.1 inside Redis:
 
-- `redis.call`, `redis.pcall`, `redis.error_reply`, `redis.status_reply`, `redis.sha1hex`, `redis.log`, `redis.setresp` (RESP3 conversions included), `redis.register_function` (with flags and description)
+- `redis.call`, `redis.pcall`, `redis.error_reply`, `redis.status_reply`, `redis.sha1hex`, `redis.log`, `redis.setresp` (RESP3 conversions included), `redis.acl_check_cmd` (checked against the ACL user running the script), `redis.register_function` (with flags and description)
 - `cjson`, `cmsgpack`, `bit`, `struct`
 - Lua 5.1 names: `unpack`, `loadstring`, `table.getn`, `math.pow`, `math.mod`; numbers printed with Lua 5.1's `%.14g` by `tostring`
 - Redis's sandbox: global variables are protected (reading an undefined global or creating one is an error)
@@ -189,17 +206,21 @@ Scripts and functions run on Lua 5.4 (compiled to WASM), with a compatibility la
 
 redis-lite is under active development towards full Redis 8.8 parity. See [docs/PHASES.md](docs/PHASES.md) for the roadmap.
 
-**Implemented and tested, being wired into the server:**
+**Wired into the server and tested:**
 
 | Feature | State |
 |---|---|
-| RDB snapshots (`SAVE`, `BGSAVE`, save points, load at startup, `DEBUG RELOAD`) | Module done, not wired yet |
-| AOF (multi-part AOF with manifest, `appendfsync`, `BGREWRITEAOF`) | Module done, not wired yet |
-| ACL users and permissions (`ACL SETUSER`/`DELUSER`, command/key/channel rules, `NOPERM`, `ACL LOG`) | Module done, being wired |
-| `MEMORY USAGE` / `MEMORY STATS` / `INFO memory` computed the way Redis computes them | Module done, being wired |
-| Keyspace notifications (`notify-keyspace-events`) | Module done, not wired yet |
+| RDB snapshots (`SAVE`, `BGSAVE`, save points, load at startup, `DEBUG RELOAD`) | Done |
+| AOF (multi-part AOF with manifest, `appendfsync`, `BGREWRITEAOF`, `DEBUG LOADAOF`) | Done |
+| `SHUTDOWN` with `NOSAVE` / `SAVE` / `NOW` / `FORCE` / `ABORT`, `MISCONF` | Done |
+| ACL users and permissions (`ACL SETUSER`/`DELUSER`, command/key/channel rules, `NOPERM`, `ACL LOG`, `redis.acl_check_cmd`) | Done |
+| `MEMORY USAGE` / `MEMORY STATS` / `INFO memory` computed the way Redis computes them | Done |
+| `maxmemory` eviction (all policies, `OOM` errors) | Done |
+| Keyspace notifications (`notify-keyspace-events`) | Done |
+| Client-side caching (`CLIENT TRACKING`) | Done |
+| CLI config file (`redis.conf`) | Done |
 
-**Not available yet:** `maxmemory` eviction, client-side caching (`CLIENT TRACKING`), replication, sentinel, cluster, and the modules bundled with Redis 8 (JSON, Search, time series, probabilistic, vector sets).
+**Not available yet:** replication, sentinel, cluster, and the modules bundled with Redis 8 (JSON, Search, time series, probabilistic, vector sets).
 
 ## Differences from Redis
 
@@ -208,12 +229,15 @@ What still differs from Redis 8.8 today:
 | Topic | Behaviour |
 |---|---|
 | Performance | No guarantees of any kind (see the note at the top). |
-| Persistence | In memory only until the RDB/AOF modules are wired in (see [Status](#status)). |
-| `ACL` | Today a single `default` user (with `--password`); full ACL is being wired in. |
-| `MEMORY`, `INFO memory`, `LATENCY` | Placeholder values until the memory accounting module is wired in; `LATENCY` does not record events yet. |
-| Eviction | `maxmemory` is accepted but not enforced yet. |
+| Background saves | There is no fork: `BGSAVE` takes the snapshot synchronously and writes the file in the background; `BGREWRITEAOF` runs synchronously (the reply is still Redis's "…started"). |
+| Embedded servers | `RedisLite.start()` stays in memory unless persistence options are given (the CLI behaves like Redis). |
+| Config file | Unsupported directives are ignored with a warning instead of stopping the server; `CONFIG REWRITE` is not implemented. |
+| `rdb_changes_since_last_save` | Counts modified keys per command, not every element changed (Redis counts e.g. each `SADD` member). |
+| Eviction | Used memory is Redis's accounting model, not the allocator's real numbers. The tenacity-to-time mapping and the sampling pool are redis-lite's own approximation of the documented behaviour. Scripts and functions without the `allow-oom` flag are not refused up front when out of memory; their write calls get the `OOM` error instead. Client eviction (`maxmemory-clients`) is not implemented. |
+| Client-side caching | When `tracking-table-max-keys` is exceeded the oldest tracked keys are dropped (Redis picks random ones). |
+| `LATENCY` | Does not record events yet. |
 | Lua number formatting | `tostring()` uses Lua 5.1's `%.14g`, but `..` concatenation still uses Lua 5.4 rules (`10/2 .. ''` gives `"5.0"`, Redis gives `"5"`). |
-| Not supported | Replication, sentinel, cluster, client-side caching, Redis 8 modules (JSON, Search, time series, probabilistic, vector sets). |
+| Not supported | Replication, sentinel, cluster, Redis 8 modules (JSON, Search, time series, probabilistic, vector sets). |
 
 **Verification:** expected behaviour comes from the Redis documentation and Redis's known behaviour. A byte-for-byte differential test suite against a real Redis 8.8 server is planned; until it runs, some binary details (exact RDB version number, HLL bytes, memory numbers) are unverified.
 
@@ -221,7 +245,7 @@ What still differs from Redis 8.8 today:
 
 - **When you need performance.** redis-lite makes no promise about speed or memory use. Use Redis for high-volume traffic, benchmarks and load tests.
 - **Production with more than one app node.** Locks, idempotency keys and rate limits are only correct if every node shares one server, and redis-lite has no replication or clustering yet.
-- **Data you need to keep**, until persistence is wired in.
+- **Data you cannot afford to lose.** RDB and AOF persistence work, but they have not been battle-tested the way Redis's have.
 
 ## Benchmarks
 
@@ -249,11 +273,13 @@ Run it on your own hardware and with your own data shapes before relying on thes
 client ──TCP/RESP2·RESP3──▶ parser ──▶ command table ──▶ in-memory keyspace (16 databases)
                                             │
                                             ├──▶ blocking waiters (BLPOP, BZPOPMIN, XREAD BLOCK …)
-                                            ├──▶ pub/sub, sharded pub/sub and MONITOR
+                                            ├──▶ pub/sub, sharded pub/sub, keyspace notifications, MONITOR
+                                            ├──▶ client-side caching invalidations
+                                            ├──▶ propagation ──▶ AOF (RDB snapshots on save points)
                                             └──▶ Lua engine (wasmoon) ── redis.call ──┘
 ```
 
-Commands run one at a time across all connections, the way Redis runs them. This makes every command, `MULTI`/`EXEC` block, Lua script and function call atomic. Keys expire lazily on access, plus a background sweep every 100 ms.
+Commands run one at a time across all connections, the way Redis runs them. This makes every command, `MULTI`/`EXEC` block, Lua script and function call atomic. Keys expire lazily on access, plus a background sweep every 100 ms. With `maxmemory` set, keys are evicted before a command runs, as in Redis.
 
 ## Development
 

@@ -32,13 +32,17 @@ function purgeExpiredFields(ctx: CommandContext, key: string, h: Map<string, str
   const ttl = fieldExpires.get(h);
   if (!ttl || !ttl.size) return;
   const now = Date.now();
+  let expired = 0;
   for (const [field, at] of ttl) {
     if (at <= now) {
       ttl.delete(field);
       h.delete(field);
+      expired++;
     }
   }
+  if (!expired) return;
   ctx.db.removeIfEmpty(key);
+  ctx.server.fieldsExpired(ctx.client.dbIndex, key, h.size === 0);
 }
 
 function hash(ctx: CommandContext, key: string): Map<string, string> | undefined {

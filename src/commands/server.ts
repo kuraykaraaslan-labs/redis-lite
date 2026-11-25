@@ -8,6 +8,7 @@ import type { Reply } from '../resp';
 import { OK, RespDouble, RespMap, RespSet, RespVerbatim, Status } from '../resp';
 import { ACL_MESSAGES, aclDenialMessage, genPass } from '../server/acl';
 import { ServerConfig } from '../server/config';
+import { resolveDir } from '../server/server';
 import type { RedisValue } from '../store/database';
 import { objectEncoding } from '../store/encoding';
 import { debugQuicklistInfo, infoMemory, memoryStats, memoryUsage, serializedLength } from '../store/memory';
@@ -74,7 +75,7 @@ function infoSection(ctx: CommandContext, name: string): string[] {
         `configured_hz:${cfg.get('hz') ?? '10'}`,
         `lru_clock:${Math.floor(now / 1000) & 0xffffff}`,
         `executable:${process.argv[1] ?? ''}`,
-        'config_file:',
+        `config_file:${s.options.configFile ?? ''}`,
         'io_threads_active:0',
         `listener0:name=tcp,bind=${s.options.host},port=${s.options.port}`,
       ];
@@ -108,43 +109,14 @@ function infoSection(ctx: CommandContext, name: string): string[] {
       }).map(([k, v]) => `${k}:${v}`);
     }
     case 'persistence':
-      return [
-        'loading:0',
-        'async_loading:0',
-        'current_cow_peak:0',
-        'current_cow_size:0',
-        'current_cow_size_age:0',
-        'current_fork_perc:0.00',
-        'current_save_keys_processed:0',
-        'current_save_keys_total:0',
-        `rdb_changes_since_last_save:${s.dirty}`,
-        'rdb_bgsave_in_progress:0',
-        `rdb_last_save_time:${Math.floor(s.lastSave / 1000)}`,
-        'rdb_last_bgsave_status:ok',
-        'rdb_last_bgsave_time_sec:-1',
-        'rdb_current_bgsave_time_sec:-1',
-        'rdb_saves:0',
-        'rdb_last_cow_size:0',
-        'rdb_last_load_keys_expired:0',
-        'rdb_last_load_keys_loaded:0',
-        `aof_enabled:${cfg.get('appendonly') === 'yes' ? 1 : 0}`,
-        'aof_rewrite_in_progress:0',
-        'aof_rewrite_scheduled:0',
-        'aof_last_rewrite_time_sec:-1',
-        'aof_current_rewrite_time_sec:-1',
-        'aof_last_bgrewrite_status:ok',
-        'aof_rewrites:0',
-        'aof_rewrites_consecutive_failures:0',
-        'aof_last_write_status:ok',
-        'aof_last_cow_size:0',
-        'module_fork_in_progress:0',
-        'module_fork_last_cow_size:0',
-      ];
+      return s.persistence.info();
     case 'threads':
       return [`io_thread_0:clients=${clients.length},reads=0,writes=0`];
     case 'stats': {
       const netIn = s.stats.netIn + clients.reduce((n, c) => n + c.netIn, 0);
       const netOut = s.stats.netOut + clients.reduce((n, c) => n + c.netOut, 0);
+      const exceeded = s.evictor.exceededTime(now);
+      const tracking = s.tracking.stats();
       return [
         `total_connections_received:${s.stats.connections}`,
         `total_commands_processed:${s.stats.commands}`,
@@ -165,11 +137,11 @@ function infoSection(ctx: CommandContext, name: string): string[] {
         'expired_stale_perc:0.00',
         'expired_time_cap_reached_count:0',
         'expire_cycle_cpu_milliseconds:0',
-        'evicted_keys:0',
+        `evicted_keys:${s.evictor.evictedKeys}`,
         'evicted_clients:0',
         'evicted_scripts:0',
-        'total_eviction_exceeded_time:0',
-        'current_eviction_exceeded_time:0',
+        `total_eviction_exceeded_time:${exceeded.total}`,
+        `current_eviction_exceeded_time:${exceeded.current}`,
         'keyspace_hits:0',
         'keyspace_misses:0',
         `pubsub_channels:${s.channels.size}`,
@@ -185,9 +157,9 @@ function infoSection(ctx: CommandContext, name: string): string[] {
         'active_defrag_key_misses:0',
         'total_active_defrag_time:0',
         'current_active_defrag_time:0',
-        'tracking_total_keys:0',
-        'tracking_total_items:0',
-        'tracking_total_prefixes:0',
+        `tracking_total_keys:${tracking.keys}`,
+        `tracking_total_items:${tracking.items}`,
+        `tracking_total_prefixes:${tracking.prefixes}`,
         'unexpected_error_replies:0',
         `total_error_replies:${s.stats.errorReplies}`,
         'dump_payload_sanitizations:0',
@@ -330,10 +302,33 @@ function configSet(ctx: CommandContext, pairs: string[]): Reply {
       values.push([pairs[i], r.value]);
     }
   }
+  if (!failure) {
+    for (const entry of values) {
+      if (ServerConfig.canonical(entry[0]) !== 'dir') continue;
+      const dir = resolveDir(entry[1]);
+      if ('error' in dir) {
+        failure = [entry[0], dir.error];
+        break;
+      }
+      entry[1] = dir.path;
+    }
+  }
   if (failure) throw new CommandError(`ERR CONFIG SET failed (possibly related to argument '${failure[0]}') - ${failure[1]}`);
-  for (const [name, value] of values) {
-    cfg.set(name, value);
-    ctx.server.applyConfig(name, value);
+  const previous = values.map(([name]) => [name, cfg.get(name) ?? ''] as const);
+  const apply = (list: ReadonlyArray<readonly [string, string]>) => {
+    for (const [name, value] of list) {
+      cfg.set(name, value);
+      ctx.server.applyConfig(name, value);
+    }
+  };
+  apply(values);
+  // settings with side effects outside the config table (appendonly starts / stops the AOF)
+  for (const [name] of values) {
+    const reason = ctx.server.persistence.onConfigChange(ServerConfig.canonical(name));
+    if (reason !== null) {
+      apply(previous);
+      throw new CommandError(`ERR CONFIG SET failed (possibly related to argument '${name}') - ${reason}`);
+    }
   }
   return OK;
 }
@@ -497,17 +492,7 @@ function flush(ctx: CommandContext, args: string[], all: boolean): Reply {
   if (args.length > 1) throw new CommandError(RespMessages.SYNTAX);
   if (args.length === 1 && !['async', 'sync'].includes(args[0].toLowerCase())) throw new CommandError(RespMessages.SYNTAX);
   const s = ctx.server;
-  const indexes = all ? s.databases.map((_, i) => i) : [ctx.client.dbIndex];
-  for (const i of indexes) {
-    s.dirty += s.databases[i].keys().length;
-    s.signalFlushedDb(i);
-    s.databases[i].flush();
-  }
-  // FLUSHALL saves right away when save points are configured, like Redis
-  if (all && (s.config.get('save') ?? '') !== '') {
-    s.lastSave = Date.now();
-    s.dirty = 0;
-  }
+  s.flushDatabases(all ? s.databases.map((_, i) => i) : [ctx.client.dbIndex], all);
   return OK;
 }
 
@@ -926,11 +911,9 @@ function debug(ctx: CommandContext, args: string[]): Reply {
       }
       break;
     case 'reload':
-      // TODO(persistence): the persistence engine registers server.debugHooks.reload (save RDB, flush, load it back).
       return s.debugHooks.reload ? s.debugHooks.reload(ctx.client, args.slice(1)) : OK;
     case 'loadaof':
       if (argc === 2) {
-        // TODO(persistence): the persistence engine registers server.debugHooks.loadaof.
         return s.debugHooks.loadaof ? s.debugHooks.loadaof(ctx.client) : OK;
       }
       break;
@@ -978,8 +961,15 @@ export const serverCommands: CommandSpec[] = [
     arity: -1,
     flags: { noscript: true },
     handler: (ctx, args) => {
-      if (args.some((a) => a.toLowerCase() === 'abort')) throw new CommandError('ERR No shutdown in progress.');
-      setImmediate(() => void ctx.server.close());
+      const opts = { save: false, nosave: false, now: false, force: false, abort: false };
+      for (const a of args) {
+        const o = a.toLowerCase();
+        if (o === 'save' || o === 'nosave' || o === 'now' || o === 'force' || o === 'abort') opts[o] = true;
+        else throw new CommandError(RespMessages.SYNTAX);
+      }
+      if ((opts.save && opts.nosave) || (opts.abort && args.length > 1)) throw new CommandError(RespMessages.SYNTAX);
+      if (opts.abort) throw new CommandError('ERR No shutdown in progress.');
+      if (!ctx.server.shutdown(opts)) throw new CommandError('ERR Errors trying to SHUTDOWN. Check logs.');
       return NO_REPLY;
     },
   },
@@ -1003,11 +993,7 @@ export const serverCommands: CommandSpec[] = [
     name: 'save',
     arity: 1,
     flags: { noscript: true },
-    handler: (ctx) => {
-      ctx.server.lastSave = Date.now();
-      ctx.server.dirty = 0;
-      return OK;
-    },
+    handler: (ctx) => ctx.server.persistence.saveCommand(),
   },
   {
     name: 'bgsave',
@@ -1015,12 +1001,16 @@ export const serverCommands: CommandSpec[] = [
     flags: { noscript: true },
     handler: (ctx, args) => {
       if (args.length > 1 || (args.length === 1 && args[0].toLowerCase() !== 'schedule')) throw new CommandError(RespMessages.SYNTAX);
-      ctx.server.lastSave = Date.now();
-      ctx.server.dirty = 0;
-      return new Status('Background saving started');
+      return ctx.server.persistence.bgsaveCommand({ schedule: args.length === 1, inExec: ctx.client.inExec });
     },
   },
-  { name: 'lastsave', arity: 1, handler: (ctx) => Math.floor(ctx.server.lastSave / 1000) },
+  {
+    name: 'bgrewriteaof',
+    arity: 1,
+    flags: { noscript: true },
+    handler: (ctx) => ctx.server.persistence.bgrewriteaofCommand(ctx.client.inExec),
+  },
+  { name: 'lastsave', arity: 1, handler: (ctx) => ctx.server.persistence.lastsaveCommand() },
   {
     name: 'wait',
     arity: 3,

@@ -20,6 +20,7 @@ import {
   toResp2,
 } from "../resp";
 import { COMMANDS } from "../commands";
+import { lookupCommand } from "../commands/meta";
 import type { Client } from "../server/client";
 import type { RedisLiteServer } from "../server/server";
 import { LUA_PRELUDE } from "./prelude";
@@ -76,6 +77,9 @@ export class LuaEngine {
     lw.luaL_openlibs(L);
     const engine = new LuaEngine(server, lw, L);
     engine.registerFunction("__redis_call", (Ls) => engine.redisCall(Ls));
+    engine.registerFunction("__redis_acl_check_cmd", (Ls) =>
+      engine.aclCheckCmd(Ls),
+    );
     engine.registerFunction("__redis_setresp", (Ls) => {
       engine.scriptResp = lw.lua_tointegerx(Ls, 1, null) === 3n ? 3 : 2;
       return 0;
@@ -307,32 +311,64 @@ export class LuaEngine {
 
   // ---- redis.call --------------------------------------------------------------------------------------------
 
+  /** The arguments of a redis lib call as strings, or the error Redis raises for them. */
+  private readCallArgs(Ls: LuaState): string[] | { error: string } {
+    const { lw } = this;
+    const n = lw.lua_gettop(Ls);
+    if (n === 0)
+      return {
+        error:
+          "ERR Please specify at least one argument for this redis lib call",
+      };
+    const argv: string[] = [];
+    for (let i = 1; i <= n; i++) {
+      const t = lw.lua_type(Ls, i);
+      if (t === T_STRING) argv.push(this.readBytes(Ls, i));
+      else if (t === T_NUMBER) {
+        argv.push(
+          lw.lua_isinteger(Ls, i)
+            ? String(lw.lua_tointegerx(Ls, i, null))
+            : formatLuaFloat(lw.lua_tonumberx(Ls, i, null)),
+        );
+      } else
+        return {
+          error:
+            "ERR Lua redis lib command arguments must be strings or integers",
+        };
+    }
+    return argv;
+  }
+
+  /**
+   * `__redis_acl_check_cmd(...)` → (ok, allowed): whether the user running the script may run the command with these
+   * arguments (redis.acl_check_cmd). Unknown commands raise an error, as documented.
+   */
+  private aclCheckCmd(Ls: LuaState): number {
+    try {
+      const argv = this.readCallArgs(Ls);
+      if (!Array.isArray(argv)) return this.pushCallError(Ls, argv.error);
+      const { meta } = lookupCommand(argv);
+      if (!meta)
+        return this.pushCallError(
+          Ls,
+          "ERR Invalid command passed to redis.acl_check_cmd()",
+        );
+      const user = this.client?.user;
+      const allowed = !user || this.server.aclCheckUser(user, argv, meta) === null;
+      this.lw.lua_pushboolean(Ls, 1);
+      this.lw.lua_pushboolean(Ls, allowed ? 1 : 0);
+      return 2;
+    } catch (error) {
+      return this.pushCallError(Ls, `ERR ${(error as Error).message}`);
+    }
+  }
+
   /** `__redis_call(...)` → (ok: boolean, reply). Never raises from JS; the Lua wrapper raises for redis.call. */
   private redisCall(Ls: LuaState): number {
     const { lw } = this;
     try {
-      const n = lw.lua_gettop(Ls);
-      if (n === 0)
-        return this.pushCallError(
-          Ls,
-          "ERR Please specify at least one argument for this redis lib call",
-        );
-      const argv: string[] = [];
-      for (let i = 1; i <= n; i++) {
-        const t = lw.lua_type(Ls, i);
-        if (t === T_STRING) argv.push(this.readBytes(Ls, i));
-        else if (t === T_NUMBER) {
-          argv.push(
-            lw.lua_isinteger(Ls, i)
-              ? String(lw.lua_tointegerx(Ls, i, null))
-              : formatLuaFloat(lw.lua_tonumberx(Ls, i, null)),
-          );
-        } else
-          return this.pushCallError(
-            Ls,
-            "ERR Lua redis lib command arguments must be strings or integers",
-          );
-      }
+      const argv = this.readCallArgs(Ls);
+      if (!Array.isArray(argv)) return this.pushCallError(Ls, argv.error);
       const client = this.client;
       if (!client)
         return this.pushCallError(Ls, "ERR redis.call outside of a script");

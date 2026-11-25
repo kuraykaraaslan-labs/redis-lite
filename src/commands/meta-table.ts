@@ -119,6 +119,7 @@ const SERVER: Row[] = [
       ['whoami', 2, 'noscript loading stale sentinel', '', '', '6.0.0', 'Returns the authenticated username of the current connection.', 'O(1)'],
     ],
   }],
+  ['bgrewriteaof', 1, 'admin noscript no_async_loading', '', '', '1.0.0', 'Asynchronously rewrites the append-only file to disk.', 'O(1)'],
   ['bgsave', -1, 'admin noscript no_async_loading', '', '', '1.0.0', 'Asynchronously saves the database(s) to disk.', 'O(1)', '?!SCHEDULE{3.2.2}'],
   ['command', -1, 'loading stale', 'connection', '', '2.8.13', 'Returns detailed information about all commands.', 'O(N) where N is the total number of Redis commands',
     undefined, {
