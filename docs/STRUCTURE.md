@@ -43,7 +43,7 @@ texts, `<module>.messages.ts`. The table lists the rest.
 | Module | Commands, DTOs, sub-services | Other files | Was |
 |---|---|---|---|
 | `command` | sub-services `lookup` (metadata table, arity), `keys` (key specs), `reply` (COMMAND INFO / DOCS, HELP), `blocking` (Block replies) | `command.types.ts` (CommandSpec, CommandContext, CommandMeta), `command.handler.ts` (withDTO, validated, keysAt, bySubcommand, Block, NO_REPLY; re-exported by the facade), `command.registry.ts` (COMMANDS: every module's table), `command.meta_table.ts` (metadata data table), `command.enums.ts` | `src/commands/{types,index,meta,meta-table,blocking}.ts` |
-| `server` | `server.commands.ts`, `server.dto.ts`; sub-services `info`, `config`, `command`, `acl`, `diagnostics`, `memory`, `debug`, `admin`, `lolwut` | runtime (stateful): `server.core.ts` (RedisLiteServer), `server.client.ts`, `server.config.ts`, `server.dispatcher.ts`, `server.connections.ts`, `server.access.ts`, `server.blocking.ts`, `server.keyspace.ts`, `server.watch.ts` (ServerWatches / WatchedKeys: who WATCHes which key), `server.pubsub.ts`, `server.observer.ts`, `server.memory_model.ts`, `server.files.ts`; `server.conf_file.ts` (redis.conf reader), `server.constants.ts`, `server.types.ts`, `server.enums.ts` | `src/server/{server,client,config,conf-file}.ts`, `src/commands/server.ts` |
+| `server` | `server.commands.ts`, `server.dto.ts`; sub-services `info`, `config`, `command`, `acl`, `diagnostics`, `memory`, `debug`, `admin`, `lolwut` | runtime (stateful): `server.core.ts` (RedisLiteServer), `server.client.ts`, `server.config.ts`, `server.dispatcher.ts`, `server.connections.ts`, `server.access.ts`, `server.blocking.ts`, `server.keyspace.ts`, `server.watch.ts` (ServerWatches / WatchedKeys: who WATCHes which key), `server.pubsub.ts`, `server.observer.ts`, `server.memory_model.ts`, `server.files.ts`, `server.settings.ts` (startup / CONFIG SET side effects, DEBUG RELOAD / LOADAOF hooks); `server.conf_file.ts` (redis.conf reader), `server.constants.ts`, `server.types.ts`, `server.enums.ts` | `src/server/{server,client,config,conf-file}.ts`, `src/commands/server.ts` |
 | `connection` | `connection.commands.ts`, `connection.dto.ts`; sub-services `session` (PING, ECHO, SELECT, RESET, QUIT…), `auth` (AUTH, HELLO), `client` (the caller's own CLIENT settings, tracking), `admin` (CLIENT INFO / LIST / KILL / UNBLOCK…) | `connection.types.ts`, `connection.enums.ts` | `src/commands/connection.ts` |
 | `database` | sub-services `encoding` (OBJECT ENCODING, listpack sizes), `scan` (cursor pages) | `database.core.ts` (Database: keyspace, expiry; stateful), `database.sampler.ts`, `database.types.ts` | `src/store/{database,encoding,scan}.ts` |
 | `keys` | `keys.commands.ts`, `keys.extra.commands.ts` (SORT, MOVE, SWAPDB, DUMP, RESTORE), `keys.dto.ts`; sub-services `space` (DEL, EXISTS, RENAME, COPY, KEYS, SCAN…), `expire`, `object`, `database` (MOVE, SWAPDB), `sort`, `dump` (DUMP / RESTORE) | `keys.enums.ts` | `src/commands/keys.ts`, `keys-extra.ts` |
@@ -54,7 +54,7 @@ texts, `<module>.messages.ts`. The table lists the rest.
 | `sets` | sub-services `member`, `random` (SPOP, SRANDMEMBER), `algebra` (SUNION, SINTER, SDIFF, SINTERCARD), `scan` (SSCAN) | `sets.structure.ts`, `sets.enums.ts` | `src/commands/sets.ts` |
 | `zsets` | sub-services `write`, `query`, `range`, `pop`, `combine` | `zsets.structure.ts` (sorted set), `zsets.types.ts`, `zsets.enums.ts` | `src/commands/zsets.ts`, `src/store/zset.ts` |
 | `streams` | sub-services `append`, `range`, `read`, `group`, `pending`, `info` | `streams.structure.ts` (stream, ids), `streams.types.ts`, `streams.enums.ts` | `src/commands/streams.ts`, `src/store/stream.ts` |
-| `timeseries` | time series (TS.*, the Redis 8 module type `TSDB-TYPE`): sub-services `ingest` (TS.CREATE, ADD, MADD, INCRBY / DECRBY, DEL), `range` (TS.GET, RANGE, REVRANGE), `query` (TS.MGET, MRANGE, MREVRANGE, QUERYINDEX), `rules` (TS.CREATERULE, DELETERULE, the RENAME hook, ts-compaction-policy), `info` (TS.INFO, ALTER) | `timeseries.structure.ts` (series, chunks), shared helpers the sub-services use: `timeseries.store.ts` (keyspace, ingestion, compaction, LATEST), `timeseries.aggregator.ts` (aggregators, buckets), `timeseries.reply.ts` (RESP2 / RESP3 shapes), `timeseries.index.ts` (the label index of FILTER queries: selection, upkeep, self-validation against the keyspace) over `timeseries.index.structure.ts` (LabelIndex postings); `.types.ts`, `.enums.ts` | (new) |
+| `timeseries` | time series (TS.*, the Redis 8 module type `TSDB-TYPE`): sub-services `ingest` (TS.CREATE, ADD, MADD, INCRBY / DECRBY, DEL), `range` (TS.GET, RANGE, REVRANGE), `query` (TS.MGET, MRANGE, MREVRANGE, QUERYINDEX), `rules` (TS.CREATERULE, DELETERULE, the RENAME hook, ts-compaction-policy), `info` (TS.INFO, ALTER) | `timeseries.structure.ts` (series, chunks), shared helpers the sub-services use: `timeseries.store.ts` (keyspace, ingestion, compaction, LATEST), `timeseries.aggregator.ts` (aggregators, buckets), `timeseries.reply.ts` (RESP2 / RESP3 shapes), `timeseries.index.ts` (the label index of FILTER queries: selection, the `keyChanged` Database hook, self-validation against the keyspace) over `timeseries.index.structure.ts` (LabelIndex postings; one per server, `server.labelIndex`); `.types.ts`, `.enums.ts` | (new) |
 | `hyperloglog` | sub-services `value` (PFADD, PFCOUNT, PFMERGE), `debug` (PFDEBUG, PFSELFTEST) | `hyperloglog.structure.ts`, `.encoding.ts`, `.estimator.ts`, `.hash.ts` (the HLL algorithm, split by concern), `.types.ts`, `.enums.ts` | `src/commands/hyperloglog.ts`, `src/store/hll.ts` |
 | `geo` | sub-services `point` (GEOADD, GEOPOS, GEODIST, GEOHASH), `search` | `geo.geohash.ts`, `geo.types.ts`, `geo.enums.ts` | `src/commands/geo.ts` |
 | `pubsub` | `pubsub.service.ts` (single service) | | `src/commands/pubsub.ts` |
@@ -64,6 +64,7 @@ texts, `<module>.messages.ts`. The table lists the rest.
 | `persistence` | sub-services `rdb`, `dump` (DUMP / RESTORE payloads), `aof`, `manifest`, `files`, `propagate`; codecs `*.codec.ts` (bytes / CRC / LZF, listpack, object encoder / decoder, module types, RDB I/O); `persistence_*.rules.ts` (propagation rules per type) | runtime (stateful): `persistence.core.ts` (Persistence) built as layers `persistence.state.ts` → `.snapshot.ts` → `.aof_writer.ts` → `.aof_loader.ts`; `persistence.propagator.ts` (Propagator); `persistence.types.ts`, `persistence.enums.ts` | `src/server/{persistence,propagate}.ts`, `src/store/rdb.ts` |
 | `memory` | sub-services `usage` (per key: MEMORY USAGE, DEBUG OBJECT), `overhead` (dataset, used_memory, maxmemory), `info` (MEMORY STATS, INFO memory); size models `*.model.ts` (allocator, object, quicklist, rax) | `memory.tracker.ts` (MemoryTracker) and `memory.eviction.ts` (Evictor) (stateful), `memory.types.ts`, `memory.enums.ts` | `src/store/memory.ts`, `src/server/{memory-tracker,eviction}.ts` |
 | `notifications` | sub-services `events` (which keyspace events a command fires), `publish` (flags, channel messages) | `notifications.types.ts` | `src/server/notifications.ts` |
+| `replication` | `replication.commands.ts` (REPLICAOF, SLAVEOF, PSYNC, SYNC, REPLCONF, FAILOVER), `replication.dto.ts`; sub-services `role` (REPLICAOF, ROLE), `sync` (PSYNC, SYNC, REPLCONF), `failover` (FAILOVER) | runtime (stateful): `replication.core.ts` (Replication) built as layers `replication.state.ts` → `.primary.ts` (master side: attaching replicas, the stream, acks, WAIT) → `.replica.ts` (replica side: REPLICAOF, loading, applying the stream) → `.core.ts` (cron, FAILOVER, ROLE / INFO); `replication.link.ts` (ReplicaLink: the connection to the master and the handshake), `replication.stream.ts` (reader of the link), `replication.backlog.structure.ts`; `.types.ts`, `.enums.ts`. ROLE, WAIT and WAITAOF stay routed by `server` (their DTOs are pinned there) and call the runtime | (new) |
 | `tracking` | `tracking.dto.ts` (CLIENT TRACKING / CACHING grammar, exposed as `TrackingService.TrackingOptionsSchema` / `CachingValueSchema`); sub-services `client`, `invalidation` | `tracking.core.ts` (Tracking: the invalidation table; stateful), `tracking.types.ts`, `tracking.enums.ts` | `src/server/tracking.ts` |
 
 Why these are modules and not libs: `libs/` holds code with no Redis behaviour of its own (a codec, a logger, number
@@ -84,14 +85,14 @@ Another module may import only:
 
 - the facade `<module>.service.ts` (the default-export class, plus what it re-exports: the commands-layer toolkit from
   `command.handler`, and the stateful classes `Acl` / `AclUser`, `Database`, `Tracking`, `Evictor`, `MemoryTracker`,
-  `Persistence`, `Propagator`);
+  `Persistence`, `Propagator`, `Replication`);
 - the module's `.types.ts`, `.enums.ts`, `.structure.ts` and `.messages.ts` files (a shared constant such as
   `MemoryMessages.OOM` is read where it is owned, not copied).
 
 Never another module's sub-services, DTOs, commands files or internals: a facade gains a method when a caller needs one.
-Primitives several modules need go to `@/libs/schemas` instead. Three documented exceptions, each forced by load order
+Primitives several modules need go to `@/libs/schemas` instead. Documented exceptions (1–2 and 4 are forced by load order
 (a value re-export through the facade would close an import cycle and leave a facade `undefined` while the command
-tables are built):
+tables are built; 3 only clarifies how the replication runtime is wired):
 
 1. **`command.registry.ts`** is the composition root of the command table: it imports every module's commands file,
    and the dispatcher (`server.dispatcher`, `server.access`, `server.blocking`) and the Lua bridge
@@ -99,7 +100,12 @@ tables are built):
 2. **The server runtime** (`server.core`, `server.client`, `server.config`, `server.conf_file`) is built by the entry
    points (`index.ts`, `cli.ts`) and by tests that start a bare server. Other modules use these classes as types only,
    through `export type` re-exports of `server.service.ts`.
-3. **`LuaEngine`** is constructed by `server.core` from `scripting.engine.ts`; `scripting.service.ts` re-exports it as a
+3. **The replication runtime** reaches the server through `ctx.server.replication` / the RedisLiteServer methods it
+   needs (`attachClient`, `runAsMaster`, `releaseBlocked`, `pauseWrites`, `killClient`); the dispatcher and the client
+   read `replication.messages` / `replication.types` (READONLY, MASTERDOWN, NOREPLICAS; `ReplicaInfo`), which the
+   public-surface rule already allows. `server.core` constructs `Replication` from the facade's re-export, like
+   `Persistence`.
+4. **`LuaEngine`** is constructed by `server.core` from `scripting.engine.ts`; `scripting.service.ts` re-exports it as a
    type only (the engine reaches the command registry through `redis.call`).
 
 ## The module recipe (worked example: `modules/strings`)
@@ -260,6 +266,8 @@ state is held by a few classes, each created by `server.core` (RedisLiteServer) 
 | Tracking | `tracking.core.ts` (Tracking) | the invalidation table, BCAST prefixes, deferred messages; all its operations are TrackingService methods taking it as first argument |
 | Persistence | `persistence.core.ts` (Persistence, layered over `.state` / `.snapshot` / `.aof_writer` / `.aof_loader`), `persistence.propagator.ts` (Propagator) | open AOF files, rewrite and save state, fsync timers; the current propagation unit |
 | Memory | `memory.tracker.ts` (MemoryTracker), `memory.eviction.ts` (Evictor) | incremental used-memory accounting and the eviction pool / background pass |
+| Replication | `replication.core.ts` (Replication, layered over `.state` / `.primary` / `.replica`), `replication.link.ts` (ReplicaLink), `replication.stream.ts` (ReplicationStreamReader) | role, replication IDs and offsets, the backlog, attached replicas, the link to a master and its parser, WAIT waiters, the FAILOVER state |
+| Time series label index | `timeseries.index.structure.ts` (LabelIndex, held as `server.labelIndex`) | the FILTER postings of every database; each Database's change hook (built in `server.core`) calls `TimeseriesService.keyChanged` |
 
 Rules for them: the logic that does not need the state stays in the module's static services (a component delegates
 to them, e.g. Tracking → TrackingService, Persistence → PersistenceService); a component file follows the same import,

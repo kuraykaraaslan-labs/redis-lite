@@ -1,7 +1,7 @@
 import { connect } from 'node:net';
 import type { Socket } from 'node:net';
 
-import { sleep } from '@/tests/helpers';
+import { sleep, waitFor, wholeResp } from '@/tests/helpers';
 
 /** Helpers shared by the connection suites. */
 
@@ -31,14 +31,27 @@ export class Sock {
     });
   }
 
-  /** Writes raw bytes and returns everything received within `ms`. */
-  async write(data: string, ms = 80): Promise<string> {
+  /**
+   * Writes raw bytes and returns the reply: waits until bytes arrived, form whole RESP replies and nothing new came for
+   * `ms` (capped at 10 s, or until the connection closes), so a loaded machine does not cut a reply short.
+   */
+  async write(data: string, ms = 20): Promise<string> {
     this.buffer = '';
     this.socket.write(data, 'latin1');
-    await sleep(ms);
+    const deadline = Date.now() + 10_000;
+    let seen = -1;
+    while (!(this.buffer.length > 0 && this.buffer.length === seen && wholeResp(this.buffer)) && !this.closed && Date.now() < deadline) {
+      seen = this.buffer.length;
+      await sleep(ms);
+    }
     const out = this.buffer;
     this.buffer = '';
     return out;
+  }
+
+  /** Resolves to true once the server closed the connection (false if it stays open for 10 s). */
+  waitClosed(): Promise<boolean> {
+    return waitFor(() => this.closed).catch(() => false);
   }
 
   close(): void {

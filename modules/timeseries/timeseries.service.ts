@@ -3,6 +3,7 @@
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  */
+import TimeseriesIndex from './timeseries.index';
 import TimeseriesInfoService from './timeseries.info.service';
 import TimeseriesIngestService from './timeseries.ingest.service';
 import TimeseriesQueryService from './timeseries.query.service';
@@ -33,6 +34,9 @@ export default class TimeseriesService {
   static deleteRule = TimeseriesRulesService.deleteRule.bind(TimeseriesRulesService);
   static renamed = TimeseriesRulesService.renamed.bind(TimeseriesRulesService);
   static parseCompactionPolicy = TimeseriesRulesService.parseCompactionPolicy.bind(TimeseriesRulesService);
+
+  // Label index — the Database change hook (server.core wires it for every database)
+  static keyChanged = TimeseriesIndex.keyChanged.bind(TimeseriesIndex);
 
   // Info — TS.INFO, TS.ALTER
   static info = TimeseriesInfoService.info.bind(TimeseriesInfoService);

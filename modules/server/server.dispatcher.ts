@@ -11,6 +11,7 @@ import CommandService, { Block, NO_REPLY } from '@/modules/command/command.servi
 import type { CommandContext, CommandSpec, HandlerResult } from '@/modules/command/command.types';
 import MemoryMessages from '@/modules/memory/memory.messages';
 import NotificationsService from '@/modules/notifications/notifications.service';
+import ReplicationMessages from '@/modules/replication/replication.messages';
 import TrackingService from '@/modules/tracking/tracking.service';
 
 import type { Client } from './server.client';
@@ -136,9 +137,11 @@ export class ServerDispatcher {
       this.rejectCommand(client, AclService.noPermError(denial, client.user.name), fullname, isExec);
       return true;
     }
+    // the master's stream on a replica: no OOM, MISCONF, read-only or stale-data refusals
+    if (client.isMaster) return false;
     const queueing = Boolean(client.multi) && !MULTI_IMMEDIATE.has(name);
     // performEvictions(): before every command while maxmemory is set; denyoom commands are refused when it fails
-    if (server.config.num('maxmemory') > 0) {
+    if (server.config.num('maxmemory') > 0 && !server.replication.ignoresMaxmemory) {
       this.preCommandOom = server.evictor.perform() === 'fail';
       // queueing in MULTI could grow memory without bound, so any queued command is refused too
       const denyoom = queueing || meta?.flagSet.has('denyoom') || (isExec && this.queuedHasFlag(client, 'denyoom'));
@@ -156,11 +159,40 @@ export class ServerDispatcher {
         return true;
       }
     }
+    if (this.replicationRefusal(client, checked, isExec, fullname)) return true;
     if (client.resp === 2 && client.subscriptionCount > 0 && !SUBSCRIBER_ALLOWED.has(name)) {
       this.rejectCommand(client, formatMessage(ServerMessages.SUBSCRIBE_CONTEXT, { command: name }), fullname);
       return true;
     }
+    if (server.replication.servesStaleOnly && !meta?.flagSet.has('stale')) {
+      this.rejectCommand(client, ReplicationMessages.MASTERDOWN, fullname, isExec);
+      return true;
+    }
     return false;
+  }
+
+  /** NOREPLICAS (min-replicas-to-write on a master) and READONLY (a read-only replica) for write commands. */
+  private replicationRefusal(client: Client, checked: Precheck, isExec: boolean, fullname: string): boolean {
+    const replication = this.server.replication;
+    const write = checked.meta?.flagSet.has('write') || (isExec && this.queuedHasFlag(client, 'write'));
+    if (!write) return false;
+    if (replication.notEnoughReplicas) {
+      this.rejectCommand(client, ReplicationMessages.NOREPLICAS, fullname, isExec);
+      return true;
+    }
+    if (replication.readOnly && !client.isMaster) {
+      this.rejectCommand(client, ReplicationMessages.READONLY, fullname, isExec);
+      return true;
+    }
+    return false;
+  }
+
+  /** FAILOVER pauses writes (CLIENT PAUSE WRITE): commands that write or may propagate wait; replication links never do. */
+  private pausable(client: Client, name: string, checked: Precheck): boolean {
+    if (client.isMaster || client.replica || (client.multi && name !== 'exec')) return false;
+    const flags = checked.meta?.flagSet;
+    if (flags?.has('write') || flags?.has('may_replicate')) return true;
+    return name === 'exec' && (this.queuedHasFlag(client, 'write') || this.queuedHasFlag(client, 'may_replicate'));
   }
 
   /** The checks `redis.call` gets on top of the top-level ones: noscript, ACL, MISCONF, OOM. Null when allowed. */
@@ -179,7 +211,9 @@ export class ServerDispatcher {
     // the checks processCommand() makes for top-level commands, for redis.call
     if (write || meta?.flagSet.has('write')) {
       const diskError = server.persistence.writeDeniedError();
-      if (diskError !== null) return new RespError(diskError);
+      if (diskError !== null && !client.isMaster) return new RespError(diskError);
+      if (server.replication.readOnly && !client.isMaster) return new RespError(ReplicationMessages.READONLY);
+      if (server.replication.notEnoughReplicas) return new RespError(ReplicationMessages.NOREPLICAS);
     }
     if (this.preCommandOom && meta?.flagSet.has('denyoom')) return new RespError(MemoryMessages.OOM);
     return null;
@@ -303,6 +337,10 @@ export class ServerDispatcher {
       return;
     }
     if (this.refused(client, argv, name, checked, Boolean(spec.flags?.noauth))) return;
+    if (server.connections.writesPaused && this.pausable(client, name, checked)) {
+      server.connections.parkForPause(client, argv);
+      return;
+    }
 
     if (client.multi && !MULTI_IMMEDIATE.has(name)) {
       client.multi.push(argv);
@@ -311,12 +349,15 @@ export class ServerDispatcher {
     }
 
     server.tracking.current = client;
+    const replOffset = server.replication.offset;
     let result: HandlerResult;
     try {
       result = this.run(client, argv, name, spec, TOP_LEVEL_MODE, checked);
     } finally {
       server.tracking.current = null;
     }
+    // what WAIT / WAITAOF wait for: the stream offset after this client's last propagated write
+    if (server.replication.offset !== replOffset) client.woff = server.replication.offset;
     if (result instanceof Block) server.blocking.block(client, result, argv);
     else if (result !== NO_REPLY) client.write(result);
     TrackingService.flushDeferred(server.tracking, client);

@@ -2,7 +2,7 @@ import { AppError } from '@/libs/app-error';
 import { OK } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { Block, NO_REPLY } from '@/modules/command/command.service';
+import { NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 
 import type { BgsaveInput, ShutdownInput, WaitAofInput, WaitInput } from './server.dto';
@@ -10,16 +10,6 @@ import ServerMessages from './server.messages';
 
 /** Server administration: TIME, DBSIZE, ROLE, FLUSHDB / FLUSHALL, MONITOR, persistence commands, SHUTDOWN, WAIT. */
 export default class ServerAdminService {
-  // ──────────────────────────────────────────────
-  // Private Helpers
-  // ──────────────────────────────────────────────
-
-  /** No replicas ever acknowledge: answers at once when nothing is required, otherwise after the timeout (0 = forever), like Redis. */
-  private static waitFor(ctx: CommandContext, required: boolean, timeoutMs: number, reply: Reply): HandlerResult {
-    if (!required || ctx.noBlock) return reply;
-    return new Block([], timeoutMs, () => undefined, reply);
-  }
-
   // ──────────────────────────────────────────────
   // Public Methods: information
   // ──────────────────────────────────────────────
@@ -34,9 +24,9 @@ export default class ServerAdminService {
     return ctx.db.size;
   }
 
-  /** ROLE: always a master without replicas. */
-  static role(): Reply {
-    return ['master', 0, []];
+  /** ROLE: the replication role (the replication runtime answers). */
+  static role(ctx: CommandContext): Reply {
+    return ctx.server.replication.roleReply();
   }
 
   // ──────────────────────────────────────────────
@@ -89,14 +79,13 @@ export default class ServerAdminService {
   // Public Methods: replication
   // ──────────────────────────────────────────────
 
-  /** WAIT numreplicas timeout: no replica ever acknowledges. */
+  /** WAIT numreplicas timeout: blocks until that many replicas acknowledged the client's last write (or the timeout). */
   static wait(ctx: CommandContext, { numreplicas, timeout }: WaitInput): HandlerResult {
-    return ServerAdminService.waitFor(ctx, numreplicas > 0, timeout, 0);
+    return ctx.server.replication.wait(ctx.client, numreplicas, timeout, ctx.noBlock);
   }
 
-  /** WAITAOF numlocal numreplicas timeout: the local fsync is acknowledged when the AOF is on. */
+  /** WAITAOF numlocal numreplicas timeout: the local AOF counts as fsynced while it is on; replicas answer with FACK. */
   static waitAof(ctx: CommandContext, { numlocal, numreplicas, timeout }: WaitAofInput): HandlerResult {
-    if (numlocal && ctx.server.config.get('appendonly') !== 'yes') throw new AppError(ServerMessages.WAITAOF_APPENDONLY);
-    return ServerAdminService.waitFor(ctx, numreplicas > 0, timeout, [numlocal ? 1 : 0, 0]);
+    return ctx.server.replication.waitAof(ctx.client, numlocal, numreplicas, timeout, ctx.noBlock);
   }
 }

@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import Redis from 'ioredis';
 
 import { RedisLite } from '@/index';
+import { waitForBlocked } from '@/tests/helpers';
 
 let server: RedisLite;
 let redis: Redis;
@@ -92,8 +93,8 @@ return {1, n + 1}`;
 
   it('blocking BLPOP and BZPOPMIN are woken by writes', async () => {
     const b = redis.duplicate();
-    const pending = b.blpop('q', 5);
-    await new Promise((r) => setTimeout(r, 50));
+    const pending = b.blpop('q', 30);
+    await waitForBlocked({ call: (...args: string[]) => redis.call(args[0], ...args.slice(1)) });
     await redis.rpush('q', 'job');
     expect(await pending).toEqual(['q', 'job']);
     const z = b.bzpopmin('mk', 0.05);

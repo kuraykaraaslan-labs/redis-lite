@@ -1,40 +1,32 @@
 /**
  * The label index in the keyspace: which series a FILTER selects (TS.MGET, TS.MRANGE / TS.MREVRANGE, TS.QUERYINDEX),
- * and the upkeep the module's own writes do (TS.CREATE / ADD / INCRBY auto-create, compaction series, TS.ALTER LABELS,
- * RENAME). Shared by the sub-services like the store.
+ * and its upkeep. Shared by the sub-services like the store.
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  *
- * One LabelIndex serves all databases of a server and is checked against them on use, so it stays correct without
- * being told about every keyspace change:
+ * The server owns one LabelIndex (`server.labelIndex`) for all of its databases. Every Database reports its key changes
+ * through the change listener server.core builds, which calls TimeseriesService.keyChanged: a series stored at a key
+ * (TS.CREATE, auto-create, compactions, RESTORE, COPY, RENAME, MOVE, loading an RDB / AOF, a replica's full sync) is
+ * filed there, and the entries of a key that no database holds any more are dropped. TS.ALTER LABELS changes labels in
+ * place and refiles the series itself (`relabeled`). What the hook does not report one key at a time (FLUSHDB /
+ * FLUSHALL, SWAPDB) is covered on use:
  * - an entry is reported only while the queried database holds that very series object at that key, unexpired
- *   (DEL, UNLINK, expiry, eviction, FLUSHDB / FLUSHALL, overwrites; MOVE and SWAPDB keep the key and the object, so the
- *   entry stays valid in whichever database now holds it);
+ *   (MOVE and SWAPDB keep the key and the object, so the entry stays valid in whichever database now holds it);
  * - entries no database holds any more are dropped when met, and the index is rebuilt once stale entries could
- *   outnumber twice the stored keys (amortised O(1) per deletion);
- * - series built outside the module's creation path (RESTORE, COPY, loading at startup, DEBUG RELOAD) bump
- *   TimeSeries.created without being filed, so the next query rebuilds the index from the keyspace;
- * - RENAME files the series under its new name through the rules service's rename hook.
+ *   outnumber twice the stored keys (amortised O(1) per deletion).
  * Matches are then checked against the live labels and sorted by key name, so replies equal a scan of every key.
  */
 import type { CommandContext } from '@/modules/command/command.types';
 import type { Database } from '@/modules/database/database.service';
 
-import { LabelIndex } from './timeseries.index.structure';
-import type { IndexEntry } from './timeseries.index.structure';
-import { TimeSeries } from './timeseries.structure';
-import type { LabelMatcher } from './timeseries.types';
-
-/** The index of one server and the databases it covers. */
-type ServerIndex = { index: LabelIndex; databases: readonly Database[] };
+import type { IndexEntry, LabelIndex } from './timeseries.index.structure';
+import type { TimeSeries } from './timeseries.structure';
+import type { LabelIndexHost, LabelMatcher } from './timeseries.types';
 
 export default class TimeseriesIndex {
   // ──────────────────────────────────────────────
   // Constants
   // ──────────────────────────────────────────────
-
-  /** Per server, reached from any of its databases (weak: a closed server's index goes with it). */
-  private static readonly byDatabase = new WeakMap<Database, ServerIndex>();
 
   /** Stale entries tolerated beyond twice the stored keys before a rebuild. */
   private static readonly STALE_SLACK = 1024;
@@ -42,16 +34,6 @@ export default class TimeseriesIndex {
   // ──────────────────────────────────────────────
   // Private Helpers
   // ──────────────────────────────────────────────
-
-  private static of(ctx: CommandContext): ServerIndex {
-    const found = TimeseriesIndex.byDatabase.get(ctx.db);
-    if (found) return found;
-    // a database that is not one of the server's (a bare Database in a test) gets an index of its own
-    const databases = ctx.server.databases.includes(ctx.db) ? ctx.server.databases : [ctx.db];
-    const created: ServerIndex = { index: new LabelIndex(), databases };
-    for (const db of databases) TimeseriesIndex.byDatabase.set(db, created);
-    return created;
-  }
 
   /** The series object held at `key` by `db`, unexpired (what KEYS would list), without touching or expiring it. */
   private static holds(db: Database, key: string, series: TimeSeries, now: number): boolean {
@@ -66,19 +48,18 @@ export default class TimeseriesIndex {
     return databases.some((db) => db.raw(key)?.value === series);
   }
 
-  /** Rebuilds from every database when series appeared unannounced or stale entries piled up. */
-  private static sync(s: ServerIndex): void {
-    const stored = s.databases.reduce((n, db) => n + db.storedKeys, 0);
-    const piledUp = s.index.size > 2 * stored + TimeseriesIndex.STALE_SLACK;
-    if (s.index.synced === TimeSeries.created && !piledUp) return;
-    s.index.clear();
-    for (const db of s.databases) {
+  /** Rebuilds from every database once stale entries (left by FLUSHDB / FLUSHALL) piled up. */
+  private static compact(host: LabelIndexHost): void {
+    const index = host.labelIndex;
+    const stored = host.databases.reduce((n, db) => n + db.storedKeys, 0);
+    if (index.size <= 2 * stored + TimeseriesIndex.STALE_SLACK) return;
+    index.clear();
+    for (const db of host.databases) {
       for (const key of db.rawKeys()) {
         const v = db.raw(key);
-        if (v?.type === 'timeseries') s.index.add(key, v.value);
+        if (v?.type === 'timeseries') index.add(key, v.value);
       }
     }
-    s.index.synced = TimeSeries.created;
   }
 
   // ──────────────────────────────────────────────
@@ -98,12 +79,13 @@ export default class TimeseriesIndex {
   /** The series of the current database the matchers select, by key name. */
   static select(ctx: CommandContext, matchers: LabelMatcher[]): Array<[string, TimeSeries]> {
     const S = TimeseriesIndex;
-    const s = S.of(ctx);
-    S.sync(s);
+    const host: LabelIndexHost = ctx.server;
+    S.compact(host);
+    const index = host.labelIndex;
     const now = Date.now();
     const out: Array<[string, TimeSeries]> = [];
     const stale: IndexEntry[] = [];
-    const candidates = s.index.candidates(matchers);
+    const candidates = index.candidates(matchers);
     if (candidates === null) {
       // no generating matcher (the DTO refuses that): scan the database
       for (const key of ctx.db.keys()) {
@@ -114,11 +96,11 @@ export default class TimeseriesIndex {
     for (const entry of candidates ?? []) {
       const series = entry.ref.deref();
       if (series && S.holds(ctx.db, entry.key, series, now)) {
-        if (entry.labels !== series.labels) s.index.relabel(entry, series);
+        if (entry.labels !== series.labels) index.relabel(entry, series);
         if (S.matches(series, matchers)) out.push([entry.key, series]);
-      } else if (!series || !S.stored(s.databases, entry.key, series)) stale.push(entry);
+      } else if (!series || !S.stored(host.databases, entry.key, series)) stale.push(entry);
     }
-    for (const entry of stale) s.index.remove(entry);
+    for (const entry of stale) index.remove(entry);
     return out.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   }
 
@@ -126,30 +108,27 @@ export default class TimeseriesIndex {
   // Public Methods: upkeep
   // ──────────────────────────────────────────────
 
-  /** A series this module just constructed and stored at `key` (it is the newest TimeSeries built). */
-  static added(db: Database, key: string, series: TimeSeries): void {
-    const s = TimeseriesIndex.byDatabase.get(db);
-    if (!s) return;
-    const upToDate = s.index.synced === TimeSeries.created - 1;
-    s.index.add(key, series);
-    if (upToDate) s.index.synced = TimeSeries.created;
+  /**
+   * The Database change hook: `key` of `db` was written, deleted or got a new TTL (null: the whole database was
+   * flushed or swapped). A series now stored there is filed; entries of the key no database stores any more go.
+   */
+  static keyChanged(host: LabelIndexHost, db: Database, key: string | null): void {
+    if (key === null) return;
+    const index = host.labelIndex;
+    const v = db.raw(key);
+    if (v?.type === 'timeseries') index.add(key, v.value);
+    const entries = index.entriesAt(key);
+    if (!entries) return;
+    for (const entry of [...entries]) {
+      const series = entry.ref.deref();
+      if (!series || !TimeseriesIndex.stored(host.databases, key, series)) index.remove(entry);
+    }
   }
 
   /** TS.ALTER replaced the labels of the series at `key`. */
-  static relabeled(db: Database, key: string, series: TimeSeries): void {
-    const s = TimeseriesIndex.byDatabase.get(db);
-    if (!s) return;
-    const entry = s.index.find(key, series);
-    if (entry) s.index.relabel(entry, series);
-    else s.index.add(key, series);
-  }
-
-  /** RENAME / RENAMENX moved `series` from `from` to `to`. */
-  static renamed(db: Database, from: string, to: string, series: TimeSeries): void {
-    const s = TimeseriesIndex.byDatabase.get(db);
-    if (!s) return;
-    const entry = s.index.find(from, series);
-    if (entry) s.index.remove(entry);
-    s.index.add(to, series);
+  static relabeled(index: LabelIndex, key: string, series: TimeSeries): void {
+    const entry = index.find(key, series);
+    if (entry) index.relabel(entry, series);
+    else index.add(key, series);
   }
 }

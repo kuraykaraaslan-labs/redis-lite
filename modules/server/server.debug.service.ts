@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 
 import { AppError } from '@/libs/app-error';
 import Logger from '@/libs/logger';
@@ -120,7 +119,7 @@ export default class ServerDebugService {
   }
 
   static changeReplId(ctx: CommandContext): Reply {
-    ctx.server.replId = randomBytes(20).toString('hex');
+    ctx.server.replication.changeReplId();
     return OK;
   }
 

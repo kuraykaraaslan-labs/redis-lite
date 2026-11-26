@@ -19,7 +19,9 @@ export default class ConnectionAdminService {
   /** CLIENT LIST `flags=` (Redis catClientInfoString). */
   private static clientFlags(c: Client): string {
     let f = '';
-    if (c.monitor) f += 'O';
+    if (c.replica?.attached) f += c.monitor ? 'O' : 'S';
+    else if (c.monitor) f += 'O';
+    if (c.isMaster) f += 'M';
     if (c.subscriptionCount) f += 'P';
     if (c.multi) f += 'x';
     if (c.blocked) f += 'b';
@@ -34,6 +36,8 @@ export default class ConnectionAdminService {
 
   /** Redis getClientType(): monitors count as normal clients. */
   private static clientType(c: Client): string {
+    if (c.isMaster) return 'master';
+    if (c.replica?.attached && !c.monitor) return 'replica';
     return c.subscriptionCount ? 'pubsub' : 'normal';
   }
 

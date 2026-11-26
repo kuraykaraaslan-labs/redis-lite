@@ -11,8 +11,11 @@ import ServerMessages from './server.messages';
 
 /** Connections and their I/O: accepting sockets, parsing requests, running a client's queued commands, closing. */
 export class ServerConnections {
+  /** FAILOVER: write commands of normal clients wait (Client.paused) until resumeWrites(). */
+  writesPaused = false;
   private nextClientId = 1;
   private readonly clientsById = new Map<number, Client>();
+  private readonly pausedClients = new Set<Client>();
 
   constructor(private readonly server: RedisLiteServer) {}
 
@@ -42,6 +45,32 @@ export class ServerConnections {
     socket.on('error', cleanup);
   }
 
+  /** A client on a socket this server opened itself (the replication link): listed and killable, no request parsing. */
+  attachClient(socket: Socket): Client {
+    const client = new Client(this.nextClientId++, socket, false, null);
+    this.server.clients.add(client);
+    this.clientsById.set(client.id, client);
+    this.server.stats.connections++;
+    return client;
+  }
+
+  /** Parks a client whose next command is a write while writes are paused; it runs again on resumeWrites(). */
+  parkForPause(client: Client, argv: string[]): void {
+    client.pending.unshift(argv);
+    client.paused = true;
+    this.pausedClients.add(client);
+  }
+
+  resumeWrites(): void {
+    this.writesPaused = false;
+    const clients = [...this.pausedClients];
+    this.pausedClients.clear();
+    for (const client of clients) {
+      client.paused = false;
+      this.drain(client);
+    }
+  }
+
   clientById(id: number): Client | undefined {
     return this.clientsById.get(id);
   }
@@ -66,6 +95,8 @@ export class ServerConnections {
     server.clients.delete(client);
     this.clientsById.delete(client.id);
     client.watched.clear();
+    this.pausedClients.delete(client);
+    if (client.replica) server.replication.detach(client);
     if (client.tracking) TrackingService.disable(server.tracking, client);
     if (client.blocked) server.blocking.unblock(client.blocked);
     server.pubsub.forget(client);
@@ -79,7 +110,7 @@ export class ServerConnections {
     const socket = client.socket;
     socket?.cork();
     try {
-      while (!client.closed && !client.blocked && client.pending.length) {
+      while (!client.closed && !client.blocked && !client.paused && client.pending.length) {
         const argv = client.pending.shift() as string[];
         this.server.dispatcher.runTopLevel(client, argv);
         if (client.closeAfterReply) {
@@ -88,7 +119,7 @@ export class ServerConnections {
           this.disconnect(client);
         }
       }
-      if (client.protocolError && !client.closed && !client.blocked && !client.pending.length && !client.protocolErrorSent) {
+      if (client.protocolError && !client.closed && !client.blocked && !client.paused && !client.pending.length && !client.protocolErrorSent) {
         client.protocolErrorSent = true;
         client.write(new RespError(formatMessage(ServerMessages.GENERIC_ERROR, { message: client.protocolError })), true);
         socket?.end();
@@ -101,6 +132,7 @@ export class ServerConnections {
   /** Server close: every socket is destroyed and every client forgotten. */
   closeAll(): void {
     const server = this.server;
+    this.pausedClients.clear();
     for (const client of server.clients) {
       client.closed = true;
       client.socket?.destroy();

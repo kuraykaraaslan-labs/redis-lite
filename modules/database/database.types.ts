@@ -49,6 +49,19 @@ export interface Access {
 /** Receives every structural change of a database: a key name, or null for "everything" (FLUSHDB, SWAPDB). */
 export type KeyChangeListener = (key: string | null) => void;
 
+/**
+ * How the databases of a server treat keys whose TTL elapsed (shared by them, switched by the replication runtime):
+ * - `active`: a master; such a key is deleted on access and by the active expire cycle;
+ * - `replica`: a replica never expires keys itself; clients see such a key as missing, but it stays stored until the
+ *   master's DEL arrives, and the active expire cycle does not run;
+ * - `stream`: a replica applying its master's stream; the key is still there for the master's commands.
+ */
+export type ExpiryMode = 'active' | 'replica' | 'stream';
+
+export interface ExpiryControl {
+  mode: ExpiryMode;
+}
+
 /** One page of a SCAN-family iteration: the next cursor (0 = done) and the items of this page. */
 export interface ScanPage {
   next: number;

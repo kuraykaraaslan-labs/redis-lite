@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { useServer } from '@/tests/helpers';
 
 import { Sock, enc, errOf } from './connection.test_helpers';
 
@@ -175,7 +175,6 @@ describe('RESET / QUIT', () => {
   it('QUIT replies OK and closes the connection', async () => {
     const s = await Sock.open(t.server.port);
     expect.soft(await s.write(enc('QUIT'))).toBe('+OK\r\n');
-    await sleep(50);
-    expect.soft(s.closed).toBe(true);
+    expect.soft(await s.waitClosed()).toBe(true);
   });
 });

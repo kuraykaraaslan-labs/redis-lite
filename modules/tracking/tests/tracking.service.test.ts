@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { RawClient } from '@/tests/helpers';
-import { sleep, useServer } from '@/tests/helpers';
+import { eventually, useServer, waitFor, waitPastExpiry } from '@/tests/helpers';
 
 /**
  * Server-assisted client-side caching, as documented on redis.io ("Client-side caching reference") and on the CLIENT
@@ -27,16 +27,14 @@ async function idOf(r: RawClient): Promise<number> {
   return Number(/:(\d+)/.exec(await r.send('CLIENT', 'ID'))?.[1]);
 }
 
-/** Pushes received without sending anything. */
-async function received(r: RawClient, wait = 60): Promise<string> {
-  await sleep(wait);
-  return r.read(1, 1);
+/** Pushes received so far (synchronised by a PING round trip: no guessed delay, and '' really means none). */
+function received(r: RawClient): Promise<string> {
+  return r.drain();
 }
 
 beforeEach(async () => {
   await t.call('FLUSHALL');
   await t.call('CONFIG', 'SET', 'tracking-table-max-keys', '1000000');
-  await sleep(20);
 });
 
 describe('default mode', () => {
@@ -94,8 +92,8 @@ describe('default mode', () => {
     await r.send('CLIENT', 'TRACKING', 'ON');
     await t.call('SET', 'ttl', 'v', 'PX', '150');
     expect(await r.send('GET', 'ttl')).toBe('$1\r\nv\r\n');
-    await sleep(250);
-    await t.call('GET', 'ttl');
+    await waitPastExpiry(t, 'ttl');
+    await eventually(async () => expect(await t.call('GET', 'ttl')).toBeNull()); // retried: the wall clock can be stepped back after the wait
     expect(await received(r)).toBe(inv3('ttl'));
     await r.send('GET', 'samename');
     const other = t.client();
@@ -254,7 +252,8 @@ describe('REDIRECT', () => {
     await r.send('CLIENT', 'TRACKING', 'ON', 'REDIRECT', sinkId);
     await r.send('GET', 'gone');
     sink.close();
-    await sleep(30);
+    // the server notices the close asynchronously: wait until the sink left the client list
+    await waitFor(async () => !String(await t.call('CLIENT', 'LIST')).includes(`id=${sinkId} `));
     await t.call('SET', 'gone', 'v');
     expect(await received(r)).toBe(`>2\r\n$21\r\ntracking-redir-broken\r\n:${sinkId}\r\n`);
     expect(await r.send('CLIENT', 'TRACKINGINFO')).toContain('broken_redirect');

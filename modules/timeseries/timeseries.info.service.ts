@@ -72,7 +72,7 @@ export default class TimeseriesInfoService {
     }
     if (options.labels !== null) {
       series.labels = new Map(options.labels);
-      TimeseriesIndex.relabeled(ctx.db, key, series);
+      TimeseriesIndex.relabeled(ctx.server.labelIndex, key, series);
     }
     if (options.retention !== undefined) series.trim();
     return OK;

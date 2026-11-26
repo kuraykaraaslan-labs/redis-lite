@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { RawClient, sleep, useServer } from '@/tests/helpers';
+import { eventually, RawClient, sleep, useServer } from '@/tests/helpers';
 
 /**
  * MEMORY USAGE / MEMORY STATS / INFO memory / DEBUG OBJECT end to end. Byte counts are derived from the Redis 8 layouts
@@ -259,11 +259,12 @@ describe('DEBUG subcommands', () => {
     expect(await t.call('DEBUG', 'SET-ACTIVE-EXPIRE', '0')).toBe('OK');
     const before = await expired();
     await t.call('SET', 'ae:k', 'v', 'PX', '20');
+    // an absence can only be checked over a window: several cycles would have run in it (fewer under load, which
+    // can only make this pass more easily, never fail spuriously)
     await sleep(250);
     expect(await expired()).toBe(before);
     expect(await t.call('DEBUG', 'SET-ACTIVE-EXPIRE', '1')).toBe('OK');
-    await sleep(250);
-    expect(await expired()).toBe(before + 1);
+    await eventually(async () => expect(await expired()).toBe(before + 1));
   });
 
   it('CHANGE-REPL-ID changes master_replid', async () => {

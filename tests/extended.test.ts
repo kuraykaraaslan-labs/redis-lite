@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import Redis from 'ioredis';
 
 import { RedisLite } from '@/index';
+import { waitFor, waitForBlocked } from '@/tests/helpers';
 
 let server: RedisLite;
 let redis: Redis;
@@ -173,8 +174,8 @@ describe('lists and sorted sets', () => {
     ]);
     expect(await call('LMPOP', 1, 'ml', 'LEFT')).toBeNull();
     const b = redis.duplicate();
-    const pending = b.call('BLMPOP', '2', '2', 'x1', 'x2', 'LEFT');
-    await new Promise((r) => setTimeout(r, 30));
+    const pending = b.call('BLMPOP', '20', '2', 'x1', 'x2', 'LEFT');
+    await waitForBlocked({ call });
     await redis.rpush('x2', 'v');
     expect(await pending).toEqual(['x2', ['v']]);
     b.disconnect();
@@ -270,7 +271,7 @@ describe('hash field expiration', () => {
     expect(await call('HTTL', 'hf', 'FIELDS', 2, 'a', 'b')).toEqual([100, -1]);
     expect(await call('HPERSIST', 'hf', 'FIELDS', 1, 'a')).toEqual([1]);
     expect(await call('HPEXPIRE', 'hf', 30, 'FIELDS', 1, 'b')).toEqual([1]);
-    await new Promise((r) => setTimeout(r, 60));
+    await waitFor(async () => (await call('HEXISTS', 'hf', 'b')) === 0);
     expect(await redis.hgetall('hf')).toEqual({ a: '1' });
     expect(await call('HGETDEL', 'hf', 'FIELDS', 1, 'a')).toEqual(['1']);
     expect(await redis.exists('hf')).toBe(0);
@@ -342,7 +343,7 @@ describe('server and connection', () => {
     const b = redis.duplicate();
     const id = (await b.client('ID')) as number;
     const pending = b.blpop('never', 0);
-    await new Promise((r) => setTimeout(r, 30));
+    await waitForBlocked({ call });
     expect(await redis.client('UNBLOCK', id)).toBe(1);
     expect(await pending).toBeNull();
     b.disconnect();
@@ -354,8 +355,14 @@ describe('server and connection', () => {
       await call('COMMAND', 'GETKEYS', 'MSET', 'a', '1', 'b', '2'),
     ).toEqual(['a', 'b']);
     expect(await call('ACL', 'WHOAMI')).toBe('default');
-    // Earlier commands (e.g. FUNCTION LOAD under load) may legitimately exceed the 10 ms threshold, as in Redis.
+    // log everything so there is something to reset, then raise the threshold out of reach: on a loaded machine any
+    // command (SLOWLOG RESET included) can legitimately take longer than the default 10 ms, as in Redis
+    await call('CONFIG', 'SET', 'slowlog-log-slower-than', '0');
+    await call('PING');
+    expect(Number(await call('SLOWLOG', 'LEN'))).toBeGreaterThan(0);
+    await call('CONFIG', 'SET', 'slowlog-log-slower-than', '1000000000');
     await call('SLOWLOG', 'RESET');
     expect(await call('SLOWLOG', 'GET')).toEqual([]);
+    await call('CONFIG', 'SET', 'slowlog-log-slower-than', '10000');
   });
 });

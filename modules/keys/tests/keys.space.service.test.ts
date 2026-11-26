@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { arity, err, NOT_INT, sleep, SYNTAX, useServer } from '@/tests/helpers';
+import { arity, err, eventually, NOT_INT, SYNTAX, useServer, waitPastExpiry } from '@/tests/helpers';
 
 /**
  * DEL, UNLINK, EXISTS, TYPE, TOUCH, RENAME, RENAMENX, COPY, KEYS, SCAN, RANDOMKEY (keys.space.service).
@@ -54,8 +54,8 @@ describe('EXISTS', () => {
 
   it('expired keys do not exist', async () => {
     await t.call('SET', 'ex:tmp', 'v', 'PX', 30);
-    await sleep(80);
-    expect(await t.call('EXISTS', 'ex:tmp')).toBe(0);
+    await waitPastExpiry(t, 'ex:tmp');
+    await eventually(async () => expect(await t.call('EXISTS', 'ex:tmp')).toBe(0)); // retried: the wall clock can be stepped back after the wait
   });
 
   it('arity error', async () => {
@@ -267,8 +267,8 @@ describe('KEYS', () => {
     await t.call('RPUSH', 'kt:l', 'a');
     await t.call('SET', 'kt:s', 'v');
     await t.call('SET', 'kt:gone', 'v', 'PX', 20);
-    await sleep(60);
-    expect(await sorted('kt:*')).toEqual(['kt:l', 'kt:s']);
+    await waitPastExpiry(t, 'kt:gone');
+    await eventually(async () => expect(await sorted('kt:*')).toEqual(['kt:l', 'kt:s'])); // retried: the wall clock can be stepped back after the wait
   });
 
   it('arity error', async () => {

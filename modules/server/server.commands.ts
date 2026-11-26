@@ -203,7 +203,7 @@ export const serverCommands: CommandSpec[] = [
   { name: 'bgrewriteaof', arity: 1, flags: NOSCRIPT, handler: (ctx) => ServerService.bgrewriteaof(ctx) },
   { name: 'lastsave', arity: 1, handler: (ctx) => ServerService.lastsave(ctx) },
   { name: 'wait', arity: 3, flags: NOSCRIPT, handler: withDTO(WaitDTO, ServerService.wait) },
-  { name: 'role', arity: 1, handler: () => ServerService.role() },
+  { name: 'role', arity: 1, handler: (ctx) => ServerService.role(ctx) },
   { name: 'memory', arity: -2, handler: memory },
   { name: 'debug', arity: -2, flags: NOSCRIPT, handler: debug },
 ];

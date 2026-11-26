@@ -3,7 +3,7 @@ import type { Socket } from 'node:net';
 
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { sleep, useServer, waitFor } from '@/tests/helpers';
 
 /**
  * Dispatcher behaviour at the protocol level.
@@ -116,7 +116,8 @@ describe('protocol level', () => {
     expect.soft(await s.write('ECHO "a\\x41\\n"\r\n')).toBe('$3\r\naA\n\r\n');
     expect.soft(await s.write('PING\n')).toBe('+PONG\r\n');
     expect.soft(await s.write('   PING   \r\n')).toBe('+PONG\r\n');
-    expect.soft(await s.write('\r\n', 50)).toBe('');
+    // an empty line gets no reply: the next reply on the stream is the PING's (no quiet-window guess needed)
+    expect.soft(await s.write('\r\nPING\r\n')).toBe('+PONG\r\n');
     expect.soft(await s.write('PING\r\nPING\r\n')).toBe('+PONG\r\n+PONG\r\n');
     s.close();
   });
@@ -124,7 +125,6 @@ describe('protocol level', () => {
   it('inline command with unbalanced quotes is a protocol error that closes the connection', async () => {
     const s = await Sock.open(t.server.port);
     expect.soft(await s.write('ECHO "abc\r\n')).toBe('-ERR Protocol error: unbalanced quotes in request\r\n');
-    await sleep(50);
-    expect.soft(s.closed).toBe(true);
+    expect.soft(await waitFor(() => s.closed).catch(() => false)).toBe(true);
   });
 });

@@ -35,6 +35,8 @@ export const ServerMessages = {
   // ============================================================================
   // Config values and redis.conf
   // ============================================================================
+  // UNCERTAIN: the wording of a malformed replicaof directive
+  CONFIG_REPLICAOF: 'Invalid master port',
   CONFIG_BOOL: "argument must be 'yes' or 'no'",
   CONFIG_ENUM: 'argument(s) must be one of the following: {values}',
   CONFIG_INT: "argument couldn't be parsed into an integer",
@@ -109,7 +111,6 @@ export const ServerMessages = {
   SHUTDOWN_FAILED: 'ERR Errors trying to SHUTDOWN. Check logs.',
   TIMEOUT_NOT_INTEGER: 'ERR timeout is not an integer or out of range',
   TIMEOUT_NEGATIVE: 'ERR timeout is negative',
-  WAITAOF_APPENDONLY: 'ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled.',
   LOLWUT_5_CAPTION: '\nGeorg Nees - schotter, plotter on paper, 1968. Redis ver. {version}\n',
   LOLWUT_6_CAPTION: 'Dedicated to the 8 bit game developers of past and present.\nOriginal 8 bit image from Plaguemon by hikikomori. Redis ver. {version}\n',
   LOLWUT_CAPTION: 'Redis ver. {version}\n',

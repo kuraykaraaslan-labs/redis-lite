@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
-import type { AddressInfo, Server } from 'node:net';
+import type { AddressInfo, Server, Socket } from 'node:net';
 
 import { AppError } from '@/libs/app-error';
 import Logger from '@/libs/logger';
@@ -16,12 +16,16 @@ import type { AclDenial, AclLogInput } from '@/modules/acl/acl.types';
 import CommandService from '@/modules/command/command.service';
 import type { CommandMeta, HandlerResult } from '@/modules/command/command.types';
 import { Database } from '@/modules/database/database.service';
+import type { ExpiryControl } from '@/modules/database/database.types';
 import type { MemoryReport } from '@/modules/memory/memory.types';
 import { Evictor } from '@/modules/memory/memory.service';
 import type { KeyEvent } from '@/modules/notifications/notifications.types';
 import { Persistence } from '@/modules/persistence/persistence.service';
 import type { Propagator } from '@/modules/persistence/persistence.service';
+import { Replication } from '@/modules/replication/replication.service';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
+import { LabelIndex } from '@/modules/timeseries/timeseries.index.structure';
+import TimeseriesService from '@/modules/timeseries/timeseries.service';
 import { Tracking } from '@/modules/tracking/tracking.service';
 
 import { ServerAccess } from './server.access';
@@ -30,16 +34,13 @@ import type { Client } from './server.client';
 import { ServerConfig } from './server.config';
 import { ServerConnections } from './server.connections';
 import { ServerDispatcher } from './server.dispatcher';
-import { ServerFiles } from './server.files';
 import { ServerKeyspace } from './server.keyspace';
 import { ServerMemoryModel } from './server.memory_model';
 import ServerMessages from './server.messages';
 import { ServerObserver } from './server.observer';
 import { ServerPubSub } from './server.pubsub';
+import { ServerSettings } from './server.settings';
 import type { CommandStat, DebugHooks, ExecuteMode, Precheck, ServerOptions, SlowlogEntry } from './server.types';
-
-/** Configs that change how the memory model sizes existing keys. */
-const MEMORY_MODEL_CONFIGS = /max-listpack|max-intset|max-ziplist|stream-node|list-compress/;
 
 /**
  * The redis-lite server: one in-memory keyspace, one command at a time (which is what makes every command atomic).
@@ -81,13 +82,17 @@ export class RedisLiteServer {
   readonly acl: Acl;
   /** INFO stats acl_access_denied_*. */
   readonly aclStats = { auth: 0, command: 0, key: 0, channel: 0 };
-  /** master_replid (DEBUG CHANGE-REPL-ID replaces it). */
-  replId = randomBytes(20).toString('hex');
+  /** How every database treats elapsed TTLs (replicas never expire keys themselves; the replication runtime switches it). */
+  readonly keyExpiry: ExpiryControl = { mode: 'active' };
+  /** Replication: role, replication IDs and offsets, backlog, replicas, the link to a master, FAILOVER. */
+  readonly replication: Replication;
   /** DEBUG SET-ACTIVE-EXPIRE: the background expire cycle runs only while true. */
   activeExpire = true;
   /** used_memory_peak and the unix time (s) it was reached. */
   memoryPeak = 0;
   memoryPeakTime = 0;
+  /** The time series label index of every database (kept up to date by each Database's change hook). */
+  readonly labelIndex = new LabelIndex();
   /** Extension points for DEBUG subcommands implemented elsewhere. */
   readonly debugHooks: DebugHooks = {};
 
@@ -102,6 +107,7 @@ export class RedisLiteServer {
   /** @internal */ readonly keyspace = new ServerKeyspace(this);
   /** @internal */ readonly access = new ServerAccess(this);
   /** @internal */ readonly observer = new ServerObserver(this);
+  /** @internal */ readonly settings = new ServerSettings(this);
   /** @internal */ readonly memoryModel: ServerMemoryModel;
 
   private net: Server | null = null;
@@ -127,18 +133,25 @@ export class RedisLiteServer {
     }
     this.databases = Array.from(
       { length: options.databases },
-      (_, i) => new Database((key) => this.keyspace.onExpired(i, key), this.config, (key) => this.memoryModel.tracker.changed(i, key)),
+      (_, i) => {
+        const db: Database = new Database(
+          (key) => this.keyspace.onExpired(i, key),
+          this.config,
+          (key) => {
+            this.memoryModel.tracker.changed(i, key);
+            TimeseriesService.keyChanged(this, db, key);
+          },
+          this.keyExpiry,
+        );
+        return db;
+      },
     );
     this.memoryModel = new ServerMemoryModel(this);
     this.persistence = new Persistence(this);
     this.evictor = new Evictor(this);
     this.tracking = new Tracking(this);
-    this.debugHooks.reload = (_client, args) => this.debugReload(args);
-    this.debugHooks.loadaof = () => {
-      const reply = this.persistence.debugLoadAof();
-      this.evictor.clearPool();
-      return reply;
-    };
+    this.replication = new Replication(this);
+    this.settings.installDebugHooks();
     this.acl = new Acl({
       allCommands: () => CommandService.allCommandsDeep().map((m) => m.fullname),
       categoriesOf: (name) => (CommandService.getCommandMeta(name)?.acl ?? []).map((c) => `@${c}`),
@@ -146,43 +159,18 @@ export class RedisLiteServer {
       pubsubDefault: this.config.get('acl-pubsub-default') === 'allchannels' ? 'allchannels' : 'resetchannels',
       logMaxLen: this.config.num('acllog-max-len'),
     });
-    for (const [name, value] of Object.entries(options.config ?? {})) this.initConfig(name, value);
+    for (const [name, value] of Object.entries(options.config ?? {})) this.settings.init(name, value);
   }
 
   // ──────────────────────────────────────────────
   // Private Helpers
   // ──────────────────────────────────────────────
 
-  /** A startup config value (constructor `config`, redis.conf): validated like CONFIG SET. */
-  private initConfig(name: string, value: string): void {
-    if (!this.config.has(name)) throw new Error(formatMessage(ServerMessages.BAD_DIRECTIVE, { name }));
-    const r = this.config.validate(name, value);
-    if ('error' in r) throw new Error(formatMessage(ServerMessages.INVALID_VALUE, { name, error: r.error }));
-    let v = r.value;
-    if (ServerConfig.canonical(name) === 'dir') v = ServerFiles.checkDir(v);
-    this.config.set(name, v);
-    this.applyConfig(name, v);
-  }
-
-  /** DEBUG RELOAD [MERGE] [NOFLUSH] [NOSAVE]: save, flush and load the RDB again. */
-  private debugReload(args: string[]): Reply {
-    const opts = { merge: false, noflush: false, nosave: false };
-    for (const a of args) {
-      const o = a.toLowerCase();
-      if (o === 'merge') opts.merge = true;
-      else if (o === 'noflush') opts.noflush = true;
-      else if (o === 'nosave') opts.nosave = true;
-      else throw new AppError(ServerMessages.DEBUG_RELOAD_OPTIONS);
-    }
-    const reply = this.persistence.debugReload(opts);
-    this.evictor.clearPool();
-    return reply;
-  }
-
   private async doClose(): Promise<void> {
     // like SIGTERM: final save when save points are configured; an embedded close never refuses to stop
     if (!this.shutdownPrepared) this.persistence.prepareShutdown({ force: true });
     this.evictor.stop();
+    this.replication.stop();
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.blocking.clear();
     this.connections.closeAll();
@@ -224,6 +212,8 @@ export class RedisLiteServer {
     this.sweepTimer.unref();
     const address = net.address() as AddressInfo;
     this.config.set('port', String(address.port));
+    this.options.port = address.port;
+    this.replication.start();
     return address;
   }
 
@@ -257,27 +247,7 @@ export class RedisLiteServer {
 
   /** CONFIG SET side effects. */
   applyConfig(name: string, value: string): void {
-    const canonical = ServerConfig.canonical(name);
-    // the memory model may not exist yet while the constructor applies startup configs
-    if (MEMORY_MODEL_CONFIGS.test(canonical)) this.memoryModel?.tracker.invalidateAll();
-    switch (canonical) {
-      case 'maxmemory':
-        // lowering maxmemory evicts right away
-        if (this.evictor && Number(value) > 0) this.evictor.perform();
-        break;
-      case 'maxmemory-policy':
-        this.evictor?.clearPool();
-        break;
-      case 'requirepass':
-        this.acl.setRequirePass(value);
-        break;
-      case 'acllog-max-len':
-        this.acl.logMaxLen = Number(value);
-        break;
-      case 'acl-pubsub-default':
-        this.acl.pubsubDefault = value === 'allchannels' ? 'allchannels' : 'resetchannels';
-        break;
-    }
+    this.settings.apply(name, value);
   }
 
   // ──────────────────────────────────────────────
@@ -325,6 +295,30 @@ export class RedisLiteServer {
   /** Closes a connection at once (CLIENT KILL) and forgets its state. */
   killClient(client: Client): void {
     this.connections.killClient(client);
+  }
+
+  /** Replication: registers a client on a socket this server opened (the link to its master); no request parsing. */
+  attachClient(socket: Socket): Client {
+    return this.connections.attachClient(socket);
+  }
+
+  /** Replication: runs one command of the master's stream as the master client (replies suppressed). */
+  runAsMaster(client: Client, argv: string[]): void {
+    this.dispatcher.runTopLevel(client, argv);
+  }
+
+  /** Answers a client parked by a Block outside the key machinery (WAIT) and runs its next commands. */
+  releaseBlocked(client: Client, reply: Reply): void {
+    this.blocking.release(client, reply);
+  }
+
+  /** FAILOVER: write commands of normal clients wait until resumeWrites() (CLIENT PAUSE WRITE semantics). */
+  pauseWrites(): void {
+    this.connections.writesPaused = true;
+  }
+
+  resumeWrites(): void {
+    this.connections.resumeWrites();
   }
 
   /** Runs one command. Used by sockets, EXEC and Lua `redis.call`. */
@@ -409,6 +403,11 @@ export class RedisLiteServer {
   /** used_memory as maxmemory sees it. */
   usedMemoryForEviction(): number {
     return this.memoryModel.usedMemoryForEviction();
+  }
+
+  /** A replica with replica-ignore-maxmemory never evicts (EvictionHost). */
+  ignoresMaxmemory(): boolean {
+    return this.replication.ignoresMaxmemory;
   }
 
   // ──────────────────────────────────────────────

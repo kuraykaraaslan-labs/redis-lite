@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { useServer, waitForBlocked } from '@/tests/helpers';
 
 import { Sock, enc, errOf } from './connection.test_helpers';
 
@@ -117,8 +117,7 @@ describe('CLIENT', () => {
     const idReply = await victim.write(enc('CLIENT', 'ID'));
     const id = idReply.slice(1, -2);
     expect.soft(await t.call('CLIENT', 'KILL', 'ID', id)).toBe(1);
-    await sleep(50);
-    expect.soft(victim.closed).toBe(true);
+    expect.soft(await victim.waitClosed()).toBe(true);
     expect.soft(await t.call('CLIENT', 'KILL', 'ID', '999999')).toBe(0);
   });
 
@@ -144,15 +143,14 @@ describe('CLIENT', () => {
     const addr = /addr=(\S+)/.exec(info)?.[1];
     expect.soft(addr).toBeDefined();
     expect.soft(await t.call('CLIENT', 'KILL', 'ADDR', addr!)).toBe(1);
-    await sleep(50);
-    expect.soft(victim.closed).toBe(true);
+    expect.soft(await victim.waitClosed()).toBe(true);
   });
 
   it('UNBLOCK with TIMEOUT (default) makes the blocked command return null', async () => {
     const blocked = await t.raw();
     const id = (await blocked.send('CLIENT', 'ID')).slice(1, -2);
     const pending = blocked.send('BLPOP', 'unblock:list1', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     expect.soft(await t.call('CLIENT', 'UNBLOCK', id)).toBe(1);
     expect.soft(await pending).toBe('*-1\r\n');
     expect.soft(await t.call('CLIENT', 'UNBLOCK', id)).toBe(0);
@@ -162,7 +160,7 @@ describe('CLIENT', () => {
     const blocked = await t.raw();
     const id = (await blocked.send('CLIENT', 'ID')).slice(1, -2);
     const pending = blocked.send('BLPOP', 'unblock:list2', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     expect.soft(await t.call('CLIENT', 'UNBLOCK', id, 'ERROR')).toBe(1);
     expect.soft(await pending).toBe('-UNBLOCKED client unblocked via CLIENT UNBLOCK\r\n');
   });

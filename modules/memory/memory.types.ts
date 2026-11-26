@@ -194,6 +194,8 @@ export interface EvictionHost {
   usedMemoryForEviction(): number;
   /** Deletes the key and does everything an eviction implies (notification, propagation, invalidation). */
   evictKey(dbIndex: number, key: string): void;
+  /** True when this server must not evict (a replica with replica-ignore-maxmemory: the master's DELs evict). */
+  ignoresMaxmemory?(): boolean;
 }
 
 /** A key the evictor may pick. */

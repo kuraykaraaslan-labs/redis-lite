@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { RedisLiteServer } from '@/modules/server/server.core';
-import { sleep, useServer } from '@/tests/helpers';
+import { useServer, waitForBlocked } from '@/tests/helpers';
 
 import { bulk, err, errOf, sha, useAclHelpers } from './acl.e2e.helpers';
 import type { Conn } from './acl.e2e.helpers';
@@ -106,7 +106,6 @@ describe('effects of user changes on connections', () => {
     const self = await login('gone', 'pw');
     const bystander = await raw();
     expect(await self.send('ACL', 'DELUSER', 'gone', 'gone')).toBe(':1\r\n');
-    await sleep(20);
     expect(await closed(self)).toBe(true);
     expect(await closed(other)).toBe(true);
     expect(await bystander.send('PING')).toBe('+PONG\r\n');
@@ -130,7 +129,6 @@ describe('effects of user changes on connections', () => {
     const pardoned = await login('ps', 'pw');
     expect(await pardoned.send('PSUBSCRIBE', 'bar:*')).toBe('*3\r\n$10\r\npsubscribe\r\n$5\r\nbar:*\r\n:1\r\n');
     await t.call('ACL', 'SETUSER', 'ps', 'resetchannels', '&foo:1', '&bar:*');
-    await sleep(20);
     expect(await closed(doomed)).toBe(true);
     expect(await pardoned.send('PING')).toBe('*2\r\n$4\r\npong\r\n$0\r\n\r\n');
   });
@@ -139,7 +137,7 @@ describe('effects of user changes on connections', () => {
     await t.call('ACL', 'SETUSER', 'blk', 'on', '>pw', '+@all', '~*');
     const r = await login('blk', 'pw');
     const pending = r.send('BLPOP', 'blk:list', '0');
-    await sleep(30);
+    await waitForBlocked(t);
     await t.call('ACL', 'SETUSER', 'blk', 'resetkeys');
     await t.call('LPUSH', 'blk:list', 'x');
     expect(await pending).toBe(err('NOPERM No permissions to access a key'));
@@ -272,7 +270,6 @@ describe('ACL SAVE / LOAD with an aclfile', () => {
     const admin = await open();
     expect(await admin.send('ACL', 'LOAD')).toBe('+OK\r\n');
     expect(await admin.send('ACL', 'USERS')).toBe('*2\r\n$7\r\ndefault\r\n$5\r\nextra\r\n');
-    await sleep(20);
     expect(await closed(changed)).toBe(true);
     expect(await kept.send('PING')).toBe('+PONG\r\n');
     expect(await admin.send('PING')).toBe('+PONG\r\n');

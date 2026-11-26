@@ -3,7 +3,10 @@
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  */
+import type { Database } from '@/modules/database/database.service';
+
 import type { Aggregator, BucketTimestamp, ChunkEncoding, DuplicatePolicy, Reducer } from './timeseries.enums';
+import type { LabelIndex } from './timeseries.index.structure';
 
 /** One sample: a millisecond timestamp and a double value (NaN allowed). */
 export type Sample = {
@@ -100,4 +103,10 @@ export type PolicyRule = {
   bucketDuration: number;
   retention: number;
   alignTimestamp: number;
+};
+
+/** What the label index upkeep needs from the server: its LabelIndex and every database it covers. */
+export type LabelIndexHost = {
+  readonly labelIndex: LabelIndex;
+  readonly databases: readonly Database[];
 };

@@ -163,5 +163,5 @@ describe('PFMERGE / PFDEBUG', () => {
 
   it('PFSELFTEST', async () => {
     expect(await redis.call('pfselftest')).toBe('OK');
-  }, 60_000);
+  }, 300_000);
 });

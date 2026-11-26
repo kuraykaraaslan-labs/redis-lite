@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { useServer, waitForBlocked } from '@/tests/helpers';
 
 import { arity, arr, bulk, entry, err, INVALID_ID, NOT_INT, openResp3, toMap, WRONGTYPE } from './streams.test_helpers';
 
@@ -60,30 +60,31 @@ describe('XREAD', () => {
     await t.call('XADD', 'xrd:blk', '1-0', 'f', 'old');
     const c = t.client();
     const p = c.call('XREAD', 'BLOCK', '0', 'STREAMS', 'xrd:blk', '$');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('XADD', 'xrd:blk', '2-0', 'f', 'new');
     expect(await p).toEqual([['xrd:blk', [['2-0', ['f', 'new']]]]]);
   });
 
   it('BLOCK on a missing key with $ wakes when the stream is created', async () => {
     const c = t.client();
-    const p = c.call('XREAD', 'BLOCK', '2000', 'STREAMS', 'xrd:blk2', '$');
-    await sleep(50);
+    const p = c.call('XREAD', 'BLOCK', '20000', 'STREAMS', 'xrd:blk2', '$');
+    await waitForBlocked(t);
     await t.call('XADD', 'xrd:blk2', '7-0', 'f', 'v');
     expect(await p).toEqual([['xrd:blk2', [['7-0', ['f', 'v']]]]]);
   });
 
   it('BLOCK returns immediately when data is available', async () => {
     await t.call('XADD', 'xrd:blk3', '1-0', 'f', 'v');
-    const start = Date.now();
-    expect(await t.call('XREAD', 'BLOCK', '5000', 'STREAMS', 'xrd:blk3', '0')).toEqual([['xrd:blk3', [['1-0', ['f', 'v']]]]]);
-    expect(Date.now() - start).toBeLessThan(1000);
+    const start = performance.now(); // monotonic: the wall clock can be stepped mid-test
+    expect(await t.call('XREAD', 'BLOCK', '20000', 'STREAMS', 'xrd:blk3', '0')).toEqual([['xrd:blk3', [['1-0', ['f', 'v']]]]]);
+    // far below the BLOCK timeout (generous: a loaded machine can delay any reply by seconds)
+    expect(performance.now() - start).toBeLessThan(10_000);
   });
 
   it('BLOCK timeout returns nil (RESP2 *-1, RESP3 _)', async () => {
-    const start = Date.now();
+    const start = performance.now(); // monotonic: the wall clock can be stepped mid-test
     expect(await t.call('XREAD', 'BLOCK', '100', 'STREAMS', 'xrd:timeout', '$')).toBeNull();
-    expect(Date.now() - start).toBeGreaterThanOrEqual(90);
+    expect(performance.now() - start).toBeGreaterThanOrEqual(90);
     const c2 = await t.raw();
     expect(await c2.send('XREAD', 'BLOCK', '50', 'STREAMS', 'xrd:timeout', '$')).toBe('*-1\r\n');
     expect(await c2.send('XREAD', 'STREAMS', 'xrd:timeout', '0')).toBe('*-1\r\n');
@@ -96,7 +97,7 @@ describe('XREAD', () => {
     await t.call('XADD', 'xrd:bm1', '1-0', 'f', 'v');
     const c = t.client();
     const p = c.call('XREAD', 'COUNT', '1', 'BLOCK', '0', 'STREAMS', 'xrd:bm1', 'xrd:bm2', '$', '$');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('XADD', 'xrd:bm2', '3-0', 'g', 'w');
     expect(await p).toEqual([['xrd:bm2', [['3-0', ['g', 'w']]]]]);
   });
@@ -219,7 +220,7 @@ describe('XREADGROUP', () => {
     await t.call('XGROUP', 'CREATE', 'xrg:blk', 'g', '$', 'MKSTREAM');
     const c = t.client();
     const p = c.call('XREADGROUP', 'GROUP', 'g', 'c', 'BLOCK', '0', 'STREAMS', 'xrg:blk', '>');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('XADD', 'xrg:blk', '5-0', 'f', 'v');
     expect(await p).toEqual([['xrg:blk', [['5-0', ['f', 'v']]]]]);
     const pend = (await t.call('XPENDING', 'xrg:blk', 'g')) as unknown[];

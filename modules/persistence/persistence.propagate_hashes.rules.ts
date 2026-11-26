@@ -23,7 +23,7 @@ export default class PropagateHashRules {
   }
 
   private static fieldExpire(ctx: PropagateContext, key: string, field: string): number | undefined {
-    const v = ctx.database.peek(key);
+    const v = ctx.database.raw(key);
     if (!v || v.type !== 'hash') return undefined;
     return HashesService.hashFieldExpires(v.value)?.get(field);
   }

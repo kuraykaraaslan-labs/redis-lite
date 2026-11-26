@@ -8,6 +8,7 @@ import { keyCommands } from '@/modules/keys/keys.commands';
 import { extraKeyCommands } from '@/modules/keys/keys.extra.commands';
 import { listCommands } from '@/modules/lists/lists.commands';
 import { pubsubCommands } from '@/modules/pubsub/pubsub.commands';
+import { replicationCommands } from '@/modules/replication/replication.commands';
 import { scriptingCommands } from '@/modules/scripting/scripting.commands';
 import { serverCommands } from '@/modules/server/server.commands';
 import { setCommands } from '@/modules/sets/sets.commands';
@@ -41,6 +42,7 @@ export const COMMANDS: ReadonlyMap<string, CommandSpec> = new Map(
     ...scriptingCommands,
     ...functionCommands,
     ...timeseriesCommands,
+    ...replicationCommands,
   ].map((spec) => [spec.name, spec]),
 );
 

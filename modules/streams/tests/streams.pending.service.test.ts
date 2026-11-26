@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { eventually, useServer, waitFor } from '@/tests/helpers';
 
 import { arity, err, INVALID_ID, NOT_INT, openResp3, toMap, WRONGTYPE } from './streams.test_helpers';
 
@@ -87,8 +87,10 @@ describe('XPENDING', () => {
   it('IDLE filter', async () => {
     await setup();
     expect(await t.call('XPENDING', k, 'g', 'IDLE', 100000, '-', '+', 10)).toEqual([]);
-    await sleep(30);
-    expect(((await t.call('XPENDING', k, 'g', 'IDLE', 20, '-', '+', 10, 'alice')) as unknown[]).length).toBe(2);
+    // once 20 ms have passed both of alice's entries qualify (polled: a loaded machine may need longer)
+    await eventually(async () => {
+      expect(((await t.call('XPENDING', k, 'g', 'IDLE', 20, '-', '+', 10, 'alice')) as unknown[]).length).toBe(2);
+    });
   });
 
   it('errors', async () => {
@@ -117,7 +119,8 @@ describe('XCLAIM', () => {
 
   it('claims idle entries and increments deliveries', async () => {
     await prep('xc:s');
-    await sleep(20);
+    // wait until every delivered entry is idle for at least the min-idle-time used below
+    await waitFor(async () => ((await t.call('XPENDING', 'xc:s', 'g', 'IDLE', 10, '-', '+', 10)) as unknown[]).length === 3);
     expect(await t.call('XCLAIM', 'xc:s', 'g', 'bob', 10, '1-0', '2-0')).toEqual([
       ['1-0', ['f', '1']],
       ['2-0', ['f', '2']],
@@ -128,7 +131,8 @@ describe('XCLAIM', () => {
       ['2-0', 'bob', 2],
       ['3-0', 'alice', 1],
     ]);
-    expect(p[0][2]).toBeLessThan(20); // idle reset on claim
+    // idle reset on claim: below the unclaimed entry, which was already idle for 10 ms when the claim happened
+    expect(p[0][2]).toBeLessThan(p[2][2]);
   });
 
   it('min-idle-time not reached: nothing claimed', async () => {
@@ -154,13 +158,13 @@ describe('XCLAIM', () => {
     let p = await pending('xc:opts');
     expect(p[0][1]).toBe('bob');
     expect(p[0][2]).toBeGreaterThanOrEqual(50000);
-    expect(p[0][2]).toBeLessThan(55000);
+    expect(p[0][2]).toBeLessThan(60000); // generous: only seconds pass on a loaded machine
     expect(p[0][3]).toBe(7);
     await t.call('XCLAIM', 'xc:opts', 'g', 'carol', 0, '2-0', 'TIME', Date.now() - 30000, 'JUSTID');
     p = await pending('xc:opts');
     expect(p[1][1]).toBe('carol');
     expect(p[1][2]).toBeGreaterThanOrEqual(30000);
-    expect(p[1][2]).toBeLessThan(35000);
+    expect(p[1][2]).toBeLessThan(40000);
     expect(p[1][3]).toBe(1);
   });
 

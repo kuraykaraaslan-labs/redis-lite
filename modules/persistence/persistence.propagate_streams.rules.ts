@@ -21,7 +21,7 @@ export default class PropagateStreamRules {
   // ──────────────────────────────────────────────
 
   private static streamAt(ctx: PropagateContext, key: string): Stream | undefined {
-    const v = ctx.database.peek(key);
+    const v = ctx.database.raw(key);
     return v && v.type === 'stream' ? v.value : undefined;
   }
 

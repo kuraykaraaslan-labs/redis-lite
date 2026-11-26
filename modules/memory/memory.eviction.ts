@@ -82,6 +82,7 @@ export class Evictor {
    * rest continues in the background; 'fail': nothing (more) can be evicted.
    */
   perform(): EvictionResult {
+    if (this.host.ignoresMaxmemory?.()) return 'ok';
     if (!this.overLimit()) return 'ok';
     if (this.background) return 'running';
     if (this.policy === 'noeviction') return 'fail';

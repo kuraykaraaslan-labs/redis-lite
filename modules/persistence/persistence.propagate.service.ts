@@ -46,7 +46,7 @@ export default class PersistencePropagateService {
   }
 
   private static exists(ctx: PropagateContext, key: string): boolean {
-    return ctx.database.peek(key) !== undefined;
+    return ctx.database.raw(key) !== undefined;
   }
 
   // ──────────────────────────────────────────────
@@ -69,10 +69,10 @@ export default class PersistencePropagateService {
     }
     if (expireKind !== null) {
       // An expire time already in the past deletes the key (Redis 7.2+ propagates DEL / UNLINK). UNCERTAIN on 7.0.
-      if (ctx.database.peek(key) === undefined) return [delOp(db, key, Boolean(ctx.lazyfreeLazyExpire))];
+      if (ctx.database.raw(key) === undefined) return [delOp(db, key, Boolean(ctx.lazyfreeLazyExpire))];
       if (expireKind === 'pxat') return [op(db, [...argv])];
       // setGenericCommand: replaceClientCommandVector(c, 5, SET, key, val, PXAT, ms) — NX/XX/GET are dropped.
-      const at = ctx.database.getExpire(key);
+      const at = ctx.database.getExpireRaw(key);
       return [op(db, at === undefined ? ['SET', key, value] : ['SET', key, value, 'PXAT', String(at)])];
     }
     // "Propagate without the GET argument".
@@ -94,8 +94,8 @@ export default class PersistencePropagateService {
       } else if (o === 'persist') persist = true;
     }
     if (expire) {
-      if (ctx.database.peek(key) === undefined) return [delOp(db, key, Boolean(ctx.lazyfreeLazyExpire))];
-      const at = ctx.database.getExpire(key);
+      if (ctx.database.raw(key) === undefined) return [delOp(db, key, Boolean(ctx.lazyfreeLazyExpire))];
+      const at = ctx.database.getExpireRaw(key);
       return at === undefined ? [] : [op(db, ['PEXPIREAT', key, String(at)])];
     }
     if (persist) return [op(db, ['PERSIST', key])];
@@ -107,11 +107,11 @@ export default class PersistencePropagateService {
     const db = ctx.db;
     const key = argv[1];
     // A TTL already in the past: the key is not created; Redis propagates DEL / UNLINK (lazyfree-lazy-server-del).
-    if (ctx.database.peek(key) === undefined) return [delOp(db, key, Boolean(ctx.lazyfreeLazyServerDel))];
+    if (ctx.database.raw(key) === undefined) return [delOp(db, key, Boolean(ctx.lazyfreeLazyServerDel))];
     const absttl = argv.slice(4).some((a) => lc(a) === 'absttl');
     if (argv[2] === '0' || absttl) return [op(db, [...argv])];
     // restoreCommand: a relative TTL is propagated as an absolute one + ABSTTL.
-    const at = ctx.database.getExpire(key);
+    const at = ctx.database.getExpireRaw(key);
     if (at === undefined) return [op(db, [...argv])];
     const out = [...argv];
     out[2] = String(at);
@@ -165,7 +165,7 @@ export default class PersistencePropagateService {
       case 'psetex': {
         // setGenericCommand rewrites to SET key value PXAT <ms>.
         const key = argv[1];
-        const at = ctx.database.getExpire(key);
+        const at = ctx.database.getExpireRaw(key);
         if (at === undefined) return P.exists(ctx, key) ? [op(db, ['SET', key, argv[3]])] : [delOp(db, key, lazyExpire)];
         return [op(db, ['SET', key, argv[3], 'PXAT', String(at)])];
       }
@@ -190,7 +190,7 @@ export default class PersistencePropagateService {
         const key = argv[1];
         if (!P.exists(ctx, key)) return [delOp(db, key, lazyExpire)];
         if (name === 'pexpireat') return P.verbatim(argv, db);
-        const at = ctx.database.getExpire(key);
+        const at = ctx.database.getExpireRaw(key);
         return [op(db, ['PEXPIREAT', key, at === undefined ? argv[2] : String(at), ...argv.slice(3)])];
       }
       case 'restore':

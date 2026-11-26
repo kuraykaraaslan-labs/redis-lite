@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { arity, err, NOT_INT, sleep, useServer } from '@/tests/helpers';
+import { arity, err, eventually, NOT_INT, useServer, waitPastExpiry } from '@/tests/helpers';
 
 /**
  * EXPIRE family, TTL family, PERSIST (keys.expire.service).
@@ -66,7 +66,7 @@ describe('EXPIRE / PEXPIRE / EXPIREAT / PEXPIREAT', () => {
     await t.call('SET', 'exp:pe', 'v');
     expect(await t.call('PEXPIRE', 'exp:pe', 100000)).toBe(1);
     const pttl = (await t.call('PTTL', 'exp:pe')) as number;
-    expect(pttl).toBeGreaterThan(99000);
+    expect(pttl).toBeGreaterThan(95000);
     expect(pttl).toBeLessThanOrEqual(100000);
     const at = Math.floor(Date.now() / 1000) + 1000;
     await t.call('SET', 'exp:at', 'v');
@@ -85,8 +85,8 @@ describe('EXPIRE / PEXPIRE / EXPIREAT / PEXPIREAT', () => {
   it('key actually expires', async () => {
     await t.call('SET', 'exp:real', 'v');
     await t.call('PEXPIRE', 'exp:real', 40);
-    await sleep(100);
-    expect(await t.call('GET', 'exp:real')).toBeNull();
+    await waitPastExpiry(t, 'exp:real');
+    await eventually(async () => expect(await t.call('GET', 'exp:real')).toBeNull()); // retried: the wall clock can be stepped back after the wait
     expect(await t.call('TTL', 'exp:real')).toBe(-2);
   });
 

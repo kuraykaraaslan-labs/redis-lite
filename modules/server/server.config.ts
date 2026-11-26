@@ -77,6 +77,14 @@ function normalizeCompactionPolicy(value: string): string | { error: string } {
   return TimeseriesService.parseCompactionPolicy(value) === null ? { error: TimeseriesMessages.BAD_COMPACTION_POLICY } : value;
 }
 
+/** replicaof: `<masterip> <masterport>` (or empty). */
+function normalizeReplicaOf(value: string): string | { error: string } {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '';
+  if (parts.length !== 2 || !/^\d+$/.test(parts[1]) || Number(parts[1]) > 65535) return { error: ServerMessages.CONFIG_REPLICAOF };
+  return `${parts[0]} ${parts[1]}`;
+}
+
 const TS_DUPLICATE_POLICIES = ['block', 'first', 'last', 'min', 'max', 'sum'];
 
 export const CONFIG_DEFS: Record<string, ConfigDef> = {
@@ -127,8 +135,10 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'maxmemory-eviction-tenacity': int(10, 0n, 100n),
   'maxmemory-policy': oneOf('noeviction', MAXMEMORY_POLICIES),
   'maxmemory-samples': int(5, 1n, 64n),
-  'min-replicas-max-lag': int(10, 0n, INT_MAX),
-  'min-replicas-to-write': int(0, 0n, INT_MAX),
+  masterauth: str(''),
+  masteruser: str(''),
+  'min-replicas-max-lag': { ...int(10, 0n, INT_MAX), aliases: ['min-slaves-max-lag'] },
+  'min-replicas-to-write': { ...int(0, 0n, INT_MAX), aliases: ['min-slaves-to-write'] },
   'notify-keyspace-events': { type: { kind: 'special', normalize: normalizeKeyspaceEvents }, default: '' },
   port: int(6379, 0n, 65535n, true),
   'proto-max-bulk-len': mem(536870912, 1024n * 1024n, LONG_MAX),
@@ -136,9 +146,25 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'rdbchecksum': bool('yes', true),
   rdbcompression: bool('yes'),
   'repl-backlog-size': mem(1048576, 1n, LONG_MAX),
+  'repl-backlog-ttl': int(3600, 0n, INT_MAX),
+  'repl-disable-tcp-nodelay': bool('no'),
+  'repl-diskless-load': oneOf('disabled', ['disabled', 'on-empty-db', 'swapdb']),
+  'repl-diskless-sync': bool('yes'),
+  'repl-diskless-sync-delay': int(5, 0n, INT_MAX),
+  'repl-diskless-sync-max-replicas': int(0, 0n, INT_MAX),
+  'repl-ping-replica-period': { ...int(10, 1n, INT_MAX), aliases: ['repl-ping-slave-period'] },
+  'repl-timeout': int(60, 1n, INT_MAX),
+  'replica-announce-ip': { ...str(''), aliases: ['slave-announce-ip'] },
+  'replica-announce-port': { ...int(0, 0n, 65535n), aliases: ['slave-announce-port'] },
+  'replica-announced': bool('yes'),
+  'replica-ignore-disk-write-errors': bool('no'),
+  'replica-ignore-maxmemory': { ...bool('yes'), aliases: ['slave-ignore-maxmemory'] },
   'replica-lazy-flush': { ...bool('no'), aliases: ['slave-lazy-flush'] },
+  'replica-priority': { ...int(100, 0n, INT_MAX), aliases: ['slave-priority'] },
   'replica-read-only': { ...bool('yes'), aliases: ['slave-read-only'] },
   'replica-serve-stale-data': { ...bool('yes'), aliases: ['slave-serve-stale-data'] },
+  // `host port` of the master (the replicaof directive); REPLICAOF changes it, CONFIG SET cannot
+  replicaof: { type: { kind: 'special', normalize: normalizeReplicaOf }, default: '', immutable: true, aliases: ['slaveof'] },
   requirepass: str(''),
   save: { type: { kind: 'special', normalize: normalizeSave }, default: '3600 1 300 100 60 10000' },
   'set-max-intset-entries': int(512, 0n, LONG_MAX),

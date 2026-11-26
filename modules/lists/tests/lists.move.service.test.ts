@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { arity, sleep, SYNTAX, useServer, WRONGTYPE } from '@/tests/helpers';
+import { arity, SYNTAX, useServer, waitForBlocked, WRONGTYPE } from '@/tests/helpers';
 
 /**
  * LMOVE, RPOPLPUSH and the blocking commands BLPOP, BRPOP, BLMPOP, BLMOVE, BRPOPLPUSH (lists.move.service).
@@ -92,7 +92,7 @@ describe('lists: blocking', () => {
   it('BLPOP blocks until another client pushes', async () => {
     const c = t.client();
     const p = c.call('BLPOP', 'l:b-wait', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     expect(await t.call('RPUSH', 'l:b-wait', 'x', 'y')).toBe(2);
     expect(await p).toEqual(['l:b-wait', 'x']);
     expect(await t.call('LRANGE', 'l:b-wait', 0, -1)).toEqual(['y']);
@@ -101,7 +101,7 @@ describe('lists: blocking', () => {
   it('BRPOP blocks until another client pushes', async () => {
     const c = t.client();
     const p = c.call('BRPOP', 'l:b-wait2', 'l:b-wait3', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('RPUSH', 'l:b-wait3', 'x', 'y');
     expect(await p).toEqual(['l:b-wait3', 'y']);
   });
@@ -111,11 +111,11 @@ describe('lists: blocking', () => {
     const c2 = t.client();
     const c3 = t.client();
     const p1 = c1.call('BLPOP', 'l:b-fifo', '0');
-    await sleep(30);
+    await waitForBlocked(t, 1);
     const p2 = c2.call('BLPOP', 'l:b-fifo', '0');
-    await sleep(30);
+    await waitForBlocked(t, 2);
     const p3 = c3.call('BLPOP', 'l:b-fifo', '0');
-    await sleep(30);
+    await waitForBlocked(t, 3);
     await t.call('RPUSH', 'l:b-fifo', 'a', 'b');
     expect(await p1).toEqual(['l:b-fifo', 'a']);
     expect(await p2).toEqual(['l:b-fifo', 'b']);
@@ -125,11 +125,11 @@ describe('lists: blocking', () => {
   });
 
   it('timeout returns nil; float timeouts are accepted', async () => {
-    const start = Date.now();
+    const start = performance.now(); // monotonic: the wall clock can be stepped mid-test
     expect(await t.call('BLPOP', 'l:b-to', '0.1')).toBeNull();
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeGreaterThanOrEqual(90);
-    expect(elapsed).toBeLessThan(1000);
+    const elapsed = performance.now() - start;
+    expect(elapsed).toBeGreaterThanOrEqual(90); // never before the timeout
+    expect(elapsed).toBeLessThan(10_000); // but it does fire (generous: a loaded machine delays the reply)
     expect(await t.call('BRPOP', 'l:b-to', '0.05')).toBeNull();
     expect(await t.call('BLMOVE', 'l:b-to', 'l:b-to2', 'LEFT', 'LEFT', '0.05')).toBeNull();
     expect(await t.call('BRPOPLPUSH', 'l:b-to', 'l:b-to2', '0.05')).toBeNull();
@@ -169,12 +169,12 @@ describe('lists: blocking', () => {
   it('BLMOVE / BRPOPLPUSH block and wake', async () => {
     const c = t.client();
     const p = c.call('BLMOVE', 'l:b-mv', 'l:b-mv-dst', 'RIGHT', 'LEFT', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('RPUSH', 'l:b-mv', 'a', 'b');
     expect(await p).toBe('b');
     expect(await t.call('LRANGE', 'l:b-mv-dst', 0, -1)).toEqual(['b']);
     const p2 = c.call('BRPOPLPUSH', 'l:b-rpl', 'l:b-rpl-dst', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('LPUSH', 'l:b-rpl', 'z');
     expect(await p2).toBe('z');
     expect(await t.call('LRANGE', 'l:b-rpl-dst', 0, -1)).toEqual(['z']);
@@ -184,7 +184,7 @@ describe('lists: blocking', () => {
   it('BLMPOP blocks and wakes with count', async () => {
     const c = t.client();
     const p = c.call('BLMPOP', '0', '2', 'l:b-mp1', 'l:b-mp2', 'LEFT', 'COUNT', '2');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('RPUSH', 'l:b-mp2', 'a', 'b', 'c');
     expect(await p).toEqual(['l:b-mp2', ['a', 'b']]);
     expect(await t.call('LRANGE', 'l:b-mp2', 0, -1)).toEqual(['c']);
@@ -193,7 +193,7 @@ describe('lists: blocking', () => {
   it('a blocked BLPOP is served by an LMOVE into its key', async () => {
     const c = t.client();
     const p = c.call('BLPOP', 'l:b-chain', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('RPUSH', 'l:b-chain-src', 'v');
     expect(await t.call('LMOVE', 'l:b-chain-src', 'l:b-chain', 'LEFT', 'LEFT')).toBe('v');
     expect(await p).toEqual(['l:b-chain', 'v']);

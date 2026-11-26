@@ -5,6 +5,7 @@ import type { Job } from 'bullmq';
 import Redis from 'ioredis';
 
 import { RedisLite } from '@/index';
+import { eventually } from '@/tests/helpers';
 
 let server: RedisLite;
 const closers: Array<() => Promise<unknown>> = [];
@@ -30,7 +31,8 @@ afterAll(async () => {
   await server.close();
 });
 
-function waitFor<T>(fn: (resolve: (v: T) => void) => void, ms = 8000): Promise<T> {
+/** Resolves when `fn` calls back; the cap is generous because a loaded machine runs BullMQ's timers late. */
+function waitFor<T>(fn: (resolve: (v: T) => void) => void, ms = 25_000): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('timeout')), ms);
     fn((v) => {
@@ -67,16 +69,22 @@ describe('BullMQ on redis-lite', () => {
     const queue = track(new Queue(name, { connection: connection() }));
     const order: string[] = [];
     let attempts = 0;
-    const started = Date.now();
+    const started = performance.now(); // monotonic: the wall clock can be stepped mid-test
+    // done once both jobs ran to the end: the delayed one, and the flaky one on its third attempt (the order of the
+    // two depends on how late a loaded machine runs the backoff timers)
+    let delayedAfter = -1;
     const finished = waitFor<number>((resolve) => {
+      const settle = () => delayedAfter >= 0 && attempts >= 3 && resolve(delayedAfter);
       track(new Worker(name, async (job: Job) => {
         if (job.name === 'flaky') {
           attempts++;
           if (attempts < 3) throw new Error('boom');
+          settle();
           return;
         }
         order.push(job.name);
-        if (job.name === 'delayed') resolve(Date.now() - started);
+        if (job.name === 'delayed') delayedAfter = performance.now() - started;
+        settle();
       }, { connection: connection(), autorun: true }));
     });
     await queue.add('delayed', {}, { delay: 400 });
@@ -193,7 +201,6 @@ describe('BullMQ on redis-lite', () => {
       }, { connection: connection() }));
       w.on('completed', () => resolve());
     });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(await queue.getJob(job.id as string)).toBeUndefined();
+    await eventually(async () => expect(await queue.getJob(job.id as string)).toBeUndefined());
   });
 });

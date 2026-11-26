@@ -26,23 +26,27 @@ describe('MONITOR / SLOWLOG / LATENCY / MEMORY', () => {
   });
 
   it('SLOWLOG GET / LEN / RESET', async () => {
+    // a 200 ms threshold (and a 250 ms sleep to log): with the default 10 ms, a loaded machine can push ordinary
+    // commands of this test over the threshold too
+    await t.call('CONFIG', 'SET', 'slowlog-log-slower-than', '200000');
     expect.soft(await t.call('SLOWLOG', 'RESET')).toBe('OK');
     expect.soft(await t.call('SLOWLOG', 'LEN')).toBe(0);
     expect.soft(await t.call('SLOWLOG', 'GET')).toEqual([]);
-    await t.call('DEBUG', 'SLEEP', '0.05');
+    await t.call('DEBUG', 'SLEEP', '0.25');
     const entries = (await t.call('SLOWLOG', 'GET')) as unknown[][];
     expect.soft(entries).toHaveLength(1);
     const [id, ts, dur, argv, , name] = entries[0];
     expect.soft(typeof id).toBe('number');
     expect.soft(typeof ts).toBe('number');
-    expect.soft(dur as number).toBeGreaterThanOrEqual(10000);
-    expect.soft(argv).toEqual(['DEBUG', 'SLEEP', '0.05']);
+    expect.soft(dur as number).toBeGreaterThanOrEqual(200000);
+    expect.soft(argv).toEqual(['DEBUG', 'SLEEP', '0.25']);
     expect.soft(name).toBe('');
     expect.soft(await t.call('SLOWLOG', 'LEN')).toBe(1);
     expect.soft(await t.call('SLOWLOG', 'GET', '-1')).toHaveLength(1);
     expect.soft(await t.call('SLOWLOG', 'GET', '0')).toEqual([]);
     expect.soft(await t.call('SLOWLOG', 'RESET')).toBe('OK');
     expect.soft(await t.call('SLOWLOG', 'LEN')).toBe(0);
+    await t.call('CONFIG', 'SET', 'slowlog-log-slower-than', '10000');
     expect.soft(await errOf(t.call('SLOWLOG', 'FOO'))).toBe("ERR unknown subcommand 'FOO'. Try SLOWLOG HELP.");
   });
 

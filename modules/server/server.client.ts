@@ -5,6 +5,7 @@ import type { Protocol } from '@/libs/resp';
 import { encode, RespPush } from '@/libs/resp';
 
 import type { AclUser } from '@/modules/acl/acl.structure';
+import type { ReplicaInfo } from '@/modules/replication/replication.types';
 
 import { WatchedKeys } from './server.watch';
 
@@ -84,6 +85,16 @@ export class Client {
   protocolError: string | null = null;
   protocolErrorSent = false;
 
+  /** Replication, master side: set by REPLCONF / PSYNC on a replica's connection (CLIENT LIST flag S). */
+  replica: ReplicaInfo | null = null;
+  /** Replication, replica side: this is the connection the master's stream runs on (CLIENT LIST flag M). */
+  isMaster = false;
+  /** master_repl_offset after this client's last propagated write (what WAIT / WAITAOF wait for). */
+  woff = 0;
+
+  /** Its next command is a write waiting for writes to resume (FAILOVER pauses them). */
+  paused = false;
+
   blocked: Waiter | null = null;
   readonly pending: string[][] = [];
   closed = false;
@@ -106,9 +117,14 @@ export class Client {
     return this.socket ? `${this.socket.remoteAddress ?? '?'}:${this.socket.remotePort ?? 0}` : 'internal';
   }
 
-  /** Sends a reply. CLIENT REPLY OFF / SKIP suppress everything except out-of-band pushes, unless `force`. */
+  /**
+   * Sends a reply. CLIENT REPLY OFF / SKIP suppress everything except out-of-band pushes, unless `force`. Replication
+   * connections (the master's, an attached replica's) get no replies at all.
+   */
   write(reply: Reply, force = false): void {
     if (this.closed || !this.socket) return;
+    // a master never reads replies from its replica, and a replica's connection carries the stream only
+    if (this.isMaster || this.replica?.attached) return;
     if (!force && (this.replyOff || this.skipCurrent) && !(reply instanceof RespPush)) return;
     const data = encode(reply, this.resp);
     this.netOut += data.length;

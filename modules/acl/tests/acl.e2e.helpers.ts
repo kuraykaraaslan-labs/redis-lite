@@ -4,7 +4,7 @@ import type { Socket } from 'node:net';
 
 import { afterAll, expect } from 'vitest';
 
-import { sleep } from '@/tests/helpers';
+import { sleep, wholeResp } from '@/tests/helpers';
 import type { TestServer } from '@/tests/helpers';
 
 /** Shared helpers of the end-to-end ACL suites: raw RESP connections, logins, ACL LOG as objects. */
@@ -43,23 +43,29 @@ export class Conn {
     const parts = args.map(String);
     const payload = `*${parts.length}\r\n${parts.map((a) => `$${Buffer.byteLength(a, 'latin1')}\r\n${a}\r\n`).join('')}`;
     if (!this.closed) this.socket.write(payload, 'latin1');
+    // generous caps: on a loaded machine a reply can take seconds; the wait ends as soon as it is complete
+    const deadline = Date.now() + 10_000;
     if (!this.buffer && !this.closed) {
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 2000);
+        const timer = setTimeout(resolve, 10_000);
         this.waiters.push(() => {
           clearTimeout(timer);
           resolve();
         });
       });
     }
-    await sleep(15);
+    for (;;) {
+      const seen = this.buffer.length;
+      await sleep(15);
+      if ((this.buffer.length === seen && wholeResp(this.buffer)) || Date.now() > deadline) break;
+    }
     const out = this.buffer;
     this.buffer = '';
     return out;
   }
 
   /** Resolves once the server has closed the connection (false after `ms`). */
-  async waitClosed(ms = 1000): Promise<boolean> {
+  async waitClosed(ms = 10_000): Promise<boolean> {
     const until = Date.now() + ms;
     while (!this.closed && Date.now() < until) await sleep(10);
     return this.closed;

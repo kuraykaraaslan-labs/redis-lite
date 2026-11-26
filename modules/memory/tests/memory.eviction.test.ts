@@ -12,7 +12,7 @@ import { LuaEngine } from '@/modules/scripting/scripting.engine';
 import { RedisLiteServer } from '@/modules/server/server.core';
 import HashesService from '@/modules/hashes/hashes.service';
 import DatabaseService from '@/modules/database/database.service';
-import { sleep, tempDir, useServer } from '@/tests/helpers';
+import { eventually, tempDir, useServer, waitFor } from '@/tests/helpers';
 
 import MemoryService from '../memory.service';
 import type { KeyRecord } from '../memory.types';
@@ -223,8 +223,8 @@ describe('policies', () => {
     const target = (await used()) - 150_000;
     expect(await t.call('CONFIG', 'SET', 'maxmemory', String(target))).toBe('OK');
     expect(await t.call('SET', 'allowed', 'v')).toBe('OK');
-    await sleep(200);
-    expect(await used()).toBeLessThanOrEqual(target);
+    // the background cycles get there eventually (polled: how many cycles fit in a given time depends on the load)
+    await eventually(async () => expect(await used()).toBeLessThanOrEqual(target), { timeout: 20_000 });
   });
 });
 
@@ -253,7 +253,7 @@ describe('side effects of an eviction', () => {
       const usedNow = Number(/used_memory:(\d+)/.exec(await r.info('memory'))?.[1]);
       await r.config('SET', 'maxmemory', String(usedNow - 100));
       expect(await r.exists('victim')).toBe(0);
-      await sleep(40);
+      await waitFor(() => events.length > 0);
       expect(events).toEqual(['victim']);
       expect(await watcher.multi().set('w', '1').exec()).toBeNull();
       expect(/evicted_keys:(\d+)/.exec(await r.info('stats'))?.[1]).toBe('1');

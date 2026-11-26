@@ -101,10 +101,12 @@ describe('OBJECT', () => {
   });
 
   it('IDLETIME is ~0 right after access', async () => {
+    const start = Date.now();
     await t.call('SET', 'ob:idle', 'v');
     const idle = (await t.call('OBJECT', 'IDLETIME', 'ob:idle')) as number;
     expect(idle).toBeGreaterThanOrEqual(0);
-    expect(idle).toBeLessThanOrEqual(1);
+    // at most 1 s on an idle machine; a loaded one may take longer between the two commands
+    expect(idle).toBeLessThanOrEqual(1 + Math.floor((Date.now() - start) / 1000));
   });
 
   it('FREQ errors when no LFU policy is selected', async () => {

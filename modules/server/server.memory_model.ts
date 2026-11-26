@@ -29,7 +29,9 @@ export class ServerMemoryModel {
     });
     let report = MemoryService.computeMemory({
       databases,
-      clientsNormal: server.clients.size * MemoryService.clientMemory(),
+      clientsNormal: (server.clients.size - (server.replication?.replicas.size ?? 0)) * MemoryService.clientMemory(),
+      clientsSlaves: (server.replication?.replicas.size ?? 0) * MemoryService.clientMemory(),
+      replicationBacklog: server.replication?.backlog?.size ?? 0,
       sizes: {
         listMaxListpackSize: server.config.num('list-max-listpack-size'),
         streamNodeMaxEntries: server.config.num('stream-node-max-entries'),

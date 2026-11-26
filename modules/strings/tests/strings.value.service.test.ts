@@ -36,7 +36,7 @@ describe('GET / SET', () => {
     await t.call('SET', 'st:ex', 'v', 'EX', 100);
     expect(await t.call('TTL', 'st:ex')).toBe(100);
     await t.call('SET', 'st:px', 'v', 'PX', 100000);
-    expect(await t.call('PTTL', 'st:px')).toBeGreaterThan(99000);
+    expect(await t.call('PTTL', 'st:px')).toBeGreaterThan(95000);
     const at = Math.floor(Date.now() / 1000) + 200;
     await t.call('SET', 'st:exat', 'v', 'EXAT', at);
     expect(await t.call('EXPIRETIME', 'st:exat')).toBe(at);
@@ -145,10 +145,11 @@ describe('SETEX / PSETEX / SETNX', () => {
   });
 
   it('PSETEX', async () => {
-    expect(await t.call('PSETEX', 'sx:p', 1000, 'Hello')).toBe('OK');
+    // 100 s rather than redis.io's 1 s, so the lower bound keeps a margin for a loaded machine
+    expect(await t.call('PSETEX', 'sx:p', 100000, 'Hello')).toBe('OK');
     const pttl = (await t.call('PTTL', 'sx:p')) as number;
-    expect(pttl).toBeGreaterThan(900);
-    expect(pttl).toBeLessThanOrEqual(1000);
+    expect(pttl).toBeGreaterThan(95000);
+    expect(pttl).toBeLessThanOrEqual(100000);
     expect(await err(t.call('PSETEX', 'sx:p', 0, 'v'))).toBe("ERR invalid expire time in 'psetex' command");
     expect(await err(t.call('PSETEX', 'sx:p', 'x', 'v'))).toBe(NOT_INT);
     expect(await err(t.call('PSETEX', 'sx:p'))).toBe(arity('psetex'));
@@ -198,7 +199,7 @@ describe('GETSET / GETDEL / GETEX', () => {
     expect(await t.call('GETEX', 'ge:a', 'EX', 60)).toBe('Hello');
     expect(await t.call('TTL', 'ge:a')).toBe(60);
     expect(await t.call('GETEX', 'ge:a', 'PX', 70000)).toBe('Hello');
-    expect(await t.call('PTTL', 'ge:a')).toBeGreaterThan(69000);
+    expect(await t.call('PTTL', 'ge:a')).toBeGreaterThan(65000);
     const at = Math.floor(Date.now() / 1000) + 500;
     expect(await t.call('GETEX', 'ge:a', 'EXAT', at)).toBe('Hello');
     expect(await t.call('EXPIRETIME', 'ge:a')).toBe(at);

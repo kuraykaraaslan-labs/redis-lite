@@ -50,7 +50,7 @@ export default class ConnectionAuthService {
     if (name !== null) ctx.client.name = name;
     if (protocol !== null) ctx.client.resp = protocol;
     return RespMap.from([
-      'server', 'redis', 'version', ServerService.REDIS_VERSION, 'proto', ctx.client.resp, 'id', ctx.client.id, 'mode', 'standalone', 'role', 'master',
+      'server', 'redis', 'version', ServerService.REDIS_VERSION, 'proto', ctx.client.resp, 'id', ctx.client.id, 'mode', 'standalone', 'role', ctx.server.replication.role === 'slave' ? 'replica' : 'master',
       'modules', [],
     ]);
   }

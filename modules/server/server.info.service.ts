@@ -77,7 +77,8 @@ export default class ServerInfoService {
         const watchedKeys = clients.reduce((n, c) => n + c.watched.size, 0);
         const blockingKeys = new Set(clients.flatMap((c) => c.blocked?.dbKeys ?? [])).size;
         return [
-          `connected_clients:${clients.length}`,
+          // replicas are not counted (they are listed in the replication section)
+          `connected_clients:${clients.filter((c) => !c.replica?.attached).length}`,
           'cluster_connections:0',
           `maxclients:${cfg.get('maxclients') ?? '10000'}`,
           'client_recent_max_input_buffer:0',
@@ -124,9 +125,9 @@ export default class ServerInfoService {
           'instantaneous_input_repl_kbps:0.00',
           'instantaneous_output_repl_kbps:0.00',
           'rejected_connections:0',
-          'sync_full:0',
-          'sync_partial_ok:0',
-          'sync_partial_err:0',
+          `sync_full:${s.replication.stats.syncFull}`,
+          `sync_partial_ok:${s.replication.stats.syncPartialOk}`,
+          `sync_partial_err:${s.replication.stats.syncPartialErr}`,
           `expired_keys:${s.stats.expired}`,
           'expired_stale_perc:0.00',
           'expired_time_cap_reached_count:0',
@@ -172,19 +173,7 @@ export default class ServerInfoService {
         ];
       }
       case 'replication':
-        return [
-          'role:master',
-          'connected_slaves:0',
-          'master_failover_state:no-failover',
-          `master_replid:${s.replId}`,
-          'master_replid2:0000000000000000000000000000000000000000',
-          'master_repl_offset:0',
-          'second_repl_offset:-1',
-          'repl_backlog_active:0',
-          `repl_backlog_size:${cfg.get('repl-backlog-size') ?? '1048576'}`,
-          'repl_backlog_first_byte_offset:0',
-          'repl_backlog_histlen:0',
-        ];
+        return s.replication.infoLines(now);
       case 'cpu': {
         const cpu = process.cpuUsage();
         const sys = (cpu.system / 1e6).toFixed(6);

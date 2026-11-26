@@ -151,7 +151,8 @@ export interface PropagatedOp {
 }
 
 /** The keyspace a rewrite reads (after the command ran). */
-export type KeyspaceView = Pick<Database, 'peek' | 'getExpire'>;
+/** Read-only view used by propagation: raw reads, so a key whose TTL ran out while the command ran is not expired here. */
+export type KeyspaceView = Pick<Database, 'raw' | 'getExpireRaw'>;
 
 export interface PropagateContext {
   /** Database the command ran in. */

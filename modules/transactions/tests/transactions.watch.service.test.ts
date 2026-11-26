@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { eventually, useServer, waitPastExpiry } from '@/tests/helpers';
 
 /**
  * WATCH, UNWATCH.
@@ -81,13 +81,19 @@ describe('WATCH / UNWATCH', () => {
   });
 
   it('a watched key that expires aborts the transaction', async () => {
-    const r = await t.raw();
-    await t.call('SET', 'w:exp', 'v', 'PX', '50');
-    await r.send('WATCH', 'w:exp');
-    await sleep(120);
-    await r.send('MULTI');
-    await r.send('PING');
-    expect.soft(await r.send('EXEC')).toBe('*-1\r\n');
+    // The TTL runs on the wall clock, which can be stepped back (NTP / WSL time sync) between the wait and the EXEC;
+    // the whole scenario is retried on a fresh key until it ran without such a step.
+    let attempt = 0;
+    await eventually(async () => {
+      const key = `w:exp:${++attempt}`;
+      const r = await t.raw();
+      await t.call('SET', key, 'v', 'PX', '50');
+      await r.send('WATCH', key);
+      await waitPastExpiry(t, key);
+      await r.send('MULTI');
+      await r.send('PING');
+      expect(await r.send('EXEC')).toBe('*-1\r\n');
+    });
   });
 
   it('FLUSHALL / FLUSHDB abort transactions watching existing keys', async () => {

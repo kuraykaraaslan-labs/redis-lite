@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import { OK, Status } from '@/libs/resp';
 
+import { waitFor } from '@/tests/helpers';
+
 import { tempDir, harness, populate, logical, fcall } from './persistence.helpers';
 
 describe('RDB', () => {
@@ -33,10 +35,12 @@ describe('RDB', () => {
   it('skips keys that expired before loading and counts them', async () => {
     const dir = tempDir();
     const a = await harness(dir);
+    const setAt = Date.now();
     a.run('SET', 'gone', 'x', 'PX', '30');
     a.run('SET', 'kept', 'y');
     a.p.save();
-    await new Promise((r) => setTimeout(r, 60));
+    // poll the wall clock TTLs use rather than sleeping: it can be stepped back while a test sleeps
+    await waitFor(() => Date.now() > setAt + 60);
     const b = await harness(dir);
     expect(b.p.loadAtStartup()).toEqual({ source: 'rdb', keysLoaded: 1, keysExpired: 1 });
     expect(b.p.info()).toContain('rdb_last_load_keys_expired:1');
@@ -75,11 +79,14 @@ describe('RDB', () => {
     h.p.cron();
     expect(h.p.bgsaveInProgress).toBe(false); // 1 change < 2
     h.run('SET', 'b', '2');
+    const before = Math.floor(Date.now() / 1000);
     h.p.cron();
     expect(h.p.bgsaveInProgress).toBe(true);
     await h.p.waitForBackground();
     expect(h.p.dirty).toBe(0);
-    expect(h.p.lastsaveCommand()).toBe(Math.floor(Date.now() / 1000));
+    // the second the save happened: now on an idle machine, bracketed in case the save straddles a second boundary
+    expect(h.p.lastsaveCommand()).toBeGreaterThanOrEqual(before);
+    expect(h.p.lastsaveCommand()).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
   });
 
   it('a failing BGSAVE sets the error status and MISCONF write denial', async () => {

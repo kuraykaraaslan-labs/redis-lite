@@ -22,6 +22,8 @@ Usage: redis-lite [/path/to/redis.conf] [options]
       --appendonly yes|no  enable the append only file (default no, env REDIS_LITE_APPENDONLY)
       --save "<points>"    RDB save points, e.g. "3600 1 300 100" or "" to disable
                            (default "3600 1 300 100 60 10000", env REDIS_LITE_SAVE)
+      --replicaof "<host> <port>"
+                           start as a replica of that master (same as the replicaof directive)
       --log-level <lvl>    silent | warn | info | debug (default warn)
       --help               show this help
 
@@ -68,6 +70,7 @@ async function main(): Promise<void> {
       dbfilename: { type: 'string' },
       appendonly: { type: 'string' },
       save: { type: 'string' },
+      replicaof: { type: 'string' },
       'log-level': { type: 'string' },
       help: { type: 'boolean' },
     },
@@ -85,6 +88,12 @@ async function main(): Promise<void> {
   }
   const config: Record<string, string> = {};
   for (const [name, value] of file) if (!OPTION_DIRECTIVES.has(ServerConfig.canonical(name))) config[name] = value;
+  if (values.replicaof !== undefined) {
+    const checked = new ServerConfig({}).validate('replicaof', values.replicaof);
+    if ('error' in checked) throw new Error(`--replicaof: ${checked.error}`);
+    delete config.slaveof;
+    config.replicaof = checked.value;
+  }
 
   const server = await RedisLite.start({
     port: values.port ?? file.get('port') ?? env.REDIS_LITE_PORT ?? 6379,

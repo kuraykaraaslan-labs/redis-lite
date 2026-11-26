@@ -7,6 +7,7 @@ import Redis from 'ioredis';
 
 import { RedisLite } from '@/index';
 import { foldDirectives, readConfigFile } from '@/modules/server/server.conf_file';
+import { eventually, waitFor, waitForBlocked, waitPastExpiry } from '@/tests/helpers';
 
 import PersistenceService from '../persistence.service';
 import { tempDir, asRoot, withServer, errMsg, infoField } from './persistence.helpers';
@@ -78,16 +79,17 @@ describe('server wiring', () => {
   it('appendonly: writes, served blocked pops and expirations reach the AOF and are replayed at startup', async () => {
     const dir = tempDir();
     await withServer({ dir, appendonly: true, save: '' }, async (r, server) => {
+      const caller = { call: (...args: string[]) => r.call(args[0], ...args.slice(1)) };
       const blocker = new Redis(server.url);
       const popped = blocker.blpop('queue', 0);
-      await new Promise((res) => setTimeout(res, 30));
+      await waitForBlocked(caller);
       await r.rpush('queue', 'job1', 'job2');
       expect(await popped).toEqual(['queue', 'job1']);
       blocker.disconnect();
       await r.set('ttl', 'v', 'PX', 30);
       await r.incrbyfloat('f', '1.5');
-      await new Promise((res) => setTimeout(res, 60));
-      expect(await r.get('ttl')).toBeNull();
+      await waitPastExpiry(caller, 'ttl');
+      await eventually(async () => expect(await r.get('ttl')).toBeNull()); // retried: the wall clock can be stepped back after the wait
       const aofDir = join(dir, 'appendonlydir');
       const incr = readdirSync(aofDir).find((f) => f.endsWith('.incr.aof')) as string;
       const text = readFileSync(join(aofDir, incr), 'latin1');
@@ -140,7 +142,7 @@ describe('server wiring', () => {
     const r = new Redis(server.url, { maxRetriesPerRequest: null, retryStrategy: () => null });
     await r.set('saved-by', 'shutdown-save');
     await r.call('SHUTDOWN', 'SAVE').catch(() => undefined);
-    await new Promise((res) => setTimeout(res, 50));
+    await waitFor(() => closed).catch(() => undefined);
     r.disconnect();
     expect(closed).toBe(true);
     await withServer({ dir, save: '' }, async (r2) => {

@@ -129,6 +129,15 @@ export class ServerBlocking {
     return true;
   }
 
+  /** Answers a blocked client with `reply` (a wait that ends outside the key machinery: WAIT) and runs its next commands. */
+  release(client: Client, reply: Reply): void {
+    const waiter = client.blocked;
+    if (!waiter) return;
+    this.unblock(waiter);
+    client.write(reply);
+    this.server.connections.drain(client);
+  }
+
   /** A key changed: clients waiting on it are served after the current command. */
   keyChanged(dbIndex: number, key: string): void {
     if (!this.waiters.size) return;

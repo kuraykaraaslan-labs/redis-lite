@@ -16,7 +16,7 @@ npx @kuraykaraaslan/redis-lite
 > [!IMPORTANT]
 > **No performance guarantees.** redis-lite is a single Node.js process. It makes **no commitment** on throughput, latency, memory use or scalability, and it is slower than Redis. Measure it against your own workload before relying on it (see [Benchmarks](#benchmarks)).
 >
-> **Good fits:** development, CI, tests, and small single-node installs. **Not a fit:** high-volume production traffic, or anything that needs replication or clustering (not available yet).
+> **Good fits:** development, CI, tests, and small single-node installs. **Not a fit:** high-volume production traffic, or anything that needs clustering or automatic failover (no sentinel / cluster; replication with a manual or `FAILOVER`-driven switch is available).
 >
 > **Persistence:** the CLI persists like Redis (RDB save points on, AOF off, files in the current directory). Servers started from code stay in memory unless you pass persistence options (see [From code](#from-code)).
 
@@ -55,6 +55,7 @@ npx @kuraykaraaslan/redis-lite /path/to/redis.conf --port 6380
 | `--dbfilename <name>` | `REDIS_LITE_DBFILENAME` | `dump.rdb` |
 | `--appendonly yes\|no` | `REDIS_LITE_APPENDONLY` | `no` |
 | `--save "<seconds> <changes> ..."` | `REDIS_LITE_SAVE` | `"3600 1 300 100 60 10000"` (`""` disables RDB snapshots) |
+| `--replicaof "<host> <port>"` | | none (start as a master) |
 | `--log-level <level>` | `REDIS_LITE_LOG_LEVEL` | `warn` (`silent`, `warn`, `info`, `debug`) |
 
 **Config file.** An optional `redis.conf` path can be given as the first argument. It uses the redis.conf syntax: one `name value` directive per line, `#` comments, quoted arguments (`"double"` with escapes, `'single'`), `include <path>`, and repeated `save` lines that add save points (`save ""` clears them). `port`, `bind` (first address), `requirepass`, `databases`, `aclfile`, `dir`, `dbfilename`, `appendonly` and `save` map to the options above; every other directive redis-lite knows is applied as with `CONFIG SET`. Directives redis-lite does not support are reported on stderr and ignored (Redis refuses to start). Precedence: command-line options, then the config file, then the environment.
@@ -184,6 +185,7 @@ The test suite has **over 1,000 tests**, most of them written from the Redis doc
 | Streams | `XADD` `XLEN` `XRANGE` `XREVRANGE` `XDEL` `XTRIM` `XREAD` `XGROUP` `XREADGROUP` `XACK` `XPENDING` `XCLAIM` `XAUTOCLAIM` `XINFO` (incl. `STREAM … FULL`) `XSETID` |
 | HyperLogLog | `PFADD` `PFCOUNT` `PFMERGE` `PFDEBUG` `PFSELFTEST` |
 | Pub/Sub | `SUBSCRIBE` `UNSUBSCRIBE` `PSUBSCRIBE` `PUNSUBSCRIBE` `PUBLISH` `SSUBSCRIBE` `SUNSUBSCRIBE` `SPUBLISH` `PUBSUB` |
+| Replication | `REPLICAOF` `SLAVEOF` `ROLE` `WAIT` `WAITAOF` `FAILOVER` `PSYNC` `SYNC` `REPLCONF` |
 | Transactions | `MULTI` `EXEC` `DISCARD` `WATCH` `UNWATCH` |
 | Scripting | `EVAL` `EVALSHA` `EVAL_RO` `EVALSHA_RO` `SCRIPT` (`LOAD` `EXISTS` `FLUSH` `KILL`) |
 | Functions | `FUNCTION` (`LOAD` `LIST` `DELETE` `FLUSH` `STATS` `DUMP` `RESTORE` `KILL`) `FCALL` `FCALL_RO` |
@@ -219,8 +221,10 @@ redis-lite is under active development towards full Redis 8.8 parity. See [docs/
 | Keyspace notifications (`notify-keyspace-events`) | Done |
 | Client-side caching (`CLIENT TRACKING`) | Done |
 | CLI config file (`redis.conf`) | Done |
+| Replication: `REPLICAOF` / `replicaof` directive / `--replicaof`, full sync (disk or diskless EOF payload), partial resync from the backlog, PSYNC2 after promotion, chained replicas, read-only replicas, `replica-serve-stale-data`, `WAIT` / `WAITAOF` with real acknowledgements, `min-replicas-to-write`, `FAILOVER`, `ROLE` and `INFO replication` | Done |
+| Time series (`TS.*`) | Done |
 
-**Not available yet:** replication, sentinel, cluster, and the modules bundled with Redis 8 (JSON, Search, time series, probabilistic, vector sets).
+**Not available yet:** sentinel, cluster, and the other modules bundled with Redis 8 (JSON, Search, probabilistic, vector sets).
 
 ## Differences from Redis
 
@@ -237,14 +241,15 @@ What still differs from Redis 8.8 today:
 | Client-side caching | When `tracking-table-max-keys` is exceeded the oldest tracked keys are dropped (Redis picks random ones). |
 | `LATENCY` | Does not record events yet. |
 | Lua number formatting | `tostring()` uses Lua 5.1's `%.14g`, but `..` concatenation still uses Lua 5.4 rules (`10/2 .. ''` gives `"5.0"`, Redis gives `"5"`). |
-| Not supported | Replication, sentinel, cluster, Redis 8 modules (JSON, Search, time series, probabilistic, vector sets). |
+| Replication | Interoperability with a real Redis master or replica follows the documented protocol but has only been tested redis-lite to redis-lite. A full sync takes the snapshot synchronously (no fork, no per-replica output buffer); `repl-diskless-load` only decides whether the received RDB is also written to `dbfilename` (it is always parsed before the dataset is replaced, like `swapdb`), and `replica-lazy-flush` has no visible effect. A replica's offset advances at transaction boundaries. Hash field TTLs still expire lazily on a replica (whole keys never do). The RDB-channel replication of Redis 8 and `client-output-buffer-limit` for replicas are not implemented. |
+| Not supported | Sentinel, cluster, Redis 8 modules other than time series (JSON, Search, probabilistic, vector sets). |
 
 **Verification:** expected behaviour comes from the Redis documentation and Redis's known behaviour. A byte-for-byte differential test suite against a real Redis 8.8 server is planned; until it runs, some binary details (exact RDB version number, HLL bytes, memory numbers) are unverified.
 
 ## When not to use it
 
 - **When you need performance.** redis-lite makes no promise about speed or memory use. Use Redis for high-volume traffic, benchmarks and load tests.
-- **Production with more than one app node.** Locks, idempotency keys and rate limits are only correct if every node shares one server, and redis-lite has no replication or clustering yet.
+- **Production with more than one app node writing.** Locks, idempotency keys and rate limits are only correct if every node writes to one master; replicas give a hot standby and read scaling, not clustering or automatic failover.
 - **Data you cannot afford to lose.** RDB and AOF persistence work, but they have not been battle-tested the way Redis's have.
 
 ## Benchmarks

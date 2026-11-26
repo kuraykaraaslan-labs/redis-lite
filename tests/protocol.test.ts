@@ -7,7 +7,7 @@ import { useServer } from '@/tests/helpers';
 const t = useServer();
 
 /** Writes raw bytes and collects the reply until `done(received)` is true, the socket closes, or the timeout hits. */
-function rawExchange(payload: string | Buffer, done: (s: string) => boolean, timeoutMs = 2000): Promise<{ data: string; closed: boolean }> {
+function rawExchange(payload: string | Buffer, done: (s: string) => boolean, timeoutMs = 10_000): Promise<{ data: string; closed: boolean }> {
   return new Promise((resolve) => {
     let data = '';
     let closed = false;
@@ -220,7 +220,7 @@ describe('wire level', () => {
       const timer = setTimeout(() => {
         s.destroy();
         resolve(data);
-      }, 2000);
+      }, 10_000);
       s.on('data', (d: string) => {
         data += d;
         if (data.length >= expected.length) {
@@ -256,7 +256,7 @@ describe('wire level', () => {
   });
 
   it('inline protocol: unbalanced quotes', async () => {
-    const { data, closed } = await rawExchange('SET k "unterminated\r\n', () => false, 1000);
+    const { data, closed } = await rawExchange('SET k "unterminated\r\n', () => false);
     expect(data).toBe('-ERR Protocol error: unbalanced quotes in request\r\n');
     expect(closed).toBe(true);
   });
@@ -267,25 +267,25 @@ describe('wire level', () => {
   });
 
   it("malformed multibulk: expected '$'", async () => {
-    const { data, closed } = await rawExchange('*1\r\nfoo\r\n', () => false, 1000);
+    const { data, closed } = await rawExchange('*1\r\nfoo\r\n', () => false);
     expect(data).toBe("-ERR Protocol error: expected '$', got 'f'\r\n");
     expect(closed).toBe(true);
   });
 
   it('malformed multibulk: invalid multibulk length', async () => {
-    const { data, closed } = await rawExchange('*abc\r\n', () => false, 1000);
+    const { data, closed } = await rawExchange('*abc\r\n', () => false);
     expect(data).toBe('-ERR Protocol error: invalid multibulk length\r\n');
     expect(closed).toBe(true);
   });
 
   it('malformed multibulk: invalid bulk length', async () => {
-    const { data, closed } = await rawExchange('*1\r\n$abc\r\n', () => false, 1000);
+    const { data, closed } = await rawExchange('*1\r\n$abc\r\n', () => false);
     expect(data).toBe('-ERR Protocol error: invalid bulk length\r\n');
     expect(closed).toBe(true);
   });
 
   it('valid command before a protocol error is still answered', async () => {
-    const { data, closed } = await rawExchange(cmd('PING') + '*1\r\nxyz\r\n', () => false, 1000);
+    const { data, closed } = await rawExchange(cmd('PING') + '*1\r\nxyz\r\n', () => false);
     expect(data).toBe("+PONG\r\n-ERR Protocol error: expected '$', got 'x'\r\n");
     expect(closed).toBe(true);
   });

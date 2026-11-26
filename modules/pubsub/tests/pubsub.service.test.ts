@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { useServer, waitFor } from '@/tests/helpers';
 import type { RawClient } from '@/tests/helpers';
 
 /**
@@ -161,7 +161,7 @@ describe('PUBLISH and message delivery', () => {
     const p = t.redis.pipeline();
     for (let i = 0; i < 200; i++) p.publish('pm:order', String(i));
     await p.exec();
-    for (let i = 0; i < 50 && got.length < 200; i++) await sleep(10);
+    await waitFor(() => got.length >= 200).catch(() => undefined); // the assertion below reports what arrived
     expect(got).toEqual(Array.from({ length: 200 }, (_, i) => String(i)));
   });
 
@@ -186,7 +186,8 @@ describe('PUBLISH and message delivery', () => {
     await s.send('SUBSCRIBE', 'pm:gone');
     expect(await t.call('PUBLISH', 'pm:gone', 'x')).toBe(1);
     s.close();
-    await sleep(50);
+    // the server notices the close asynchronously: wait for it, then the subscriber is gone
+    await waitFor(async () => ((await t.call('PUBSUB', 'NUMSUB', 'pm:gone')) as unknown[])[1] === 0).catch(() => undefined);
     expect(await t.call('PUBLISH', 'pm:gone', 'x')).toBe(0);
   });
 });
@@ -274,7 +275,7 @@ describe('PUBSUB introspection', () => {
     expect(await t.call('PUBSUB', 'CHANNELS', 'in:p*')).toEqual([]);
     a.close();
     b.close();
-    await sleep(50);
+    await waitFor(async () => ((await t.call('PUBSUB', 'CHANNELS', 'in:*')) as unknown[]).length === 0).catch(() => undefined);
     expect(await t.call('PUBSUB', 'CHANNELS', 'in:*')).toEqual([]);
     expect(await t.call('PUBSUB', 'NUMSUB', 'in:one')).toEqual(['in:one', 0]);
   });

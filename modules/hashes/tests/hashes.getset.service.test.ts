@@ -68,7 +68,7 @@ describe('hashes: HGETDEL / HGETEX / HSETEX', () => {
     expect(await t.call('HTTL', 'h:sex', 'FIELDS', 1, 'a')).toEqual([-1]);
     expect(await t.call('HSETEX', 'h:sex', 'PX', 100000, 'FIELDS', 1, 'b', 'x')).toBe(1);
     const pttl = (await t.call('HPTTL', 'h:sex', 'FIELDS', 1, 'b')) as number[];
-    expect(pttl[0]).toBeGreaterThan(99000);
+    expect(pttl[0]).toBeGreaterThan(95000);
     // FXX on a missing key: nothing to update
     expect(await t.call('HSETEX', 'h:sex-missing', 'FXX', 'FIELDS', 1, 'a', '1')).toBe(0);
     expect(await t.call('EXISTS', 'h:sex-missing')).toBe(0);

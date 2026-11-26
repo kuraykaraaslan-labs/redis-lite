@@ -7,7 +7,7 @@
  *
  * An entry is a (key, series) pair as it was last seen, with the labels it is filed under. The series is held weakly:
  * an entry left behind by a deleted series never keeps the series alive, and the caller (TimeseriesIndex) drops such
- * entries when it meets them. Several entries may share a key (the same name in two databases, or a stale entry).
+ * entries when it meets them. The server owns one instance (a stateful component, see docs/STRUCTURE.md). Several entries may share a key (the same name in two databases, or a stale entry).
  */
 import type { TimeSeries } from './timeseries.structure';
 import type { LabelMatcher } from './timeseries.types';
@@ -26,8 +26,6 @@ export class LabelIndex {
   private readonly byLabel = new Map<string, Set<IndexEntry>>();
   private readonly byKey = new Map<string, Set<IndexEntry>>();
   private count = 0;
-  /** TimeSeries.created when the index last held every series of its databases (-1: never built). */
-  synced = -1;
 
   // ──────────────────────────────────────────────
   // Private Helpers
@@ -99,6 +97,11 @@ export class LabelIndex {
     return undefined;
   }
 
+  /** The entries filed at `key` (live; copy before removing while iterating). */
+  entriesAt(key: string): ReadonlySet<IndexEntry> | undefined {
+    return this.byKey.get(key);
+  }
+
   /** Files `series` at `key` under its current labels (refiles an existing entry whose labels were replaced). */
   add(key: string, series: TimeSeries): IndexEntry {
     const existing = this.find(key, series);
@@ -132,7 +135,6 @@ export class LabelIndex {
     this.byLabel.clear();
     this.byKey.clear();
     this.count = 0;
-    this.synced = -1;
   }
 
   /**

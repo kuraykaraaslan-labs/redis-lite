@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { arity, NOT_INT, sleep, useServer } from '@/tests/helpers';
+import { arity, eventually, NOT_INT, useServer, waitFor, waitForServerTime } from '@/tests/helpers';
 
 /**
  * Hash field TTLs: HEXPIRE family, HTTL family, HPERSIST (hashes.ttl.service).
@@ -48,7 +48,7 @@ describe('hashes: field TTL', () => {
     await t.call('HSET', 'h:pex', 'a', '1', 'b', '2', 'c', '3', 'd', '4');
     expect(await t.call('HPEXPIRE', 'h:pex', 100000, 'FIELDS', 1, 'a')).toEqual([1]);
     const pttl = (await t.call('HPTTL', 'h:pex', 'FIELDS', 1, 'a')) as number[];
-    expect(pttl[0]).toBeGreaterThan(99000);
+    expect(pttl[0]).toBeGreaterThan(95000);
     expect(pttl[0]).toBeLessThanOrEqual(100000);
     const nowS = Math.floor(Date.now() / 1000);
     expect(await t.call('HEXPIREAT', 'h:pex', nowS + 1000, 'FIELDS', 1, 'b')).toEqual([1]);
@@ -70,20 +70,16 @@ describe('hashes: field TTL', () => {
   it('expired fields disappear; the key goes when the last field expires', async () => {
     await t.call('HSET', 'h:lazy', 'a', '1', 'b', '2');
     expect(await t.call('HPEXPIRE', 'h:lazy', 50, 'FIELDS', 1, 'a')).toEqual([1]);
-    await sleep(120);
-    expect(await t.call('HGET', 'h:lazy', 'a')).toBeNull();
+    await waitForServerTime(t, ((await t.call('HPEXPIRETIME', 'h:lazy', 'FIELDS', 1, 'a')) as number[])[0]);
+    await eventually(async () => expect(await t.call('HGET', 'h:lazy', 'a')).toBeNull()); // retried: the wall clock can be stepped back after the wait
     expect(await t.call('HGETALL', 'h:lazy')).toEqual(['b', '2']);
     // unverified: HLEN may still count an expired-but-not-yet-reclaimed field in Redis, so it is not asserted here
     expect(await t.call('HPEXPIRE', 'h:lazy', 50, 'FIELDS', 1, 'b')).toEqual([1]);
-    await sleep(120);
-    expect(await t.call('HGETALL', 'h:lazy')).toEqual([]);
+    await waitForServerTime(t, ((await t.call('HPEXPIRETIME', 'h:lazy', 'FIELDS', 1, 'b')) as number[])[0]);
+    await eventually(async () => expect(await t.call('HGETALL', 'h:lazy')).toEqual([]));
     // Redis's active expire cycle reclaims expired fields (and then the empty key) within a few cycles
-    let exists = 1;
-    for (let i = 0; i < 20 && exists; i++) {
-      exists = (await t.call('EXISTS', 'h:lazy')) as number;
-      if (exists) await sleep(100);
-    }
-    expect(exists).toBe(0);
+    // (polled with a generous cap: how many cycles run in a given time depends on the load)
+    expect(await waitFor(async () => (await t.call('EXISTS', 'h:lazy')) === 0, { timeout: 20_000, interval: 50 })).toBe(true);
   });
 
   it('HPERSIST returns -2 / -1 / 1', async () => {

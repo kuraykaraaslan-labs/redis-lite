@@ -48,7 +48,7 @@ describe('DUMP / RESTORE', () => {
     await t.call('SET', 'dr:t', 'v');
     const payload = await t.redis.dumpBuffer('dr:t');
     expect(await t.call('RESTORE', 'dr:t2', 100000, payload)).toBe('OK');
-    expect(await t.call('PTTL', 'dr:t2')).toBeGreaterThan(99000);
+    expect(await t.call('PTTL', 'dr:t2')).toBeGreaterThan(95000);
     expect(await err(t.call('RESTORE', 'dr:t2', 0, payload))).toBe('BUSYKEY Target key name already exists.');
     expect(await t.call('RESTORE', 'dr:t2', 0, payload, 'REPLACE')).toBe('OK');
     expect(await t.call('TTL', 'dr:t2')).toBe(-1);

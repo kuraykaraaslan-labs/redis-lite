@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { useServer, waitFor } from '@/tests/helpers';
 
 import { errOf } from './server.test_helpers';
 
@@ -29,9 +29,10 @@ describe('TIME / LASTSAVE / SAVE / BGSAVE / ROLE / DEBUG / LOLWUT', () => {
     const last = await r.send('LASTSAVE');
     expect.soft(last).toMatch(/^:\d+\r\n$/);
     expect.soft(Math.abs(Number(last.slice(1, -2)) - Date.now() / 1000)).toBeLessThan(5);
-    await sleep(200);
+    const saveIdle = () => waitFor(async () => /rdb_bgsave_in_progress:0/.test(String(await t.call('INFO', 'persistence'))));
+    await saveIdle();
     expect.soft(await r.send('BGSAVE')).toBe('+Background saving started\r\n');
-    await sleep(200);
+    await saveIdle();
     expect.soft(await r.send('BGSAVE', 'FOO')).toBe('-ERR syntax error\r\n');
     expect.soft(await r.send('SAVE', 'x')).toBe("-ERR wrong number of arguments for 'save' command\r\n");
     expect.soft(await r.send('LASTSAVE', 'x')).toBe("-ERR wrong number of arguments for 'lastsave' command\r\n");
@@ -45,9 +46,9 @@ describe('TIME / LASTSAVE / SAVE / BGSAVE / ROLE / DEBUG / LOLWUT', () => {
 
   it('DEBUG SLEEP', async () => {
     expect.soft(await t.call('DEBUG', 'SLEEP', '0')).toBe('OK');
-    const start = Date.now();
+    const start = performance.now(); // monotonic: the wall clock can be stepped mid-test
     expect.soft(await t.call('DEBUG', 'SLEEP', '0.1')).toBe('OK');
-    expect.soft(Date.now() - start).toBeGreaterThanOrEqual(90);
+    expect.soft(performance.now() - start).toBeGreaterThanOrEqual(90);
   });
 
   it('LOLWUT ends with the Redis version', async () => {

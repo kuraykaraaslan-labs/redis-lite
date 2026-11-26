@@ -139,6 +139,26 @@ export class Persistence extends PersistenceAofLoader {
   }
 
   /**
+   * A replica's full sync: the RDB received from the master replaces the whole dataset (functions included). The
+   * payload is parsed before anything is flushed, so a corrupt one leaves the old dataset in place (throws). Keys whose
+   * TTL already elapsed are kept: a replica waits for the master's DEL. With the AOF on, it is rewritten from the new
+   * dataset.
+   */
+  replaceDataset(payload: Buffer): LoadResult {
+    const file = PersistenceService.readRdb(payload);
+    this.killBgsave();
+    this.emptyData();
+    const keys = this.withLoading(() => this.loadRdbFile(file, true));
+    if (this.aofState === 'on') this.rewriteAof();
+    return { source: 'rdb', ...keys };
+  }
+
+  /** True when the AOF is on and everything written to it was fsynced (a replica's FACK). */
+  get aofFsynced(): boolean {
+    return this.aofState === 'on' && !this.aofFsyncPending && !this.aofBuffer;
+  }
+
+  /**
    * After FLUSHALL (flushallCommand): kill a running BGSAVE; with save points configured, save the now empty dataset
    * right away. The caller then still counts FLUSHALL as one change (server.dirty++), so it propagates.
    */

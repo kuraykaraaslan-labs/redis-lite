@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { useServer } from '@/tests/helpers';
+import { eventually, useServer } from '@/tests/helpers';
 
 import { arity, bulk, err, INVALID_ID, NOT_INT, openResp3, WRONGTYPE } from './streams.test_helpers';
 
@@ -17,13 +17,20 @@ const resp3 = () => openResp3(t);
 // ============================================================================
 describe('XADD', () => {
   it('* generates <ms>-<seq> ids that increase', async () => {
-    const before = Date.now();
     const id1 = (await t.call('XADD', 'xa:auto', '*', 'f', 'v')) as string;
     const id2 = (await t.call('XADD', 'xa:auto', '*', 'f', 'v')) as string;
     expect(id1).toMatch(/^\d+-\d+$/);
     const [ms1, seq1] = id1.split('-').map(Number);
-    expect(ms1).toBeGreaterThanOrEqual(before - 5);
-    expect(ms1).toBeLessThanOrEqual(Date.now() + 5);
+    // the ms part is the wall clock: bracketed by the test's clock reads. The wall clock can be stepped (NTP / WSL
+    // time sync) during a call, so the bracket is retried on a fresh stream until one call ran without a step.
+    let attempt = 0;
+    await eventually(async () => {
+      const before = Date.now();
+      const id = (await t.call('XADD', `xa:clock:${++attempt}`, '*', 'f', 'v')) as string;
+      const ms = Number(id.split('-')[0]);
+      expect(ms).toBeGreaterThanOrEqual(before - 5);
+      expect(ms).toBeLessThanOrEqual(Date.now() + 5);
+    });
     const [ms2, seq2] = id2.split('-').map(Number);
     expect(ms2 > ms1 || (ms2 === ms1 && seq2 === seq1 + 1)).toBe(true);
     expect(await t.call('XLEN', 'xa:auto')).toBe(2);

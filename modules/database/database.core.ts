@@ -4,7 +4,7 @@ import { RespMessages } from '@/libs/resp/messages';
 import type { ServerConfig } from '@/modules/server/server.service';
 
 import { KeySampler } from './database.sampler';
-import type { Access, KeyChangeListener, RedisValue, ValueOf, ValueType } from './database.types';
+import type { Access, ExpiryControl, KeyChangeListener, RedisValue, ValueOf, ValueType } from './database.types';
 
 // ============================================================================
 // Constants
@@ -31,6 +31,7 @@ export class Database {
     private readonly onExpired: (key: string) => void,
     private readonly config: ServerConfig,
     private readonly onChange: KeyChangeListener = () => undefined,
+    private readonly expiry: ExpiryControl = { mode: 'active' },
   ) {}
 
   /** Keys stored, including expired keys not reclaimed yet (what Redis's dict size reports). */
@@ -85,6 +86,9 @@ export class Database {
   peek(key: string): RedisValue | undefined {
     const at = this.expires.get(key);
     if (at !== undefined && at <= Date.now()) {
+      const mode = this.expiry.mode;
+      if (mode === 'stream') return this.data.get(key);
+      if (mode === 'replica') return undefined;
       this.remove(key);
       this.onExpired(key);
       return undefined;
@@ -207,6 +211,7 @@ export class Database {
 
   /** Active expiry: deletes up to `limit` expired keys. */
   sweep(now: number, limit = 1000): void {
+    if (this.expiry.mode !== 'active') return;
     let n = 0;
     for (const [key, at] of this.expires) {
       if (at <= now) {

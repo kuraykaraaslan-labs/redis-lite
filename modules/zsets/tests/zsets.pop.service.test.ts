@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { sleep, useServer } from '@/tests/helpers';
+import { useServer, waitForBlocked } from '@/tests/helpers';
 import type { RawClient } from '@/tests/helpers';
 
 /**
@@ -127,20 +127,20 @@ describe('BZPOPMIN / BZPOPMAX / BZMPOP', () => {
   it('blocks until another client adds', async () => {
     const c = t.client();
     const p = c.call('BZPOPMIN', 'bz:w1', 'bz:w2', '0');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('ZADD', 'bz:w2', 5, 'x', 3, 'y');
     expect(await p).toEqual(['bz:w2', 'y', '3']);
     expect(await t.call('ZRANGE', 'bz:w2', 0, -1)).toEqual(['x']);
 
     const c2 = t.client();
     const p2 = c2.call('BZPOPMAX', 'bz:w3', '5');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('ZADD', 'bz:w3', 1, 'a', 9, 'z');
     expect(await p2).toEqual(['bz:w3', 'z', '9']);
 
     const c3 = t.client();
     const p3 = c3.call('BZMPOP', '0', '2', 'bz:w4', 'bz:w5', 'MAX', 'COUNT', '2');
-    await sleep(50);
+    await waitForBlocked(t);
     await t.call('ZADD', 'bz:w5', 1, 'a', 2, 'b', 3, 'c');
     expect(await p3).toEqual(['bz:w5', [['c', '3'], ['b', '2']]]);
   });
