@@ -133,7 +133,9 @@ describe('hashes: basic', () => {
     await t.call('HSET', 'h:incrf', 'str', 'abc');
     await expect(t.call('HINCRBYFLOAT', 'h:incrf', 'str', '1')).rejects.toThrow('ERR hash value is not a float');
     await expect(t.call('HINCRBYFLOAT', 'h:incrf', 'field', 'abc')).rejects.toThrow('ERR value is not a valid float');
-    await expect(t.call('HINCRBYFLOAT', 'h:incrf', 'field', 'inf')).rejects.toThrow('ERR increment would produce NaN or Infinity');
+    await expect(t.call('HINCRBYFLOAT', 'h:incrf', 'field', 'inf')).rejects.toThrow('ERR value is NaN or Infinity');
+    await t.call('HSET', 'h:incrf', 'big', '1e4932');
+    await expect(t.call('HINCRBYFLOAT', 'h:incrf', 'big', '1e4932')).rejects.toThrow('ERR increment would produce NaN or Infinity');
     await expect(t.call('HINCRBYFLOAT', 'h:incrf', 'field')).rejects.toThrow(arity('hincrbyfloat'));
   });
 
@@ -191,8 +193,8 @@ describe('hashes: encodings', () => {
   it('listpack → hashtable by entries and by value size; listpackex with TTLs', async () => {
     await t.call('HSET', 'h:enc1', 'a', '1');
     expect(await enc('h:enc1')).toBe('listpack');
-    for (let i = 0; i < 127; i++) await t.call('HSET', 'h:enc1', `f${i}`, 'v');
-    expect(await t.call('HLEN', 'h:enc1')).toBe(128);
+    await t.call('HSET', 'h:enc1', ...Array.from({ length: 511 }, (_, i) => [`f${i}`, 'v']).flat());
+    expect(await t.call('HLEN', 'h:enc1')).toBe(512);
     expect(await enc('h:enc1')).toBe('listpack');
     await t.call('HSET', 'h:enc1', 'one-more', 'v');
     expect(await enc('h:enc1')).toBe('hashtable');

@@ -48,7 +48,7 @@ const client = bySubcommand(
     'no-evict': withDTO(ClientOnOffDTO, ConnectionService.noEvict),
     reply: withDTO(ClientReplyDTO, ConnectionService.reply),
     pause: withDTO(ClientPauseDTO, ConnectionService.pause),
-    unpause: (ctx) => ConnectionService.pause(ctx),
+    unpause: (ctx) => ConnectionService.unpause(ctx),
   },
   // the dispatcher answers unknown subcommands first; kept for direct calls
   (_ctx, args) => {
@@ -71,4 +71,7 @@ export const connectionCommands: CommandSpec[] = [
   { name: 'quit', arity: -1, flags: { noauth: true, noscript: true }, handler: () => ConnectionService.quit() },
   { name: 'readonly', arity: 1, handler: () => ConnectionService.clusterOnly() },
   { name: 'readwrite', arity: 1, handler: () => ConnectionService.clusterOnly() },
+  { name: 'asking', arity: 1, handler: () => ConnectionService.clusterOnly() },
+  // every CLUSTER subcommand (HELP included) answers the same outside cluster mode; unknown ones are the dispatcher's
+  { name: 'cluster', arity: -2, handler: () => ConnectionService.clusterOnly() },
 ];

@@ -13,6 +13,17 @@ export default class CommandKeysService {
   // Private Helpers
   // ──────────────────────────────────────────────
 
+  /**
+   * The flags of a `variable_flags` key spec for this command line (Redis resolves them with the command's own key
+   * extraction): SET reads the old value only with GET, BITFIELD writes only with SET / INCRBY.
+   */
+  private static variableFlags(meta: CommandMeta, argv: string[], flags: string[]): string[] {
+    const has = (from: number, words: string[]) => argv.slice(from).some((a) => words.includes(a.toLowerCase()));
+    if (meta.name === 'set') return has(3, ['get']) ? ['RW', 'access', 'update'] : ['OW', 'update'];
+    if (meta.name === 'bitfield') return has(2, ['set', 'incrby']) ? ['RW', 'access', 'update'] : ['RO', 'access'];
+    return flags;
+  }
+
   /** SORT has unknown key specs (BY/GET patterns, STORE anywhere): Redis uses sortGetKeys(). */
   private static sortKeys(meta: CommandMeta, argv: string[]): KeyRef[] {
     const out: KeyRef[] = [{ index: 1, flags: meta.keySpecs[0]?.flags ?? ['RO', 'access'] }];
@@ -72,15 +83,18 @@ export default class CommandKeysService {
         if (numkeys < 0) return null;
         first += spec.find.firstkey;
         last = first + numkeys - 1;
+        // more keys announced than given: the command line is invalid (EVAL-like commands report no keys)
+        if (last >= argc) return null;
         step = spec.find.keystep;
       } else continue;
 
+      const flags = spec.flags.includes('variable_flags') ? CommandKeysService.variableFlags(meta, argv, spec.flags) : spec.flags;
       for (let i = first; i <= last; i += step) {
         if (i >= argc || i < first) {
           if (meta.arity < 0) continue;
           return null;
         }
-        out.push({ index: i, flags: spec.flags });
+        out.push({ index: i, flags });
       }
     }
     return out;

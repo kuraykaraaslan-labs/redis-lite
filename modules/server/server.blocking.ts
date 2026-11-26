@@ -1,3 +1,6 @@
+import { AppError } from '@/libs/app-error';
+import Logger from '@/libs/logger';
+import { formatMessage } from '@/libs/message-format';
 import { RespError } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
@@ -12,11 +15,17 @@ import type { RedisLiteServer } from './server.core';
 import { specKeys } from './server.dispatcher';
 import ServerMessages from './server.messages';
 
+/** Longest delay a Node timer accepts. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 /**
  * Blocked clients (BLPOP, BZPOPMIN, XREAD BLOCK…): the waiters per `${db}:${key}`, their timeouts, and serving them FIFO
  * per key once a key they wait on changes (Redis handleClientsBlockedOnKeys()).
  */
 export class ServerBlocking {
+  /** COMMAND DOCS group of a blocking command → the value type it pops from. */
+  private static readonly GROUP_TYPES: Readonly<Record<string, string>> = { list: 'list', 'sorted-set': 'zset', stream: 'stream' };
+
   private readonly waiters = new Map<string, Waiter[]>();
   private readonly readyKeys = new Set<string>();
   private servingReady = false;
@@ -28,8 +37,33 @@ export class ServerBlocking {
   // ──────────────────────────────────────────────
 
   /**
+   * Redis serves a waiter only when the key that became ready holds the type its command pops from: a key that now
+   * holds another type (SET over a list someone BLPOPs) leaves the client blocked. XREADGROUP is the exception: its
+   * group went away with the stream, and its own retry answers that.
+   */
+  private holdsWaitedType(waiter: Waiter, dbKey: string): boolean {
+    if (!waiter.argv || waiter.argv[0].toLowerCase() === 'xreadgroup') return true;
+    const expected = ServerBlocking.GROUP_TYPES[CommandService.lookupCommand(waiter.argv).meta?.group ?? ''];
+    if (!expected) return true;
+    const sep = dbKey.indexOf(':');
+    const value = this.server.databases[Number(dbKey.slice(0, sep))]?.raw(dbKey.slice(sep + 1));
+    return value === undefined || value.type === expected;
+  }
+
+  /** An error thrown while serving a waiter becomes its reply (Redis answers the blocked client with the error). */
+  private retryOrError(waiter: Waiter): Reply | undefined {
+    try {
+      return waiter.retry();
+    } catch (error) {
+      if (error instanceof AppError) return new RespError(error.message);
+      Logger.error('[ServerBlocking.retryBlocked] Internal error', { err: (error as Error).stack ?? String(error) });
+      return new RespError(formatMessage(ServerMessages.GENERIC_ERROR, { message: (error as Error).message }));
+    }
+  }
+
+  /**
    * Tries to serve a blocked client. A served command is its own execution unit: it is propagated (as its non-blocking
-   * form) and its keyspace events are published, like a command that just ran.
+   * form) and its keyspace events are published, like a command that just ran. An error is answered, never thrown.
    */
   private retryBlocked(waiter: Waiter): Reply | undefined {
     const server = this.server;
@@ -45,8 +79,8 @@ export class ServerBlocking {
     propagator.enter(name);
     server.tracking.current = client;
     try {
-      const reply = waiter.retry();
-      if (reply !== undefined && argv) {
+      const reply = this.retryOrError(waiter);
+      if (reply !== undefined && !(reply instanceof RespError) && argv) {
         propagator.record(client.dbIndex, argv, reply, server.persistence.dirty - dirtyBefore);
         if (before) {
           const meta = CommandService.lookupCommand(argv).meta;
@@ -95,13 +129,21 @@ export class ServerBlocking {
       else this.waiters.set(k, [waiter]);
     }
     if (block.timeoutMs > 0) {
-      waiter.timer = setTimeout(() => {
+      const fire = (): void => {
         if (waiter.done) return;
         this.unblock(waiter);
         client.write(block.timeoutReply);
         this.server.connections.drain(client);
         this.serveReadyKeys();
-      }, block.timeoutMs);
+      };
+      // a Node timer fires at once past 2^31-1 ms: longer timeouts are armed in steps
+      const deadline = Date.now() + block.timeoutMs;
+      const arm = (): void => {
+        if (waiter.done) return;
+        const left = deadline - Date.now();
+        waiter.timer = left > MAX_TIMER_MS ? setTimeout(arm, MAX_TIMER_MS) : setTimeout(fire, Math.max(0, left));
+      };
+      arm();
     }
     client.blocked = waiter;
   }
@@ -172,10 +214,12 @@ export class ServerBlocking {
               released.push(waiter.client);
               continue;
             }
+            if (!this.holdsWaitedType(waiter, k)) continue;
             const reply = this.retryBlocked(waiter);
             if (reply === undefined) continue;
             this.unblock(waiter);
-            waiter.client.write(reply);
+            if (reply instanceof RespError) this.server.observer.replyError(waiter.client, reply.message);
+            else waiter.client.write(reply);
             TrackingService.flushDeferred(this.server.tracking, waiter.client);
             released.push(waiter.client);
           }

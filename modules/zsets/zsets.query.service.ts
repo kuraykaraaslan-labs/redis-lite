@@ -90,7 +90,7 @@ export default class ZSetsQueryService {
     return [String(next), out];
   }
 
-  /** ZRANDMEMBER on the value read first: one member, `count` distinct members, or -count members with repeats. */
+  /** ZRANDMEMBER on the value read after the count: one member, `count` distinct members, or -count members with repeats. */
   static randMember(zset: ZSet | undefined, { count, withScores }: ZRandMemberInput): Reply {
     const entries = zset?.entries ?? [];
     if (count === null) return entries.length ? entries[Math.floor(Math.random() * entries.length)].member : null;

@@ -1,3 +1,5 @@
+import { constants } from 'node:buffer';
+
 import { AppError } from '@/libs/app-error';
 
 import type { CommandContext } from '@/modules/command/command.types';
@@ -13,25 +15,30 @@ export default class BitmapStore {
   // Constants
   // ──────────────────────────────────────────────
 
-  /** String.fromCharCode takes its arguments on the stack: convert in chunks. */
-  private static readonly CHUNK = 65536;
+  /**
+   * The longest string this engine can hold (the JS string limit, a little under 512 MB). Redis grows a bitmap up to
+   * proto-max-bulk-len; a bitmap that would outgrow this limit is refused with Redis's offset error instead.
+   */
+  private static readonly MAX_BYTES = constants.MAX_STRING_LENGTH;
 
   // ──────────────────────────────────────────────
   // Public Methods
   // ──────────────────────────────────────────────
 
   /** The bytes of the string at `key` (empty when missing); WRONGTYPE for other types. */
-  static read(ctx: CommandContext, key: string): number[] {
-    const v = ctx.db.get(key, 'string') ?? '';
-    const out = new Array<number>(v.length);
-    for (let i = 0; i < v.length; i++) out[i] = v.charCodeAt(i);
-    return out;
+  static read(ctx: CommandContext, key: string): Uint8Array {
+    return Buffer.from(ctx.db.get(key, 'string') ?? '', 'latin1');
+  }
+
+  /** The bytes of the string at `key`, or null when the key is missing (an empty string is not missing). */
+  static readExisting(ctx: CommandContext, key: string): Uint8Array | null {
+    const v = ctx.db.get(key, 'string');
+    return v === undefined ? null : Buffer.from(v, 'latin1');
   }
 
   /** Stores the bytes as a raw-encoded string, keeping the key's TTL. */
-  static write(ctx: CommandContext, key: string, bytes: number[]): void {
-    let value = '';
-    for (let i = 0; i < bytes.length; i += BitmapStore.CHUNK) value += String.fromCharCode(...bytes.slice(i, i + BitmapStore.CHUNK));
+  static write(ctx: CommandContext, key: string, bytes: Uint8Array): void {
+    const value = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString('latin1');
     ctx.db.set(key, { type: 'string', value, raw: true }, true);
   }
 
@@ -40,16 +47,26 @@ export default class BitmapStore {
     if (Math.floor(offset / 8) >= ctx.server.config.num('proto-max-bulk-len')) throw new AppError(BitmapsMessages.BIT_OFFSET);
   }
 
-  static getBit(bytes: number[], offset: number): number {
-    const byte = bytes[offset >> 3] ?? 0;
+  /** `bytes` grown with zero bytes to at least `size` bytes (a new array when it grows). */
+  static grow(bytes: Uint8Array, size: number): Uint8Array {
+    if (bytes.length >= size) return bytes;
+    if (size > BitmapStore.MAX_BYTES) throw new AppError(BitmapsMessages.BIT_OFFSET);
+    const grown = new Uint8Array(size);
+    grown.set(bytes);
+    return grown;
+  }
+
+  static getBit(bytes: Uint8Array, offset: number): number {
+    const byte = bytes[Math.floor(offset / 8)] ?? 0;
     return (byte >> (7 - (offset & 7))) & 1;
   }
 
-  /** Sets one bit, growing the array with zero bytes as needed. */
-  static setBit(bytes: number[], offset: number, bit: number): void {
+  /** Sets one bit, growing the bytes as needed; returns the (possibly new) bytes. */
+  static setBit(bytes: Uint8Array, offset: number, bit: number): Uint8Array {
     const i = Math.floor(offset / 8);
-    while (bytes.length <= i) bytes.push(0);
-    const mask = 1 << (7 - (offset % 8));
-    bytes[i] = bit ? bytes[i] | mask : bytes[i] & ~mask;
+    const out = BitmapStore.grow(bytes, i + 1);
+    const mask = 1 << (7 - (offset & 7));
+    out[i] = bit ? out[i] | mask : out[i] & ~mask;
+    return out;
   }
 }

@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { createServer } from 'node:net';
-import type { AddressInfo, Server, Socket } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 
 import { AppError } from '@/libs/app-error';
 import Logger from '@/libs/logger';
@@ -10,12 +9,11 @@ import { Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { AclLogContext } from '@/modules/acl/acl.enums';
-import { Acl } from '@/modules/acl/acl.service';
+import type { Acl } from '@/modules/acl/acl.service';
 import type { AclUser } from '@/modules/acl/acl.structure';
 import type { AclDenial, AclLogInput } from '@/modules/acl/acl.types';
-import CommandService from '@/modules/command/command.service';
 import type { CommandMeta, HandlerResult } from '@/modules/command/command.types';
-import { Database } from '@/modules/database/database.service';
+import type { Database } from '@/modules/database/database.service';
 import type { ExpiryControl } from '@/modules/database/database.types';
 import type { MemoryReport } from '@/modules/memory/memory.types';
 import { Evictor } from '@/modules/memory/memory.service';
@@ -25,7 +23,6 @@ import type { Propagator } from '@/modules/persistence/persistence.service';
 import { Replication } from '@/modules/replication/replication.service';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
 import { LabelIndex } from '@/modules/timeseries/timeseries.index.structure';
-import TimeseriesService from '@/modules/timeseries/timeseries.service';
 import { Tracking } from '@/modules/tracking/tracking.service';
 
 import { ServerAccess } from './server.access';
@@ -35,12 +32,13 @@ import { ServerConfig } from './server.config';
 import { ServerConnections } from './server.connections';
 import { ServerDispatcher } from './server.dispatcher';
 import { ServerKeyspace } from './server.keyspace';
+import { ServerListener } from './server.listener';
 import { ServerMemoryModel } from './server.memory_model';
 import ServerMessages from './server.messages';
 import { ServerObserver } from './server.observer';
 import { ServerPubSub } from './server.pubsub';
 import { ServerSettings } from './server.settings';
-import type { CommandStat, DebugHooks, ExecuteMode, Precheck, ServerOptions, SlowlogEntry } from './server.types';
+import type { CommandStat, DebugHooks, ExecuteMode, PauseMode, Precheck, ServerOptions, SlowlogEntry } from './server.types';
 
 /**
  * The redis-lite server: one in-memory keyspace, one command at a time (which is what makes every command atomic).
@@ -64,7 +62,7 @@ export class RedisLiteServer {
   readonly patterns = new Map<string, Set<Client>>();
   readonly shardChannels = new Map<string, Set<Client>>();
   readonly monitors = new Set<Client>();
-  readonly stats = { commands: 0, connections: 0, expired: 0, errorReplies: 0, netIn: 0, netOut: 0 };
+  readonly stats = { commands: 0, connections: 0, expired: 0, errorReplies: 0, netIn: 0, netOut: 0, keyspaceHits: 0, keyspaceMisses: 0 };
   /** INFO commandstats, by full command name (`client|id`). */
   readonly commandStats = new Map<string, CommandStat>();
   /** INFO errorstats, by error code (`ERR`, `WRONGTYPE`…). */
@@ -110,8 +108,7 @@ export class RedisLiteServer {
   /** @internal */ readonly settings = new ServerSettings(this);
   /** @internal */ readonly memoryModel: ServerMemoryModel;
 
-  private net: Server | null = null;
-  private sweepTimer: NodeJS.Timeout | null = null;
+  private readonly listener = new ServerListener(this);
   private closing: Promise<void> | null = null;
   private readonly closeListeners: Array<() => void> = [];
   /** SHUTDOWN already ran the persistence shutdown steps. */
@@ -131,34 +128,14 @@ export class RedisLiteServer {
       this.config.set('save', '');
       this.config.set('appendonly', 'no');
     }
-    this.databases = Array.from(
-      { length: options.databases },
-      (_, i) => {
-        const db: Database = new Database(
-          (key) => this.keyspace.onExpired(i, key),
-          this.config,
-          (key) => {
-            this.memoryModel.tracker.changed(i, key);
-            TimeseriesService.keyChanged(this, db, key);
-          },
-          this.keyExpiry,
-        );
-        return db;
-      },
-    );
+    this.databases = this.settings.buildDatabases(options.databases);
     this.memoryModel = new ServerMemoryModel(this);
     this.persistence = new Persistence(this);
     this.evictor = new Evictor(this);
     this.tracking = new Tracking(this);
     this.replication = new Replication(this);
     this.settings.installDebugHooks();
-    this.acl = new Acl({
-      allCommands: () => CommandService.allCommandsDeep().map((m) => m.fullname),
-      categoriesOf: (name) => (CommandService.getCommandMeta(name)?.acl ?? []).map((c) => `@${c}`),
-      requirepass: options.password ?? '',
-      pubsubDefault: this.config.get('acl-pubsub-default') === 'allchannels' ? 'allchannels' : 'resetchannels',
-      logMaxLen: this.config.num('acllog-max-len'),
-    });
+    this.acl = this.settings.buildAcl(options.password ?? '');
     for (const [name, value] of Object.entries(options.config ?? {})) this.settings.init(name, value);
   }
 
@@ -171,12 +148,9 @@ export class RedisLiteServer {
     if (!this.shutdownPrepared) this.persistence.prepareShutdown({ force: true });
     this.evictor.stop();
     this.replication.stop();
-    if (this.sweepTimer) clearInterval(this.sweepTimer);
     this.blocking.clear();
     this.connections.closeAll();
-    const net = this.net;
-    this.net = null;
-    if (net) await new Promise<void>((resolve) => net.close(() => resolve()));
+    await this.listener.close();
   }
 
   // ──────────────────────────────────────────────
@@ -187,34 +161,32 @@ export class RedisLiteServer {
     const aclfile = this.config.get('aclfile') ?? '';
     if (aclfile) this.loadAclFile(aclfile);
     this.lua = await LuaEngine.create(this);
+    // Busy scripts yield to the event loop; other clients get BUSY (see ServerDispatcher.refused).
+    this.lua.cooperative = true;
     if (this.options.persistence) this.persistence.loadAtStartup();
     this.persistence.start();
-    const net = createServer((socket) => this.connections.accept(socket));
-    this.net = net;
+    let address: AddressInfo;
     try {
-      await new Promise<void>((resolve, reject) => {
-        net.once('error', reject);
-        net.listen(this.options.port, this.options.host, () => {
-          net.off('error', reject);
-          resolve();
-        });
-      });
+      address = await this.listener.open();
     } catch (error) {
       this.persistence.stop();
-      this.net = null;
       throw error;
     }
-    this.sweepTimer = setInterval(() => {
-      if (!this.activeExpire) return;
-      const now = Date.now();
-      for (const db of this.databases) db.sweep(now, 200);
-    }, 100);
-    this.sweepTimer.unref();
-    const address = net.address() as AddressInfo;
+    this.listener.startSweep();
     this.config.set('port', String(address.port));
     this.options.port = address.port;
     this.replication.start();
     return address;
+  }
+
+  /** CONFIG SET port (see ServerListener.rebind). */
+  rebind(port: number): void {
+    this.listener.rebind(port, this.closing !== null);
+  }
+
+  /** True once close() / SHUTDOWN started. */
+  isClosing(): boolean {
+    return this.closing !== null;
   }
 
   /** Runs `listener` once the server has closed (also after SHUTDOWN). */
@@ -314,11 +286,21 @@ export class RedisLiteServer {
 
   /** FAILOVER: write commands of normal clients wait until resumeWrites() (CLIENT PAUSE WRITE semantics). */
   pauseWrites(): void {
-    this.connections.writesPaused = true;
+    this.connections.pauseWrites();
   }
 
   resumeWrites(): void {
     this.connections.resumeWrites();
+  }
+
+  /** CLIENT PAUSE timeout WRITE|ALL: normal clients' writes (or every command) wait for UNPAUSE or the timeout. */
+  pauseClients(mode: PauseMode, ms: number): void {
+    this.connections.pauseClients(mode, ms);
+  }
+
+  /** CLIENT UNPAUSE. */
+  unpauseClients(): void {
+    this.connections.unpauseClients();
   }
 
   /** Runs one command. Used by sockets, EXEC and Lua `redis.call`. */
@@ -420,8 +402,18 @@ export class RedisLiteServer {
   }
 
   /** WATCH: registers `key` of `dbIndex` in the client's watched keys; a later change marks the client dirty. */
-  watchKey(client: Client, dbIndex: number, key: string): void {
-    client.watched.add(this.keyspace.watches, dbIndex, key);
+  watchKey(client: Client, dbIndex: number, key: string, alive: boolean): void {
+    client.watched.add(this.keyspace.watches, dbIndex, key, alive);
+  }
+
+  /** EXEC: whether a key WATCHed while it existed has expired since (stored, its expiry time elapsed). */
+  watchedKeyExpired(client: Client): boolean {
+    const now = Date.now();
+    return client.watched.expiredSinceWatch((dbIndex, key) => {
+      const db = this.databases[dbIndex];
+      const at = db.getExpireRaw(key);
+      return at !== undefined && at <= now && db.raw(key) !== undefined;
+    });
   }
 
   /** Evicts one key (maxmemory): delete, propagate DEL / UNLINK, `evicted` event, WATCH and tracking invalidation. */
@@ -459,7 +451,14 @@ export class RedisLiteServer {
   // ──────────────────────────────────────────────
 
   /** CLIENT UNBLOCK: answers the blocked client with its timeout reply, or an UNBLOCKED error. */
+  /** True while a busy script is suspended between slices (background work and CLIENT UNBLOCK must leave it alone). */
+  scriptSuspended(): boolean {
+    return this.lua?.running?.suspended === true;
+  }
+
   unblockClient(client: Client, withError: boolean): boolean {
+    // A client waiting for its own suspended script is not blocked on keys: CLIENT UNBLOCK does not apply (as in Redis).
+    if (this.scriptSuspended() && this.lua.running?.client === client) return false;
     return this.blocking.unblockClient(client, withError);
   }
 

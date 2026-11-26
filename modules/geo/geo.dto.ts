@@ -202,16 +202,20 @@ function parseQuery(args: string[], kind: QueryKind, flags: QueryFlags, memberRa
       query.store = args[++i];
       query.storeDist = option === 'storedist';
     } else if (option === 'storedist' && search && flags.searchStore) query.storeDist = true;
+    // a center (or shape) of the other kind already given is a syntax error at once; repeating the same kind is not
     else if (option === 'frommember' && more >= 1 && search) {
+      if (fromLonLat) return stop(RespMessages.SYNTAX);
       query.fromMembers.push(args[++i]);
       fromMember = true;
     } else if (option === 'fromlonlat' && more >= 2 && search) {
+      if (fromMember) return stop(RespMessages.SYNTAX);
       const center = parsePoint(args[i + 1], args[i + 2]);
       if (!center.ok) return stop(center.error);
       query.center = center.value;
       fromLonLat = true;
       i += 2;
     } else if (option === 'byradius' && more >= 2 && search) {
+      if (byBox) return stop(RespMessages.SYNTAX);
       const radius = parseRadius(args[i + 1], args[i + 2]);
       if (!radius.ok) return stop(radius.error);
       query.shape = { kind: 'radius', radius: radius.value.radius };
@@ -219,6 +223,7 @@ function parseQuery(args: string[], kind: QueryKind, flags: QueryFlags, memberRa
       byRadius = true;
       i += 2;
     } else if (option === 'bybox' && more >= 3 && search) {
+      if (byRadius) return stop(RespMessages.SYNTAX);
       const box = parseBox(args[i + 1], args[i + 2], args[i + 3]);
       if (!box.ok) return stop(box.error);
       query.shape = { kind: 'box', width: box.value.width, height: box.value.height };

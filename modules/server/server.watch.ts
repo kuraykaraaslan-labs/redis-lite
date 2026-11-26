@@ -64,8 +64,8 @@ export class ServerWatches {
 export class WatchedKeys {
   /** A watched key changed since it was WATCHed: EXEC must fail. */
   dirty = false;
-  /** dbIndex → watched keys. */
-  private readonly byDb = new Map<number, Set<string>>();
+  /** dbIndex → watched key → whether it existed (and had not expired) when it was WATCHed. */
+  private readonly byDb = new Map<number, Map<string, boolean>>();
   private count = 0;
   private registry: ServerWatches | null = null;
 
@@ -78,21 +78,32 @@ export class WatchedKeys {
     return this.count;
   }
 
-  /** WATCHes a key (a key already watched keeps its state). */
-  add(registry: ServerWatches, dbIndex: number, key: string): void {
+  /** WATCHes a key (a key already watched keeps its state). `alive`: the key existed when it was WATCHed. */
+  add(registry: ServerWatches, dbIndex: number, key: string, alive: boolean): void {
     let keys = this.byDb.get(dbIndex);
-    if (!keys) this.byDb.set(dbIndex, (keys = new Set()));
+    if (!keys) this.byDb.set(dbIndex, (keys = new Map()));
     if (keys.has(key)) return;
-    keys.add(key);
+    keys.set(key, alive);
     this.count++;
     this.registry = registry;
     registry.add(this, dbIndex, key);
   }
 
+  /**
+   * EXEC: a key that existed when it was WATCHed and has expired since (still stored, its time elapsed: active expiry
+   * did not reclaim it yet) counts as a change, as in Redis.
+   */
+  expiredSinceWatch(isExpired: (dbIndex: number, key: string) => boolean): boolean {
+    for (const [dbIndex, keys] of this.byDb) {
+      for (const [key, alive] of keys) if (alive && isExpired(dbIndex, key)) return true;
+    }
+    return false;
+  }
+
   /** UNWATCH (also EXEC, DISCARD, RESET, disconnect): forgets every key and the dirty flag. */
   clear(): void {
     const registry = this.registry;
-    if (registry) for (const [dbIndex, keys] of this.byDb) for (const key of keys) registry.remove(this, dbIndex, key);
+    if (registry) for (const [dbIndex, keys] of this.byDb) for (const key of keys.keys()) registry.remove(this, dbIndex, key);
     this.byDb.clear();
     this.count = 0;
     this.dirty = false;

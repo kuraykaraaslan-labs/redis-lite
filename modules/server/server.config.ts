@@ -19,7 +19,7 @@ const LONG_MIN = -9223372036854775808n;
 type ConfigType =
   | { kind: 'bool' }
   | { kind: 'enum'; values: string[] }
-  | { kind: 'int'; min: bigint; max: bigint }
+  | { kind: 'int'; min: bigint; max: bigint; clamp?: [bigint, bigint] }
   | { kind: 'memory'; min: bigint; max: bigint }
   | { kind: 'string' }
   | { kind: 'special'; normalize: (value: string) => string | { error: string } };
@@ -35,6 +35,8 @@ const bool = (def: 'yes' | 'no', immutable = false): ConfigDef => ({ type: { kin
 const int = (def: number, min: bigint, max: bigint, immutable = false): ConfigDef => ({ type: { kind: 'int', min, max }, default: String(def), immutable });
 const mem = (def: number, min = 0n, max = LONG_MAX): ConfigDef => ({ type: { kind: 'memory', min, max }, default: String(def) });
 const str = (def: string, immutable = false): ConfigDef => ({ type: { kind: 'string' }, default: def, immutable });
+/** An integer accepted in `min`..`max` and then stored clamped to `clamp` (hz: 0..INT_MAX accepted, kept in 1..500). */
+const clamped = (def: number, min: bigint, max: bigint, clamp: [bigint, bigint]): ConfigDef => ({ type: { kind: 'int', min, max, clamp }, default: String(def) });
 const oneOf = (def: string, values: string[], immutable = false): ConfigDef => ({ type: { kind: 'enum', values }, default: def, immutable });
 
 const MAXMEMORY_POLICIES = ['volatile-lru', 'volatile-lfu', 'volatile-random', 'volatile-ttl', 'allkeys-lru', 'allkeys-lfu', 'allkeys-random', 'noeviction'];
@@ -57,6 +59,30 @@ function normalizeKeyspaceEvents(value: string): string | { error: string } {
   if (set.has('K')) out += 'K';
   if (set.has('E')) out += 'E';
   return out;
+}
+
+/** maxmemory-clients: a memory value, or a percentage of maxmemory (`10%`, at most 100; `0%` is stored as 0). */
+function normalizeMemoryOrPercent(value: string): string | { error: string } {
+  const pct = /^(\d+)%$/.exec(value);
+  if (pct) {
+    const n = BigInt(pct[1]);
+    if (n > 100n) return { error: ServerMessages.CONFIG_PERCENT_RANGE };
+    return n === 0n ? '0' : `${n}%`;
+  }
+  const n = parseMemory(value);
+  return n === null || n > LONG_MAX ? { error: ServerMessages.CONFIG_MEMORY_OR_PERCENT } : n.toString();
+}
+
+/** latency-tracking-info-percentiles: space-separated percentiles, each 0..100 (printed in their shortest form). */
+function normalizePercentiles(value: string): string | { error: string } {
+  const parts = value.split(' ').filter(Boolean);
+  const out: string[] = [];
+  for (const p of parts) {
+    const n = toFloat(p);
+    if (n === null || n < 0 || n > 100) return { error: ServerMessages.CONFIG_PERCENTILES };
+    out.push(String(n));
+  }
+  return out.join(' ');
 }
 
 /** save: "<seconds> <changes> ..." pairs, or "" to disable. */
@@ -88,36 +114,54 @@ function normalizeReplicaOf(value: string): string | { error: string } {
 const TS_DUPLICATE_POLICIES = ['block', 'first', 'last', 'min', 'max', 'sum'];
 
 export const CONFIG_DEFS: Record<string, ConfigDef> = {
+  'active-defrag-cycle-max': int(25, 1n, 99n),
+  'active-defrag-cycle-min': int(1, 1n, 99n),
+  'active-defrag-ignore-bytes': mem(104857600, 1n),
+  'active-defrag-max-scan-fields': int(1000, 1n, LONG_MAX),
+  'active-defrag-threshold-lower': int(10, 0n, 1000n),
+  'active-defrag-threshold-upper': int(100, 0n, 1000n),
   'active-expire-effort': int(1, 1n, 10n),
   activedefrag: bool('no'),
+  activerehashing: bool('yes'),
+  'always-show-logo': bool('no', true),
   'acl-pubsub-default': oneOf('resetchannels', ['allchannels', 'resetchannels']),
   aclfile: str('', true),
   'acllog-max-len': int(128, 0n, LONG_MAX),
+  'aof-disable-auto-gc': bool('no'),
   'aof-load-truncated': bool('yes'),
+  'aof-rewrite-incremental-fsync': bool('yes'),
+  'aof-timestamp-enabled': bool('no'),
   'aof-use-rdb-preamble': bool('yes'),
   appendfilename: str('appendonly.aof', true),
   appenddirname: str('appendonlydir', true),
-  appendfsync: oneOf('everysec', ['always', 'everysec', 'no']),
+  appendfsync: oneOf('everysec', ['everysec', 'always', 'no']),
   appendonly: bool('no'),
   bind: str('* -::*', true),
   'auto-aof-rewrite-min-size': mem(67108864),
   'auto-aof-rewrite-percentage': int(100, 0n, INT_MAX),
   'busy-reply-threshold': { ...int(5000, 0n, LONG_MAX), aliases: ['lua-time-limit'] },
+  'client-query-buffer-limit': mem(1073741824, 1024n * 1024n),
   'client-output-buffer-limit': str('normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60'),
   'cluster-enabled': bool('no', true),
   'crash-log-enabled': bool('yes'),
+  'crash-memcheck-enabled': bool('yes'),
   daemonize: bool('no', true),
   databases: int(16, 1n, INT_MAX, true),
   dbfilename: str('dump.rdb'),
   dir: str(process.cwd()),
   'dynamic-hz': bool('yes'),
-  'hash-max-listpack-entries': { ...int(128, 0n, LONG_MAX), aliases: ['hash-max-ziplist-entries'] },
+  // DEBUG is always available in redis-lite, as with `enable-debug-command yes`
+  'enable-debug-command': oneOf('yes', ['no', 'yes', 'local'], true),
+  'enable-module-command': oneOf('no', ['no', 'yes', 'local'], true),
+  'enable-protected-configs': oneOf('no', ['no', 'yes', 'local'], true),
+  'hash-max-listpack-entries': { ...int(512, 0n, LONG_MAX), aliases: ['hash-max-ziplist-entries'] },
   'hash-max-listpack-value': { ...mem(64), aliases: ['hash-max-ziplist-value'] },
   'hll-sparse-max-bytes': mem(3000),
-  hz: int(10, 0n, INT_MAX),
+  hz: clamped(10, 0n, INT_MAX, [1n, 500n]),
   'io-threads': int(1, 1n, 128n, true),
   'latency-monitor-threshold': int(0, 0n, LONG_MAX),
   'latency-tracking': bool('yes'),
+  'latency-tracking-info-percentiles': { type: { kind: 'special', normalize: normalizePercentiles }, default: '50 99 99.9' },
   'lazyfree-lazy-eviction': bool('no'),
   'lazyfree-lazy-expire': bool('no'),
   'lazyfree-lazy-server-del': bool('no'),
@@ -131,7 +175,7 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   loglevel: oneOf('notice', ['debug', 'verbose', 'notice', 'warning', 'nothing']),
   maxclients: int(10000, 1n, LONG_MAX),
   maxmemory: mem(0),
-  'maxmemory-clients': mem(0),
+  'maxmemory-clients': { type: { kind: 'special', normalize: normalizeMemoryOrPercent }, default: '0' },
   'maxmemory-eviction-tenacity': int(10, 0n, 100n),
   'maxmemory-policy': oneOf('noeviction', MAXMEMORY_POLICIES),
   'maxmemory-samples': int(5, 1n, 64n),
@@ -139,12 +183,15 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   masteruser: str(''),
   'min-replicas-max-lag': { ...int(10, 0n, INT_MAX), aliases: ['min-slaves-max-lag'] },
   'min-replicas-to-write': { ...int(0, 0n, INT_MAX), aliases: ['min-slaves-to-write'] },
+  'no-appendfsync-on-rewrite': bool('no'),
   'notify-keyspace-events': { type: { kind: 'special', normalize: normalizeKeyspaceEvents }, default: '' },
-  port: int(6379, 0n, 65535n, true),
+  port: int(6379, 0n, 65535n),
   'proto-max-bulk-len': mem(536870912, 1024n * 1024n, LONG_MAX),
   'protected-mode': bool('yes'),
   'rdbchecksum': bool('yes', true),
   rdbcompression: bool('yes'),
+  'rdb-del-sync-files': bool('no'),
+  'rdb-save-incremental-fsync': bool('yes'),
   'repl-backlog-size': mem(1048576, 1n, LONG_MAX),
   'repl-backlog-ttl': int(3600, 0n, INT_MAX),
   'repl-disable-tcp-nodelay': bool('no'),
@@ -166,10 +213,12 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   // `host port` of the master (the replicaof directive); REPLICAOF changes it, CONFIG SET cannot
   replicaof: { type: { kind: 'special', normalize: normalizeReplicaOf }, default: '', immutable: true, aliases: ['slaveof'] },
   requirepass: str(''),
+  'sanitize-dump-payload': oneOf('no', ['no', 'yes', 'clients']),
   save: { type: { kind: 'special', normalize: normalizeSave }, default: '3600 1 300 100 60 10000' },
   'set-max-intset-entries': int(512, 0n, LONG_MAX),
   'set-max-listpack-entries': int(128, 0n, LONG_MAX),
   'set-max-listpack-value': mem(64),
+  'shutdown-timeout': int(10, 0n, INT_MAX),
   'slowlog-log-slower-than': int(10000, -1n, LONG_MAX),
   'slowlog-max-len': int(128, 0n, LONG_MAX),
   'stop-writes-on-bgsave-error': bool('yes'),
@@ -279,6 +328,7 @@ export class ServerConfig {
         const n = BigInt(value);
         if (n < LONG_MIN || n > LONG_MAX) return { error: ServerMessages.CONFIG_INT };
         if (n < t.min || n > t.max) return { error: formatMessage(ServerMessages.CONFIG_RANGE, { min: t.min.toString(), max: t.max.toString() }) };
+        if (t.clamp) return { value: (n < t.clamp[0] ? t.clamp[0] : n > t.clamp[1] ? t.clamp[1] : n).toString() };
         return { value: n.toString() };
       }
       case 'memory': {

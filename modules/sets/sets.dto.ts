@@ -1,8 +1,10 @@
 import { z } from 'zod';
 
-import { isInteger } from '@/libs/number';
+import { isInt64 } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, IntegerSchemaWith, KeySchema, ScanCursorSchema, ScanOptionsSchema, firstIssue, reject } from '@/libs/schemas';
+import { IntegerSchema, IntegerSchemaWith, KeySchema, ScanCursorSchema, firstIssue, reject } from '@/libs/schemas';
+import { KeyScanOptionsSchema } from '@/libs/schemas/key-scan';
+import { RandomCountSchema } from '@/libs/schemas/random-count';
 
 import type { SetOperation } from './sets.enums';
 import SetsMessages from './sets.messages';
@@ -45,7 +47,8 @@ export const SMoveDTO = z
 export const SPopDTO = z.tuple([KeySchema], z.string()).transform(([key, ...rest], ctx) => {
   if (rest.length > 1) return reject(ctx, RespMessages.SYNTAX);
   if (rest.length === 0) return { key, count: null };
-  if (!isInteger(rest[0]) || Number(rest[0]) < 0) return reject(ctx, RespMessages.COUNT_POSITIVE);
+  // any non-negative int64 (a count past the set's size pops everything)
+  if (!isInt64(rest[0]) || rest[0].startsWith('-')) return reject(ctx, RespMessages.COUNT_POSITIVE);
   return { key, count: Number(rest[0]) };
 });
 
@@ -53,8 +56,8 @@ export const SPopDTO = z.tuple([KeySchema], z.string()).transform(([key, ...rest
 export const SRandMemberDTO = z.tuple([KeySchema], z.string()).transform(([key, ...rest], ctx) => {
   if (rest.length > 1) return reject(ctx, RespMessages.SYNTAX);
   if (rest.length === 0) return { key, count: null };
-  const count = IntegerSchema.safeParse(rest[0]);
-  return count.success ? { key, count: count.data } : reject(ctx, firstIssue(count.error));
+  const count = RandomCountSchema.safeParse(rest[0]);
+  return count.success ? { key, count: Number(count.data) } : reject(ctx, firstIssue(count.error));
 });
 
 // ============================================================================
@@ -98,9 +101,14 @@ export const SInterCardDTO = z.tuple([NumKeysSchema], z.string()).transform(([n,
 // Scan DTO
 // ============================================================================
 
-/** SSCAN key cursor [MATCH pattern] [COUNT n] */
+/** SSCAN key cursor …: the cursor alone, checked before the key is read. */
+export const SScanCursorDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor]) => ({ key, cursor }));
+
+const SScanOptionsSchema = KeyScanOptionsSchema();
+
+/** SSCAN key cursor [MATCH pattern] [COUNT n], parsed once the key is known to hold a set (no TYPE, no NOVALUES). */
 export const SScanDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor, ...options], ctx) => {
-  const parsed = ScanOptionsSchema.safeParse(options);
+  const parsed = SScanOptionsSchema.safeParse(options);
   if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
   return { key, cursor, match: parsed.data.match, count: parsed.data.count };
 });

@@ -60,6 +60,9 @@ export function prevId(id: StreamId): StreamId | null {
 // Stream
 // ============================================================================
 
+/** Bytes of a stream radix tree key: the master id's ms and seq as two big-endian 64-bit integers. */
+const RAX_KEY_BYTES = 16;
+
 function lpInt(n: number | bigint): string {
   return String(n);
 }
@@ -116,6 +119,44 @@ export class Stream {
     node.live++;
     node.lastId = entry.id;
     this.nodeOf.set(entry, node);
+  }
+
+  /**
+   * Node count of the radix tree that indexes the listpack nodes by master id (XINFO STREAM `radix-tree-nodes`). Keys
+   * are 16 bytes (ms then seq, big endian) and the tree is a compressed trie as Redis's rax lays it out: a run of
+   * bytes shared by every key below a point is one compressed node, a point where keys diverge is one node holding
+   * a byte per child, and each key ends in its own (leaf) node. The empty tree is its head node alone.
+   */
+  radixTreeNodes(): number {
+    const keys = this.nodes.map((n) => Stream.raxKey(n.masterId));
+    const count = (lo: number, hi: number, depth: number): number => {
+      if (depth === RAX_KEY_BYTES) return 1;
+      const first = keys[lo];
+      const last = keys[hi - 1];
+      if (first[depth] === last[depth]) {
+        // keys are sorted: equal first and last bytes mean every key shares them
+        let end = depth;
+        while (end < RAX_KEY_BYTES && first[end] === last[end]) end++;
+        return 1 + count(lo, hi, end);
+      }
+      let total = 1;
+      for (let start = lo; start < hi; ) {
+        let stop = start + 1;
+        while (stop < hi && keys[stop][depth] === keys[start][depth]) stop++;
+        total += count(start, stop, depth + 1);
+        start = stop;
+      }
+      return total;
+    };
+    return keys.length ? count(0, keys.length, 0) : 1;
+  }
+
+  private static raxKey(id: StreamId): Uint8Array {
+    const key = new Uint8Array(RAX_KEY_BYTES);
+    const view = new DataView(key.buffer);
+    view.setBigUint64(0, id.ms);
+    view.setBigUint64(8, id.seq);
+    return key;
   }
 
   /** After RESTORE the entries exist without nodes: lay them out exactly as consecutive XADDs would. */

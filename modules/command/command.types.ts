@@ -64,6 +64,8 @@ export interface KeySpec {
   flags: string[];
   begin: BeginSearch;
   find: FindKeys;
+  /** Why the flags are what they are (COMMAND INFO `notes`), when Redis documents it. */
+  notes?: string;
 }
 
 export interface ArgDoc {
@@ -104,6 +106,8 @@ export interface CommandMeta {
   docFlags: string[];
   deprecatedSince?: string;
   replacedBy?: string;
+  /** COMMAND DOCS `history`: [version, change]. */
+  history: ReadonlyArray<[version: string, change: string]>;
   args: ArgDoc[];
   parent?: CommandMeta;
   /** The module a module command belongs to (COMMAND DOCS `module`, COMMAND LIST FILTERBY MODULE). */

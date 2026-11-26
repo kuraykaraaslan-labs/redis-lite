@@ -7,7 +7,7 @@
  * - flags: Redis command flags (space separated, lowercase). `movablekeys` is derived from the key specs.
  * - acl: the explicit ACL categories only; @read/@write/@admin/@dangerous/@pubsub/@fast/@slow/@blocking are implied by the
  *   flags exactly as Redis does in setImplicitACLCategories().
- * - key specs (`;`-separated): `<flags>|<begin_search>|<find_keys>`
+ * - key specs (`;`-separated): `<flags>|<begin_search>|<find_keys>[|<notes>]`
  *     begin_search: `N` (index) | `KEYWORD@N` (keyword, startfrom N) | `?` (unknown)
  *     find_keys:    `L[/step[/limit]]` (range, lastkey L; default `0`) | `#idx,first,step` (keynum) | `?` (unknown)
  * - arguments: see parseArgs() in meta.ts. `key` = a key argument for key spec 0, `name:key1` = key spec 1,
@@ -36,6 +36,12 @@ export type Row = [
   args?: string,
   extra?: RowExtra,
 ];
+
+// key spec notes shared by several commands
+const EVAL_RW_NOTES = 'We cannot tell how the keys will be used so we assume the worst, RW and UPDATE';
+const EVAL_RO_NOTES = 'We cannot tell how the keys will be used so we assume the worst, RO and ACCESS';
+const SORT_BY_GET_NOTES = "For the optional BY/GET keyword. It is marked 'unknown' because the key names derive from the content of the key we sort";
+const SORT_STORE_NOTES = "For the optional STORE keyword. It is marked 'unknown' because the keyword can appear anywhere in the argument array";
 
 const HELP_SUMMARY = 'Returns helpful text about the different subcommands.';
 const SCAN_COMPLEXITY =
@@ -89,6 +95,38 @@ const CONNECTION: Row[] = [
 ];
 
 const CLUSTER: Row[] = [
+  // unsure: summaries of ASKING, CLUSTER and MODULE as rewritten in 7.2 (flags, arities and arguments checked against 7.0)
+  ['asking', 1, 'fast', 'connection', '', '3.0.0', 'Signals that a cluster client is following an -ASK redirect.', 'O(1)'],
+  ['cluster', -2, '', '', '', '3.0.0', 'A container for Redis Cluster commands.', 'Depends on subcommand.', undefined, { subs: [
+      ['addslots', -3, 'admin stale no_async_loading', '', '', '3.0.0', 'Assigns new hash slots to a node.', 'O(N) where N is the total number of hash slot arguments', 'slot:integer...'],
+      ['addslotsrange', -4, 'admin stale no_async_loading', '', '', '7.0.0', 'Assigns new hash slot ranges to a node.', 'O(N) where N is the total number of the slots between the start slot and end slot arguments.', 'start-slot_end-slot:block(start-slot:integer end-slot:integer)...'],
+      ['bumpepoch', 2, 'admin stale no_async_loading', '', '', '3.0.0', 'Advances the cluster config epoch.', 'O(1)', undefined, { tips: 'nondeterministic_output' }],
+      ['count-failure-reports', 3, 'admin stale', '', '', '3.0.0', 'Returns the number of active failure reports active for a node.', 'O(N) where N is the number of failure reports', 'node-id:string', { tips: 'nondeterministic_output' }],
+      ['countkeysinslot', 3, 'stale', '', '', '3.0.0', 'Returns the number of keys in a hash slot.', 'O(1)', 'slot:integer'],
+      ['delslots', -3, 'admin stale no_async_loading', '', '', '3.0.0', 'Sets hash slots as unbound for a node.', 'O(N) where N is the total number of hash slot arguments', 'slot:integer...'],
+      ['delslotsrange', -4, 'admin stale no_async_loading', '', '', '7.0.0', 'Sets hash slot ranges as unbound for a node.', 'O(N) where N is the total number of the slots between the start slot and end slot arguments.', 'start-slot_end-slot:block(start-slot:integer end-slot:integer)...'],
+      ['failover', -2, 'admin stale no_async_loading', '', '', '3.0.0', 'Forces a replica to perform a manual failover of its master.', 'O(1)', '?options:oneof(!FORCE !TAKEOVER)'],
+      ['flushslots', 2, 'admin stale no_async_loading', '', '', '3.0.0', 'Deletes all slots information from a node.', 'O(1)'],
+      ['forget', 3, 'admin stale no_async_loading', '', '', '3.0.0', 'Removes a node from the nodes table.', 'O(1)', 'node-id:string'],
+      ['getkeysinslot', 4, 'stale', '', '', '3.0.0', 'Returns the key names in a hash slot.', 'O(log(N)) where N is the number of requested keys', 'slot:integer count:integer', { tips: 'nondeterministic_output' }],
+      help('5.0.0', 'loading stale'),
+      ['info', 2, 'stale', '', '', '3.0.0', 'Returns information about the state of a node.', 'O(1)', undefined, { tips: 'nondeterministic_output' }],
+      ['keyslot', 3, 'stale', '', '', '3.0.0', 'Returns the hash slot for a key.', 'O(N) where N is the number of bytes in the key', 'key:string'],
+      ['links', 2, 'stale', '', '', '7.0.0', 'Returns a list of all TCP links to and from peer nodes.', 'O(N) where N is the total number of Cluster nodes', undefined, { tips: 'nondeterministic_output' }],
+      ['meet', -4, 'admin stale no_async_loading', '', '', '3.0.0', 'Forces a node to handshake with another node.', 'O(1)', 'ip:string port:integer ?cluster_bus_port:integer{4.0.0}'],
+      ['myid', 2, 'stale', '', '', '3.0.0', 'Returns the ID of a node.', 'O(1)'],
+      ['myshardid', 2, 'stale', '', '', '7.2.0', 'Returns the shard ID of a node.', 'O(1)', undefined, { tips: 'nondeterministic_output' }],
+      ['nodes', 2, 'stale', '', '', '3.0.0', 'Returns the cluster configuration for a node.', 'O(N) where N is the total number of Cluster nodes', undefined, { tips: 'nondeterministic_output' }],
+      ['replicas', 3, 'admin stale', '', '', '5.0.0', 'Lists the replica nodes of a master node.', 'O(1)', 'node-id:string', { tips: 'nondeterministic_output' }],
+      ['replicate', 3, 'admin stale no_async_loading', '', '', '3.0.0', 'Configure a node as replica of a master node.', 'O(1)', 'node-id:string'],
+      ['reset', -2, 'admin noscript stale', '', '', '3.0.0', 'Resets a node.', 'O(N) where N is the number of known nodes. The command may execute a FLUSHALL as a side effect.', '?hard_soft:oneof(!HARD !SOFT)'],
+      ['saveconfig', 2, 'admin stale no_async_loading', '', '', '3.0.0', 'Forces a node to save the cluster configuration to disk.', 'O(1)'],
+      ['set-config-epoch', 3, 'admin stale no_async_loading', '', '', '3.0.0', 'Sets the configuration epoch for a new node.', 'O(1)', 'config-epoch:integer'],
+      ['setslot', -4, 'admin stale no_async_loading', '', '', '3.0.0', 'Binds a hash slot to a node.', 'O(1)', 'slot:integer subcommand:oneof(IMPORTING=node-id:string MIGRATING=node-id:string NODE=node-id:string !STABLE)'],
+      ['shards', 2, 'stale', '', '', '7.0.0', 'Returns the mapping of cluster slots to shards.', 'O(N) where N is the total number of cluster nodes', undefined, { tips: 'nondeterministic_output' }],
+      ['slaves', 3, 'admin stale', '', '', '3.0.0', 'Lists the replica nodes of a master node.', 'O(1)', 'node-id:string', { tips: 'nondeterministic_output', docFlags: 'deprecated', dep: ['5.0.0', '`CLUSTER REPLICAS`'] }],
+      ['slots', 2, 'stale', '', '', '3.0.0', 'Returns the mapping of cluster slots to nodes.', 'O(N) where N is the total number of Cluster nodes', undefined, { tips: 'nondeterministic_output', docFlags: 'deprecated', dep: ['7.0.0', '`CLUSTER SHARDS`'] }],
+    ] }],
   ['readonly', 1, 'loading stale fast', 'connection', '', '3.0.0', 'Enables read-only queries for a connection to a Redis Cluster replica node.', 'O(1)'],
   // unsure: upstream readwrite.json spells "Reids" in this summary
   ['readwrite', 1, 'loading stale fast', 'connection', '', '3.0.0', 'Enables read-write queries for a connection to a Reids Cluster replica node.', 'O(1)'],
@@ -202,6 +240,13 @@ const SERVER: Row[] = [
         'key ?SAMPLES=count:integer'],
     ],
   }],
+  ['module', -2, '', '', '', '4.0.0', 'A container for module commands.', 'Depends on subcommand.', undefined, { subs: [
+      help('5.0.0', 'loading stale'),
+      ['list', 2, 'admin noscript', '', '', '4.0.0', 'Returns all loaded modules.', 'O(N) where N is the number of loaded modules.', undefined, { tips: 'nondeterministic_output_order' }],
+      ['load', -3, 'admin noscript no_async_loading', '', '', '4.0.0', 'Loads a module.', 'O(1)', 'path:string ?arg:string...'],
+      ['loadex', -3, 'admin noscript no_async_loading', '', '', '7.0.0', 'Loads a module using extended parameters.', 'O(1)', 'path:string ?CONFIG=configs:block(name:string value:string)...* ?ARGS=args:block(arg:string)...'],
+      ['unload', 3, 'admin noscript no_async_loading', '', '', '4.0.0', 'Unloads a module.', 'O(1)', 'name:string'],
+    ] }],
   ['monitor', 1, 'admin noscript loading stale', '', '', '1.0.0', 'Listens for all requests received by the server in real-time.', ''],
   ['role', 1, 'noscript loading stale fast sentinel', 'admin dangerous', '', '2.8.12', 'Returns the replication role.', 'O(1)'],
   // replication commands, from the command pages (unsure: exact flags of the internal PSYNC / SYNC / REPLCONF)
@@ -259,7 +304,7 @@ const GENERIC: Row[] = [
   ['keys', 2, 'readonly', 'keyspace dangerous', '', '1.0.0', 'Returns all key names that match a pattern.',
     'O(N) with N being the number of keys in the database, under the assumption that the key names in the database and the given pattern have limited length.',
     'pattern:pattern', { tips: 'request_policy:all_shards nondeterministic_output_order' }],
-  ['move', 3, 'write fast', 'keyspace', 'RW update|1', '1.0.0', 'Moves a key to another database.', 'O(1)', 'key db:integer'],
+  ['move', 3, 'write fast', 'keyspace', 'RW access update|1', '1.0.0', 'Moves a key to another database.', 'O(1)', 'key db:integer'],
   ['object', -2, '', '', '', '2.2.3', 'A container for object introspection commands.', 'Depends on subcommand.', undefined, {
     subs: [
       ['encoding', 3, 'readonly', 'keyspace', 'RO|2', '2.2.3', 'Returns the internal encoding of a Redis object.', 'O(1)', 'key', { tips: 'nondeterministic_output' }],
@@ -288,11 +333,11 @@ const GENERIC: Row[] = [
   ['scan', -2, 'readonly', 'keyspace', '', '2.8.0', 'Iterates over the key names in the database.', SCAN_COMPLEXITY,
     'cursor:integer ?MATCH=pattern:pattern ?COUNT=count:integer ?TYPE=type:string{6.0.0}',
     { tips: 'nondeterministic_output request_policy:special response_policy:special' }],
-  ['sort', -2, 'write denyoom', 'set sortedset list dangerous', 'RO access|1;RO access|?|?;OW update|?|?', '1.0.0',
+  ['sort', -2, 'write denyoom', 'set sortedset list dangerous', `RO access|1;RO access|?|?|${SORT_BY_GET_NOTES};OW update|?|?|${SORT_STORE_NOTES}`, '1.0.0',
     'Sorts the elements in a list, a set, or a sorted set, optionally storing the result.',
     'O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).',
     'key ?BY=by-pattern:pattern ?limit:block(LIMIT=offset:integer count:integer) ?GET=get-pattern:pattern...* ?order:oneof(!ASC !DESC) ?sorting:pure-token!ALPHA ?STORE=destination:key2'],
-  ['sort_ro', -2, 'readonly', 'set sortedset list dangerous', 'RO access|1;RO access|?|?', '7.0.0',
+  ['sort_ro', -2, 'readonly', 'set sortedset list dangerous', `RO access|1;RO access|?|?|${SORT_BY_GET_NOTES}`, '7.0.0',
     'Returns the sorted elements of a list, a set, or a sorted set.',
     'O(N+M*log(M)) where N is the number of elements in the list or set to sort, and M the number of returned elements. When the elements are not sorted, complexity is O(N).',
     'key ?BY=by-pattern:pattern ?limit:block(LIMIT=offset:integer count:integer) ?GET=get-pattern:pattern...* ?order:oneof(!ASC !DESC) ?sorting:pure-token!ALPHA'],
@@ -323,7 +368,7 @@ const STRING: Row[] = [
     "Decrements a number from the integer value of a key. Uses 0 as initial value if the key doesn't exist.", 'O(1)', 'key decrement:integer'],
   ['get', 2, 'readonly fast', 'string', 'RO access|1', '1.0.0', 'Returns the string value of a key.', 'O(1)', 'key'],
   ['getdel', 2, 'write fast', 'string', 'RW access delete|1', '6.2.0', 'Returns the string value of a key after deleting the key.', 'O(1)', 'key'],
-  ['getex', -2, 'write fast', 'string', 'RW access update|1', '6.2.0', 'Returns the string value of a key after setting its expiration time.', 'O(1)',
+  ['getex', -2, 'write fast', 'string', 'RW access update|1|0|RW and UPDATE because it changes the TTL', '6.2.0', 'Returns the string value of a key after setting its expiration time.', 'O(1)',
     'key ?expiration:oneof(EX=seconds:integer PX=milliseconds:integer EXAT=unix-time-seconds:unix-time PXAT=unix-time-milliseconds:unix-time !PERSIST)'],
   ['getrange', 4, 'readonly', 'string', 'RO access|1', '2.4.0', 'Returns a substring of the string stored at a key.',
     'O(N) where N is the length of the returned string. The complexity is ultimately determined by the returned length, but because creating a substring from an existing string is very cheap, it can be considered O(1) for small strings.',
@@ -348,7 +393,7 @@ const STRING: Row[] = [
   ['psetex', 4, 'write denyoom', 'string', 'OW update|1', '2.6.0',
     "Sets both string value and expiration time in milliseconds of a key. The key is created if it doesn't exist.", 'O(1)',
     'key milliseconds:integer value:string', { dep: ['2.6.12', '`SET` with the `PX` argument'], docFlags: 'deprecated' }],
-  ['set', -3, 'write denyoom', 'string', 'RW access update variable_flags|1', '1.0.0',
+  ['set', -3, 'write denyoom', 'string', 'RW access update variable_flags|1|0|RW and ACCESS due to the optional `GET` argument', '1.0.0',
     "Sets the string value of a key, ignoring its type. The key is created if it doesn't exist.", 'O(1)',
     'key value:string ?condition:oneof(!NX !XX){2.6.12} ?!GET{6.2.0} ?expiration:oneof(EX=seconds:integer{2.6.12} PX=milliseconds:integer{2.6.12} EXAT=unix-time-seconds:unix-time{6.2.0} PXAT=unix-time-milliseconds:unix-time{6.2.0} !KEEPTTL{6.0.0})'],
   ['setex', 4, 'write denyoom', 'string', 'OW update|1', '2.0.0',
@@ -369,7 +414,7 @@ const STRING: Row[] = [
 const BITMAP: Row[] = [
   ['bitcount', -2, 'readonly', 'bitmap', 'RO access|1', '2.6.0', 'Counts the number of set bits (population counting) in a string.', 'O(N)',
     'key ?range:block(start:integer end:integer ?unit:oneof(!BYTE !BIT){7.0.0})'],
-  ['bitfield', -2, 'write denyoom', 'bitmap', 'RW update access variable_flags|1', '3.2.0', 'Performs arbitrary bitfield integer operations on strings.',
+  ['bitfield', -2, 'write denyoom', 'bitmap', 'RW access update variable_flags|1|0|This command allows both access and modification of the key', '3.2.0', 'Performs arbitrary bitfield integer operations on strings.',
     'O(1) for each subcommand specified',
     'key ?operation:oneof(GET=get-block:block(encoding:string offset:integer) write:block(?OVERFLOW=overflow-block:oneof(!WRAP !SAT !FAIL) write-operation:oneof(SET=set-block:block(encoding:string offset:integer value:integer) INCRBY=incrby-block:block(encoding:string offset:integer increment:integer))))...'],
   ['bitfield_ro', -2, 'readonly fast', 'bitmap', 'RO access|1', '6.0.0', 'Performs arbitrary read-only bitfield integer operations on strings.',
@@ -405,7 +450,7 @@ const HASH: Row[] = [
     "Increments the integer value of a field in a hash by a number. Uses 0 as initial value if the field doesn't exist.", 'O(1)', 'key field:string increment:integer'],
   ['hincrbyfloat', 4, 'write denyoom fast', 'hash', 'RW access update|1', '2.6.0',
     "Increments the floating point value of a field by a number. Uses 0 as initial value if the field doesn't exist.", 'O(1)', 'key field:string increment:double'],
-  ['hkeys', 2, 'readonly', 'hash', 'RO|1', '2.0.0', 'Returns all fields in a hash.', 'O(N) where N is the size of the hash.', 'key',
+  ['hkeys', 2, 'readonly', 'hash', 'RO access|1', '2.0.0', 'Returns all fields in a hash.', 'O(N) where N is the size of the hash.', 'key',
     { tips: 'nondeterministic_output_order' }],
   ['hlen', 2, 'readonly fast', 'hash', 'RO|1', '2.0.0', 'Returns the number of fields in a hash.', 'O(1)', 'key'],
   ['hmget', -3, 'readonly fast', 'hash', 'RO access|1', '2.0.0', 'Returns the values of all fields in a hash.', 'O(N) where N is the number of fields being requested.',
@@ -475,7 +520,7 @@ const LIST: Row[] = [
   ['lpop', -2, 'write fast', 'list', 'RW access delete|1', '1.0.0',
     'Returns the first elements in a list after removing it. Deletes the list if the last element was popped.',
     'O(N) where N is the number of elements returned', 'key ?count:integer{6.2.0}'],
-  ['lpos', -3, 'readonly', 'list', 'RO|1', '6.0.6', 'Returns the index of matching elements in a list.',
+  ['lpos', -3, 'readonly', 'list', 'RO access|1', '6.0.6', 'Returns the index of matching elements in a list.',
     'O(N) where N is the number of elements in the list, for the average case. When searching for elements near the head or the tail of the list, or when the MAXLEN option is provided, the command may run in constant time.',
     'key element:string ?RANK=rank:integer ?COUNT=num-matches:integer ?MAXLEN=len:integer'],
   ['lpush', -3, 'write denyoom fast', 'list', 'RW insert|1', '1.0.0', "Prepends one or more elements to a list. Creates the key if it doesn't exist.",
@@ -520,9 +565,9 @@ const SET: Row[] = [
   ['sismember', 3, 'readonly fast', 'set', 'RO|1', '1.0.0', 'Determines whether a member belongs to a set.', 'O(1)', 'key member:string'],
   ['smembers', 2, 'readonly', 'set', 'RO access|1', '1.0.0', 'Returns all members of a set.', 'O(N) where N is the set cardinality.', 'key',
     { tips: 'nondeterministic_output_order' }],
-  ['smismember', -3, 'readonly fast', 'set', 'RO|1', '6.2.0', 'Determines whether multiple members belong to a set.',
+  ['smismember', -3, 'readonly fast', 'set', 'RO access|1', '6.2.0', 'Determines whether multiple members belong to a set.',
     'O(N) where N is the number of elements being checked for membership', 'key member:string...'],
-  ['smove', 4, 'write fast', 'set', 'RW delete|1;RW insert|2', '1.0.0', 'Moves a member from one set to another.', 'O(1)',
+  ['smove', 4, 'write fast', 'set', 'RW access delete|1;RW insert|2', '1.0.0', 'Moves a member from one set to another.', 'O(1)',
     'source:key0 destination:key1 member:string'],
   ['spop', -2, 'write fast', 'set', 'RW access delete|1', '1.0.0',
     'Returns one or more random members from a set after removing them. Deletes the set if the last member was popped.',
@@ -644,10 +689,10 @@ const STREAM: Row[] = [
   ['xack', -4, 'write fast', 'stream', 'RW update|1', '5.0.0',
     'Returns the number of messages that were successfully acknowledged by the consumer group member of a stream.', 'O(1) for each message ID processed.',
     'key group:string id:string...'],
-  ['xadd', -5, 'write denyoom fast', 'stream', 'RW insert|1', '5.0.0', "Appends a new message to a stream. Creates the key if it doesn't exist.",
+  ['xadd', -5, 'write denyoom fast', 'stream', 'RW update|1|0|UPDATE instead of INSERT because of the optional trimming feature', '5.0.0', "Appends a new message to a stream. Creates the key if it doesn't exist.",
     'O(1) when adding a new entry, O(N) when trimming where N being the number of entries evicted.',
     `key ?!NOMKSTREAM{6.2.0} ?${XTRIM_ARG} id-selector:oneof(auto-id!* id:string) data:block(field:string value:string)...`, { tips: 'nondeterministic_output' }],
-  ['xautoclaim', -6, 'write fast', 'stream', 'RW update|1', '6.2.0',
+  ['xautoclaim', -6, 'write fast', 'stream', 'RW delete|1', '6.2.0',
     'Changes, or acquires, ownership of messages in a consumer group, as if the messages were delivered to as consumer group member.', 'O(1) if COUNT is small.',
     'key group:string consumer:string min-idle-time:string start:string ?COUNT=count:integer ?!JUSTID', { tips: 'nondeterministic_output' }],
   ['xclaim', -6, 'write fast', 'stream', 'RW update|1', '5.0.0',
@@ -692,7 +737,7 @@ const STREAM: Row[] = [
   ['xread', -4, 'readonly blocking', 'stream', 'RO access|STREAMS@1|-1/1/2', '5.0.0',
     'Returns messages from multiple streams with IDs greater than the ones requested. Blocks until a message is available otherwise.', '',
     '?COUNT=count:integer ?BLOCK=milliseconds:integer STREAMS=streams:block(key... id:string...)'],
-  ['xreadgroup', -7, 'write blocking', 'stream', 'RW access|STREAMS@4|-1/1/2', '5.0.0',
+  ['xreadgroup', -7, 'write blocking', 'stream', 'RO access|STREAMS@4|-1/1/2', '5.0.0',
     'Returns new or historical messages from a stream for a consumer in a group. Blocks until a message is available otherwise.',
     'For each stream mentioned: O(M) with M being the number of elements returned. If M is constant (e.g. always asking for the first 10 elements with COUNT), you can consider it O(1). On the other side when XREADGROUP blocks, XADD will pay the O(N) time in order to serve the N clients blocked on the stream getting new data.',
     'GROUP=group-block:block(group:string consumer:string) ?COUNT=count:integer ?BLOCK=milliseconds:integer ?!NOACK STREAMS=streams:block(key... id:string...)'],
@@ -709,7 +754,7 @@ const STREAM: Row[] = [
 const HYPERLOGLOG: Row[] = [
   ['pfadd', -2, 'write denyoom fast', 'hyperloglog', 'RW insert|1', '2.8.9', "Adds elements to a HyperLogLog key. Creates the key if it doesn't exist.",
     'O(1) to add every element.', 'key ?element:string...'],
-  ['pfcount', -2, 'readonly may_replicate', 'hyperloglog', 'RW access|1|-1', '2.8.9',
+  ['pfcount', -2, 'readonly may_replicate', 'hyperloglog', 'RW access|1|-1|RW because it may change the internal representation of the key, and propagate to replicas', '2.8.9',
     'Returns the approximated cardinality of the set(s) observed by the HyperLogLog key(s).',
     'O(1) with a very small average constant time when called with a single key. O(N) with N being the number of keys, and much bigger constant times, when called with multiple keys.',
     'key...'],
@@ -807,17 +852,17 @@ const TRANSACTIONS: Row[] = [
 
 const EVAL_ARGS = (first: string) => `${first} numkeys:integer ?key... ?arg:string...`;
 const SCRIPTING: Row[] = [
-  ['eval', -3, 'noscript skip_monitor may_replicate no_mandatory_keys stale', 'scripting', 'RW access update|2|#0,1,1', '2.6.0',
+  ['eval', -3, 'noscript skip_monitor may_replicate no_mandatory_keys stale', 'scripting', `RW access update|2|#0,1,1|${EVAL_RW_NOTES}`, '2.6.0',
     'Executes a server-side Lua script.', 'Depends on the script that is executed.', EVAL_ARGS('script:string')],
-  ['eval_ro', -3, 'noscript skip_monitor no_mandatory_keys stale readonly', 'scripting', 'RO access|2|#0,1,1', '7.0.0',
+  ['eval_ro', -3, 'noscript skip_monitor no_mandatory_keys stale readonly', 'scripting', `RO access|2|#0,1,1|${EVAL_RO_NOTES}`, '7.0.0',
     'Executes a read-only server-side Lua script.', 'Depends on the script that is executed.', EVAL_ARGS('script:string')],
   ['evalsha', -3, 'noscript skip_monitor may_replicate no_mandatory_keys stale', 'scripting', 'RW access update|2|#0,1,1', '2.6.0',
     'Executes a server-side Lua script by SHA1 digest.', 'Depends on the script that is executed.', EVAL_ARGS('sha1:string')],
   ['evalsha_ro', -3, 'noscript skip_monitor no_mandatory_keys stale readonly', 'scripting', 'RO access|2|#0,1,1', '7.0.0',
     'Executes a read-only server-side Lua script by SHA1 digest.', 'Depends on the script that is executed.', EVAL_ARGS('sha1:string')],
-  ['fcall', -3, 'noscript skip_monitor may_replicate no_mandatory_keys stale', 'scripting', 'RW access update|2|#0,1,1', '7.0.0',
+  ['fcall', -3, 'noscript skip_monitor may_replicate no_mandatory_keys stale', 'scripting', `RW access update|2|#0,1,1|${EVAL_RW_NOTES}`, '7.0.0',
     'Invokes a function.', 'Depends on the function that is executed.', EVAL_ARGS('function:string')],
-  ['fcall_ro', -3, 'noscript skip_monitor no_mandatory_keys stale readonly', 'scripting', 'RO access|2|#0,1,1', '7.0.0',
+  ['fcall_ro', -3, 'noscript skip_monitor no_mandatory_keys stale readonly', 'scripting', `RO access|2|#0,1,1|${EVAL_RO_NOTES}`, '7.0.0',
     'Invokes a read-only function.', 'Depends on the function that is executed.', EVAL_ARGS('function:string')],
   ['function', -2, '', '', '', '7.0.0', 'A container for function commands.', 'Depends on subcommand.', undefined, {
     subs: [
@@ -945,6 +990,143 @@ export const COMMAND_TABLE: Array<[group: string, rows: Row[], module?: string]>
   ['module', TIMESERIES, 'timeseries'],
 ];
 
+/**
+ * COMMAND DOCS `history` by full command name: [version, change]. Entries up to 7.0, word for word as Redis reports
+ * them; changes made after 7.0 are not listed.
+ */
+export const COMMAND_HISTORY: Readonly<Record<string, ReadonlyArray<[version: string, change: string]>>> = {
+  'acl|getuser': [
+    ['6.2.0', 'Added Pub/Sub channel patterns.'],
+    ['7.0.0', 'Added selectors and changed the format of key and channel patterns from a list to their rule representation.'],
+  ],
+  'acl|setuser': [
+    ['6.2.0', 'Added Pub/Sub channel patterns.'],
+    ['7.0.0', 'Added selectors and key based permissions.'],
+  ],
+  auth: [['6.0.0', 'Added ACL style (username and password).']],
+  bgsave: [['3.2.2', 'Added the `SCHEDULE` option.']],
+  bitcount: [['7.0.0', 'Added the `BYTE|BIT` option.']],
+  bitpos: [['7.0.0', 'Added the `BYTE|BIT` option.']],
+  blpop: [['6.0.0', '`timeout` is interpreted as a double instead of an integer.']],
+  brpop: [['6.0.0', '`timeout` is interpreted as a double instead of an integer.']],
+  brpoplpush: [['6.0.0', '`timeout` is interpreted as a double instead of an integer.']],
+  bzpopmax: [['6.0.0', '`timeout` is interpreted as a double instead of an integer.']],
+  bzpopmin: [['6.0.0', '`timeout` is interpreted as a double instead of an integer.']],
+  'client|kill': [
+    ['2.8.12', 'Added new filter format.'],
+    ['2.8.12', '`ID` option.'],
+    ['3.2.0', 'Added `master` type in for `TYPE` option.'],
+    ['5.0.0', 'Replaced `slave` `TYPE` with `replica`. `slave` still supported for backward compatibility.'],
+    ['6.2.0', '`LADDR` option.'],
+  ],
+  'client|list': [
+    ['2.8.12', 'Added unique client `id` field.'],
+    ['5.0.0', 'Added optional `TYPE` filter.'],
+    ['6.0.0', 'Added `user` field.'],
+    ['6.2.0', 'Added `argv-mem`, `tot-mem`, `laddr` and `redir` fields and the optional `ID` filter.'],
+    ['7.0.0', 'Added `resp`, `multi-mem`, `rbs` and `rbp` fields.'],
+    ['7.0.3', 'Added `ssub` field.'],
+  ],
+  'client|pause': [['6.2.0', '`CLIENT PAUSE WRITE` mode added along with the `mode` option.']],
+  'cluster|meet': [['4.0.0', 'Added the optional `cluster_bus_port` argument.']],
+  'cluster|slots': [['4.0.0', 'Added node IDs.'], ['7.0.0', 'Added additional networking metadata field.']],
+  'command|info': [['7.0.0', 'Allowed to be called with no argument to get info on all commands.']],
+  'config|get': [['7.0.0', 'Added the ability to pass multiple pattern parameters in one call']],
+  'config|set': [['7.0.0', 'Added the ability to set multiple parameters in one call.']],
+  exists: [['3.0.3', 'Accepts multiple `key` arguments.']],
+  expire: [['7.0.0', 'Added options: `NX`, `XX`, `GT` and `LT`.']],
+  expireat: [['7.0.0', 'Added options: `NX`, `XX`, `GT` and `LT`.']],
+  flushall: [
+    ['4.0.0', 'Added the `ASYNC` flushing mode modifier.'],
+    ['6.2.0', 'Added the `SYNC` flushing mode modifier.'],
+  ],
+  flushdb: [
+    ['4.0.0', 'Added the `ASYNC` flushing mode modifier.'],
+    ['6.2.0', 'Added the `SYNC` flushing mode modifier.'],
+  ],
+  geoadd: [['6.2.0', 'Added the `CH`, `NX` and `XX` options.']],
+  georadius: [['6.2.0', 'Added the `ANY` option for `COUNT`.'], ['7.0.0', 'Added support for uppercase unit names.']],
+  georadius_ro: [['6.2.0', 'Added the `ANY` option for `COUNT`.']],
+  georadiusbymember: [['7.0.0', 'Added support for uppercase unit names.']],
+  geosearch: [['7.0.0', 'Added support for uppercase unit names.']],
+  geosearchstore: [['7.0.0', 'Added support for uppercase unit names.']],
+  hdel: [['2.4.0', 'Accepts multiple `field` arguments.']],
+  hello: [
+    ['6.2.0', '`protover` made optional; when called without arguments the command reports the current connection\'s context.'],
+  ],
+  hset: [['4.0.0', 'Accepts multiple `field` and `value` arguments.']],
+  info: [['7.0.0', 'Added support for taking multiple section arguments.']],
+  lpop: [['6.2.0', 'Added the `count` argument.']],
+  lpush: [['2.4.0', 'Accepts multiple `element` arguments.']],
+  lpushx: [['4.0.0', 'Accepts multiple `element` arguments.']],
+  migrate: [
+    ['3.0.0', 'Added the `COPY` and `REPLACE` options.'],
+    ['3.0.6', 'Added the `KEYS` option.'],
+    ['4.0.7', 'Added the `AUTH` option.'],
+    ['6.0.0', 'Added the `AUTH2` option.'],
+  ],
+  pexpire: [['7.0.0', 'Added options: `NX`, `XX`, `GT` and `LT`.']],
+  pexpireat: [['7.0.0', 'Added options: `NX`, `XX`, `GT` and `LT`.']],
+  pttl: [['2.8.0', 'Added the -2 reply.']],
+  renamenx: [['3.2.0', 'The command no longer returns an error when source and destination names are the same.']],
+  restore: [
+    ['3.0.0', 'Added the `REPLACE` modifier.'],
+    ['5.0.0', 'Added the `ABSTTL` modifier.'],
+    ['5.0.0', 'Added the `IDLETIME` and `FREQ` options.'],
+  ],
+  'restore-asking': [
+    ['3.0.0', 'Added the `REPLACE` modifier.'],
+    ['5.0.0', 'Added the `ABSTTL` modifier.'],
+    ['5.0.0', 'Added the `IDLETIME` and `FREQ` options.'],
+  ],
+  rpop: [['6.2.0', 'Added the `count` argument.']],
+  rpush: [['2.4.0', 'Accepts multiple `element` arguments.']],
+  rpushx: [['4.0.0', 'Accepts multiple `element` arguments.']],
+  sadd: [['2.4.0', 'Accepts multiple `member` arguments.']],
+  scan: [['6.0.0', 'Added the `TYPE` subcommand.']],
+  'script|flush': [['6.2.0', 'Added the `ASYNC` and `SYNC` flushing mode modifiers.']],
+  set: [
+    ['2.6.12', 'Added the `EX`, `PX`, `NX` and `XX` options.'],
+    ['6.0.0', 'Added the `KEEPTTL` option.'],
+    ['6.2.0', 'Added the `GET`, `EXAT` and `PXAT` option.'],
+    ['7.0.0', 'Allowed the `NX` and `GET` options to be used together.'],
+  ],
+  shutdown: [['7.0.0', 'Added the `NOW`, `FORCE` and `ABORT` modifiers.']],
+  'slowlog|get': [['4.0.0', 'Added client IP address, port and name to the reply.']],
+  spop: [['3.2.0', 'Added the `count` argument.']],
+  srandmember: [['2.6.0', 'Added the optional `count` argument.']],
+  srem: [['2.4.0', 'Accepts multiple `member` arguments.']],
+  ttl: [['2.8.0', 'Added the -2 reply.']],
+  xadd: [
+    ['6.2.0', 'Added the `NOMKSTREAM` option, `MINID` trimming strategy and the `LIMIT` option.'],
+    ['7.0.0', 'Added support for the `<ms>-*` explicit ID form.'],
+  ],
+  xautoclaim: [
+    ['7.0.0', 'Added an element to the reply array, containing deleted entries the command cleared from the PEL'],
+  ],
+  'xgroup|create': [['7.0.0', 'Added the `entries_read` named argument.']],
+  'xgroup|setid': [['7.0.0', 'Added the optional `entries_read` argument.']],
+  'xinfo|groups': [['7.0.0', 'Added the `entries-read` and `lag` fields']],
+  'xinfo|stream': [
+    ['6.0.0', 'Added the `FULL` modifier.'],
+    ['7.0.0', 'Added the `max-deleted-entry-id`, `entries-added`, `recorded-first-entry-id`, `entries-read` and `lag` fields'],
+  ],
+  xpending: [['6.2.0', 'Added the `IDLE` option and exclusive range intervals.']],
+  xrange: [['6.2.0', 'Added exclusive ranges.']],
+  xrevrange: [['6.2.0', 'Added exclusive ranges.']],
+  xsetid: [['7.0.0', 'Added the `entries_added` and `max_deleted_entry_id` arguments.']],
+  xtrim: [['6.2.0', 'Added the `MINID` trimming strategy and the `LIMIT` option.']],
+  zadd: [
+    ['2.4.0', 'Accepts multiple elements.'],
+    ['3.0.2', 'Added the `XX`, `NX`, `CH` and `INCR` options.'],
+    ['6.2.0', 'Added the `GT` and `LT` options.'],
+  ],
+  zrange: [['6.2.0', 'Added the `REV`, `BYSCORE`, `BYLEX` and `LIMIT` options.']],
+  zrangebyscore: [['2.0.0', 'Added the `WITHSCORES` modifier.']],
+  zrem: [['2.4.0', 'Accepts multiple elements.']],
+  zrevrangebyscore: [['2.1.6', '`min` and `max` can be exclusive.']],
+};
+
 export const HELP_TEXT: Record<string, string[]> = {
   client: [
     'CACHING (YES|NO)',
@@ -1002,6 +1184,16 @@ export const HELP_TEXT: Record<string, string[]> = {
     '    Protect current client connection from eviction.',
     'NO-TOUCH (ON|OFF)',
     '    Will not touch LRU/LFU stats when this mode is on.',
+  ],
+  module: [
+    'LIST',
+    '    Return a list of loaded modules.',
+    'LOAD <path> [<arg> ...]',
+    '    Load a module library from <path>, passing to it any optional arguments.',
+    'LOADEX <path> [[CONFIG NAME VALUE] [CONFIG NAME VALUE]] [ARGS ...]',
+    '    Load a module library from <path>, while passing it module configurations and optional arguments.',
+    'UNLOAD <name>',
+    '    Unload a module.',
   ],
   config: [
     'GET <pattern>',

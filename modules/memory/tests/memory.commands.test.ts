@@ -99,7 +99,7 @@ describe('MEMORY STATS', () => {
       'overhead.db.hashtable.lut', 'overhead.db.hashtable.rehashing', 'overhead.total', 'db.dict.rehashing.count', 'keys.count',
       'keys.bytes-per-key', 'dataset.bytes', 'dataset.percentage', 'peak.percentage', 'allocator.allocated', 'allocator.active',
       'allocator.resident', 'allocator.muzzy', 'allocator-fragmentation.ratio', 'allocator-fragmentation.bytes',
-      'allocator.rss-ratio', 'allocator.rss-bytes', 'rss-overhead.ratio', 'rss-overhead.bytes', 'fragmentation',
+      'allocator-rss.ratio', 'allocator-rss.bytes', 'rss-overhead.ratio', 'rss-overhead.bytes', 'fragmentation',
       'fragmentation.bytes',
     ]);
     expect(stats.get('db.0')).toEqual(['overhead.hashtable.main', expect.any(Number), 'overhead.hashtable.expires', expect.any(Number)]);

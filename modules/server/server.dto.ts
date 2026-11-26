@@ -51,9 +51,10 @@ export const ConfigGetDTO = z.tuple([SubcommandSchema], z.string()).transform(([
 
 const CONFIG_SET_ARITY = formatMessage(RespMessages.WRONG_ARITY, { command: 'config|set' });
 
-/** CONFIG SET name value [name value …]: an odd count is CONFIG SET's own arity error. */
+/** CONFIG SET name value [name value …]: fewer than one pair is the arity error, an odd count past it a syntax error. */
 export const ConfigSetDTO = z.tuple([SubcommandSchema], z.string()).transform(([, ...rest], ctx) => {
-  if (rest.length % 2) return reject(ctx, CONFIG_SET_ARITY);
+  if (rest.length < 2) return reject(ctx, CONFIG_SET_ARITY);
+  if (rest.length % 2) return reject(ctx, RespMessages.SYNTAX);
   const pairs: Array<[name: string, value: string]> = [];
   for (let i = 0; i < rest.length; i += 2) pairs.push([rest[i], rest[i + 1]]);
   return { pairs };
@@ -121,6 +122,9 @@ export const SlowlogGetDTO = SubcommandArgsDTO('slowlog', 0, 1).transform(({ arg
   const count = parseArg(SlowlogCountSchema, args[0]);
   return count.ok ? { count: count.value } : reject(ctx, count.error);
 });
+
+/** LATENCY HISTOGRAM [command …]: every tracked command when none is named. */
+export const LatencyHistogramDTO = z.tuple([SubcommandSchema], z.string()).transform(([, ...names]) => ({ names }));
 
 export const LatencyEventDTO = z.tuple([SubcommandSchema, z.string()]).transform(([, event]) => ({ event }));
 
@@ -282,6 +286,7 @@ export type AclDryRunInput = z.infer<typeof AclDryRunDTO>;
 export type AclGenPassInput = z.infer<typeof AclGenPassDTO>;
 export type SlowlogGetInput = z.infer<typeof SlowlogGetDTO>;
 export type LatencyEventInput = z.infer<typeof LatencyEventDTO>;
+export type LatencyHistogramInput = z.infer<typeof LatencyHistogramDTO>;
 export type MemoryUsageInput = z.infer<typeof MemoryUsageDTO>;
 export type DebugOneArgInput = z.infer<typeof DebugOneArgDTO>;
 export type DebugObjectInput = z.infer<typeof DebugObjectDTO>;

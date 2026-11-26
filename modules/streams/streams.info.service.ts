@@ -1,6 +1,6 @@
 import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
-import { OK, RespMap } from '@/libs/resp';
+import { OK, RespMap, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
@@ -53,13 +53,16 @@ export default class StreamsInfoService {
   // ──────────────────────────────────────────────
 
   static infoHelp(): Reply {
-    return [...StreamsMessages.XINFO_HELP];
+    return StreamsMessages.XINFO_HELP.map((line) => new Status(line));
   }
 
   /** XINFO's read step: the stream at the key, before any subcommand option is parsed ("no such key" first). */
   static infoRead(ctx: CommandContext, { key }: XInfoInput): Stream {
     const s = ctx.db.get(key, 'stream');
     if (!s) throw new AppError(StreamsMessages.NO_SUCH_KEY);
+    // a RESTOREd / reloaded stream lays out its listpack nodes lazily: the radix tree counters need them
+    const cfg = ctx.server.config;
+    s.ensureNodes(cfg.num('stream-node-max-entries'), cfg.num('stream-node-max-bytes'));
     return s;
   }
 
@@ -70,7 +73,7 @@ export default class StreamsInfoService {
     const head: Reply[] = [
       'length', s.length,
       'radix-tree-keys', s.nodes.length,
-      'radix-tree-nodes', s.nodes.length ? s.nodes.length + 1 : 1,
+      'radix-tree-nodes', s.radixTreeNodes(),
       'last-generated-id', idToString(s.lastId),
       'max-deleted-entry-id', idToString(s.maxDeletedId),
       'entries-added', s.entriesAdded,
@@ -111,7 +114,6 @@ export default class StreamsInfoService {
   static setId(ctx: CommandContext, { key, id, entriesAdded, maxDeleted }: XSetIdInput): Reply {
     const s = ctx.db.get(key, 'stream');
     if (!s) throw new AppError(StreamsMessages.NO_SUCH_KEY);
-    if (compareIds(id, s.maxDeletedId) < 0) throw new AppError(StreamsMessages.XSETID_BELOW_MAX_DELETED);
     if (s.length) {
       if (compareIds(id, s.entries[s.length - 1].id) < 0) throw new AppError(StreamsMessages.XSETID_BELOW_TOP_ITEM);
       if (entriesAdded !== -1 && s.length > entriesAdded) throw new AppError(StreamsMessages.XSETID_ENTRIES_ADDED_SMALL);

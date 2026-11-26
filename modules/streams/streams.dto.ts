@@ -184,8 +184,8 @@ function RangeDTO(rev: boolean) {
     if (!start.success) return reject(ctx, firstIssue(start.error));
     const end = RangeEndSchema.safeParse(rev ? first : second);
     if (!end.success) return reject(ctx, firstIssue(end.error));
-    /** -1 = no COUNT. */
-    let count = -1;
+    /** undefined = no COUNT; a negative COUNT counts as 0. */
+    let count: number | undefined;
     for (let j = 0; j < options.length; j++) {
       if (options[j].toLowerCase() === 'count' && j + 1 < options.length) {
         const parsed = IntegerSchema.safeParse(options[++j]);
@@ -443,20 +443,19 @@ export const XInfoDTO = z.array(z.string()).transform((args, ctx) => {
   return { sub, key: args[1] ?? '', group: args[2] ?? '' };
 });
 
-/** XINFO STREAM's options, parsed once the key was found: [FULL [COUNT n]] (whole `args`, subcommand first). */
+/**
+ * XINFO STREAM's options, parsed once the key was found: [FULL [COUNT n]] (whole `args`, subcommand first). Any other
+ * shape is the subcommand syntax error naming the subcommand as typed; a negative COUNT means no limit, like 0.
+ */
 export const XInfoStreamDTO = z.array(z.string()).transform((args, ctx) => {
-  let full = false;
-  let count = 10;
-  if (args.length > 2) {
-    if (args[2].toLowerCase() !== 'full') return reject(ctx, RespMessages.SYNTAX);
-    full = true;
-    if (args.length === 5 && args[3].toLowerCase() === 'count') {
-      const n = IntegerSchema.safeParse(args[4]);
-      if (!n.success) return reject(ctx, firstIssue(n.error));
-      count = Math.max(0, n.data);
-    } else if (args.length !== 3) return reject(ctx, RespMessages.SYNTAX);
-  }
-  return { full, count };
+  const options = args.slice(2);
+  if (!options.length) return { full: false, count: 10 };
+  const shapeOk = options[0].toLowerCase() === 'full' && (options.length === 1 || (options.length === 3 && options[1].toLowerCase() === 'count'));
+  if (!shapeOk) return reject(ctx, formatMessage(StreamsMessages.SUBCOMMAND_SYNTAX, { subcommand: args[0], command: 'XINFO' }));
+  if (options.length === 1) return { full: true, count: 10 };
+  const n = IntegerSchema.safeParse(options[2]);
+  if (!n.success) return reject(ctx, firstIssue(n.error));
+  return { full: true, count: Math.max(0, n.data) };
 });
 
 /** XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id] */

@@ -10,11 +10,11 @@ import { LUA_STRUCT } from './prelude/scripting.struct.prelude';
 /**
  * Lua prelude run once per Lua state. Makes Lua 5.4 look like the Lua 5.1 that Redis embeds, and provides the libraries
  * Redis scripts expect: `redis.*`, `cjson`, `cmsgpack`, `bit`, `struct`. Everything is plain Lua so it works on byte
- * strings.
+ * strings; library functions run under the engine's C trampoline (`__cwrap`) so that their errors name the caller.
  *
  * One file per library under `prelude/`, concatenated into a single chunk in this order: later parts use locals of
- * earlier ones (`sformat`, `num2str`, `normnum`, `is_array`), and the sandbox must come last because it freezes every
- * table defined before it.
+ * earlier ones (the captured builtins, `num2str`, `normnum`, `lib_error`, `RL`…), and the sandbox must come last
+ * because it prunes the globals to the Lua 5.1 set and freezes every table defined before it.
  */
 export const LUA_PRELUDE = [
   LUA_COMPAT,

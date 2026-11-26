@@ -32,6 +32,7 @@ import {
   FlushDTO,
   InfoDTO,
   LatencyEventDTO,
+  LatencyHistogramDTO,
   LolwutDTO,
   MemoryNoArgsDTO,
   MemoryUsageDTO,
@@ -135,7 +136,7 @@ const latency = bySubcommand(
     history: () => ServerService.latencySamples(),
     reset: () => ServerService.latencyReset(),
     graph: withDTO(LatencyEventDTO, ServerService.latencyGraph),
-    histogram: () => ServerService.latencyHistogram(),
+    histogram: withDTO(LatencyHistogramDTO, ServerService.latencyHistogram),
     doctor: (ctx) => ServerService.latencyDoctor(ctx),
     help: () => ServerService.latencyHelp(),
   },
@@ -147,7 +148,7 @@ const memory = bySubcommand(
     usage: withDTO(MemoryUsageDTO, ServerService.memoryUsage),
     doctor: withDTO(MemoryNoArgsDTO, (ctx) => ServerService.memoryDoctor(ctx)),
     stats: withDTO(MemoryNoArgsDTO, (ctx) => ServerService.memoryStats(ctx)),
-    'malloc-stats': withDTO(MemoryNoArgsDTO, () => ServerService.memoryMallocStats()),
+    'malloc-stats': withDTO(MemoryNoArgsDTO, (ctx) => ServerService.memoryMallocStats(ctx)),
     purge: withDTO(MemoryNoArgsDTO, () => ServerService.memoryPurge()),
     help: withDTO(MemoryNoArgsDTO, () => ServerService.memoryHelp()),
   },
@@ -175,6 +176,18 @@ const debug = bySubcommand(
     'dict-resizing': withDTO(DebugOneArgDTO, () => ServerService.debugAccepted()),
   },
   syntaxError('debug'),
+);
+
+/** MODULE: no module is loaded, and loading is refused (enable-module-command is `no`). */
+const moduleCommand = bySubcommand(
+  {
+    list: () => ServerService.moduleList(),
+    help: () => ServerService.moduleHelp(),
+    load: () => ServerService.moduleNotAllowed(),
+    loadex: () => ServerService.moduleNotAllowed(),
+    unload: () => ServerService.moduleNotAllowed(),
+  },
+  unknown('module'),
 );
 
 // ============================================================================
@@ -206,4 +219,5 @@ export const serverCommands: CommandSpec[] = [
   { name: 'role', arity: 1, handler: (ctx) => ServerService.role(ctx) },
   { name: 'memory', arity: -2, handler: memory },
   { name: 'debug', arity: -2, flags: NOSCRIPT, handler: debug },
+  { name: 'module', arity: -2, flags: NOSCRIPT, handler: moduleCommand },
 ];

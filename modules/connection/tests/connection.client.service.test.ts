@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { useServer, waitForBlocked } from '@/tests/helpers';
+import { sleep, useServer, waitForBlocked } from '@/tests/helpers';
 
 import { Sock, enc, errOf } from './connection.test_helpers';
 
@@ -11,6 +11,30 @@ import { Sock, enc, errOf } from './connection.test_helpers';
 const t = useServer();
 
 describe('CLIENT', () => {
+  it('PAUSE WRITE holds writes until UNPAUSE, PAUSE ALL every command until it times out', async () => {
+    const admin = await t.raw();
+    const other = t.client();
+    expect.soft(await admin.send('CLIENT', 'PAUSE', '5000', 'WRITE')).toBe('+OK\r\n');
+    expect.soft(await other.get('paused-k')).toBeNull();
+    let done = false;
+    const write = other.set('paused-k', 'v').then((r) => {
+      done = true;
+      return r;
+    });
+    await sleep(150);
+    expect.soft(done).toBe(false);
+    expect.soft(await admin.send('GET', 'paused-k')).toBe('$-1\r\n');
+    expect.soft(await admin.send('CLIENT', 'UNPAUSE')).toBe('+OK\r\n');
+    expect.soft(await write).toBe('OK');
+    expect.soft(await admin.send('GET', 'paused-k')).toBe('$1\r\nv\r\n');
+    // ALL holds reads too, until the timeout
+    expect.soft(await admin.send('CLIENT', 'PAUSE', '200')).toBe('+OK\r\n');
+    const started = Date.now();
+    expect.soft(await other.get('paused-k')).toBe('v');
+    expect.soft(Date.now() - started).toBeGreaterThanOrEqual(100);
+    expect.soft(await admin.send('CLIENT', 'PAUSE', '10', 'bogus')).toBe('-ERR CLIENT PAUSE mode must be WRITE or ALL\r\n');
+  });
+
   it('SETNAME / GETNAME', async () => {
     const r = await t.raw();
     expect.soft(await r.send('CLIENT', 'GETNAME')).toBe('$-1\r\n');

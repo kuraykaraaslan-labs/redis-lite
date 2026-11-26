@@ -4,16 +4,17 @@ import { formatMessage } from '@/libs/message-format';
 import { isInteger } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
 import {
-  FloatSchema,
   Int64Schema,
   IntegerSchema,
   KeySchema,
   ScanCursorSchema,
-  ScanOptionsSchema,
   ValueSchema,
   firstIssue,
   reject,
 } from '@/libs/schemas';
+import { KeyScanOptionsSchema } from '@/libs/schemas/key-scan';
+import { LongDoubleSchema } from '@/libs/schemas/long-double';
+import { RandomCountMessages, RandomCountSchema, isPairCountInRange } from '@/libs/schemas/random-count';
 
 import { FieldExpireConditionEnum, FieldExpireOptionEnum } from './hashes.enums';
 import type { FieldExpireCondition } from './hashes.enums';
@@ -108,28 +109,39 @@ export const HIncrByDTO = z
   .tuple([KeySchema, z.string(), Int64Schema])
   .transform(([key, field, delta]) => ({ key, field, delta }));
 
+/** HINCRBYFLOAT key field increment: a long double; an infinite increment is refused before the key is read. */
 export const HIncrByFloatDTO = z
-  .tuple([KeySchema, z.string(), FloatSchema])
+  .tuple([KeySchema, z.string(), LongDoubleSchema.refine((x) => !x.inf, { error: HashesMessages.INCREMENT_NAN_OR_INF })])
   .transform(([key, field, increment]) => ({ key, field, increment }));
 
 // ============================================================================
 // Iteration DTOs: HSCAN, HRANDFIELD
 // ============================================================================
 
-/** HSCAN key cursor [MATCH pattern] [COUNT n] [NOVALUES] */
+/** HSCAN key cursor …: the cursor alone, checked before the key is read. */
+export const HScanCursorDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor]) => ({ key, cursor }));
+
+const HScanOptionsSchema = KeyScanOptionsSchema('novalues');
+
+/** HSCAN key cursor [MATCH pattern] [COUNT n] [NOVALUES], parsed once the key is known to hold a hash (no TYPE). */
 export const HScanDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor, ...options], ctx) => {
-  const parsed = ScanOptionsSchema.safeParse(options);
+  const parsed = HScanOptionsSchema.safeParse(options);
   if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
-  return { key, cursor, match: parsed.data.match, noValues: parsed.data.noValues, count: parsed.data.count };
+  return { key, cursor, match: parsed.data.match, noValues: parsed.data.flagged, count: parsed.data.count };
 });
 
-/** HRANDFIELD key [count [WITHVALUES]]: the count is parsed before the trailing options are checked. */
+/**
+ * HRANDFIELD key [count [WITHVALUES]]: the count is parsed before the trailing options are checked, and both before
+ * the key is read (a bad count beats WRONGTYPE). With WITHVALUES the count must stay within ±LONG_MAX / 2.
+ */
 export const HRandFieldDTO = z.tuple([KeySchema], z.string()).transform(([key, ...rest], ctx) => {
   if (rest.length === 0) return { key, count: null, withValues: false };
-  const count = IntegerSchema.safeParse(rest[0]);
+  const count = RandomCountSchema.safeParse(rest[0]);
   if (!count.success) return reject(ctx, firstIssue(count.error));
   if (rest.length > 2 || (rest.length === 2 && rest[1].toLowerCase() !== 'withvalues')) return reject(ctx, RespMessages.SYNTAX);
-  return { key, count: count.data, withValues: rest.length === 2 };
+  const withValues = rest.length === 2;
+  if (withValues && !isPairCountInRange(count.data)) return reject(ctx, RandomCountMessages.PAIRS_RANGE);
+  return { key, count: Number(count.data), withValues };
 });
 
 // ============================================================================

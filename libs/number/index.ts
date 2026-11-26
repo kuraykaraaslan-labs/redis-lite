@@ -4,13 +4,14 @@
  * finds a stored value unusable throws its own AppError.
  */
 
-const INTEGER_RE = /^-?(0|[1-9]\d*)$/;
+/** string2ll's accepted forms: no '+', no leading zeros, no "-0". */
+const INTEGER_RE = /^(0|-?[1-9]\d*)$/;
 
 export const INT64_MIN = -(2n ** 63n);
 export const INT64_MAX = 2n ** 63n - 1n;
 
 /** The largest SCAN cursor (an unsigned 64-bit integer). */
-const UINT64_MAX = 2 ** 64 - 1;
+const UINT64_MAX = 2n ** 64n - 1n;
 
 /** Strict Redis int64 (string2ll rules): no '+', no leading zeros, no spaces, within [-2^63, 2^63-1]. */
 export function isInt64(value: string): boolean {
@@ -64,11 +65,17 @@ export function toFloat(value: string): number | null {
   return n;
 }
 
-/** An unsigned 64-bit SCAN cursor → number, or null when `raw` is not one. */
+/**
+ * A SCAN cursor read like strtoul (base 10) with Redis's checks → number, or null when Redis answers `invalid cursor`:
+ * an optional sign, digits only (no spaces), at most 2^64-1 in magnitude; a negative cursor wraps modulo 2^64 and an
+ * empty one is 0. Cursors past 2^53 lose precision, which no cursor this server hands out ever needs.
+ */
 export function parseScanCursor(raw: string): number | null {
-  if (!/^\d+$/.test(raw)) return null;
-  const n = Number(raw);
-  return n > UINT64_MAX ? null : n;
+  if (raw === '') return 0;
+  if (!/^[+-]?\d+$/.test(raw)) return null;
+  const magnitude = BigInt(raw[0] === '-' || raw[0] === '+' ? raw.slice(1) : raw);
+  if (magnitude > UINT64_MAX) return null;
+  return Number(raw[0] === '-' && magnitude > 0n ? UINT64_MAX + 1n - magnitude : magnitude);
 }
 
 /** Float in a reply: shortest round-trip form, `inf`/`-inf` as Redis writes them. */

@@ -29,6 +29,7 @@ export default class ConnectionService {
   static noEvict = ConnectionClientService.noEvict.bind(ConnectionClientService);
   static reply = ConnectionClientService.reply.bind(ConnectionClientService);
   static pause = ConnectionClientService.pause.bind(ConnectionClientService);
+  static unpause = ConnectionClientService.unpause.bind(ConnectionClientService);
   static getRedir = ConnectionClientService.getRedir.bind(ConnectionClientService);
   static trackingInfo = ConnectionClientService.trackingInfo.bind(ConnectionClientService);
   static tracking = ConnectionClientService.tracking.bind(ConnectionClientService);

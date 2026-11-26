@@ -7,14 +7,16 @@ import {
   ExpireOptionEnum,
   ExpireTimeSchema,
   ExpireTimeSchemas,
-  FloatSchema,
   Int64Schema,
   IntegerSchema,
   KeySchema,
   ValueSchema,
   firstIssue,
+  parseArg,
   reject,
 } from '@/libs/schemas';
+import type { ExpireOption, Parsed } from '@/libs/schemas';
+import { LongDoubleSchema } from '@/libs/schemas/long-double';
 
 import { LcsFlagEnum } from './strings.enums';
 import type { SetCondition } from './strings.enums';
@@ -43,8 +45,8 @@ function KeyValuePairsDTO(command: string) {
   });
 }
 
-/** `key start end` with integer indexes (GETRANGE, SUBSTR). */
-const RangeDTO = z.tuple([KeySchema, IntegerSchema, IntegerSchema]).transform(([key, start, end]) => ({ key, start, end }));
+/** `key start end` with int64 indexes (GETRANGE, SUBSTR); the service clamps them to the value's length. */
+const RangeDTO = z.tuple([KeySchema, Int64Schema, Int64Schema]).transform(([key, start, end]) => ({ key, start, end }));
 
 // ============================================================================
 // Value DTOs: GET, SET and variants, GETEX, MGET, MSET
@@ -64,46 +66,70 @@ export const PSetExDTO = z
   .transform(([key, expireAt, value]) => ({ key, expireAt, value }));
 
 const SET_EXPIRE = ExpireTimeSchemas('set');
+const GETEX_EXPIRE = ExpireTimeSchemas('getex');
+
+/** The expiry options a command accepts besides EX / PX / EXAT / PXAT, and which options each one excludes. */
+type OptionRules = Record<string, readonly string[]>;
+
+const EXPIRES = ['EX', 'PX', 'EXAT', 'PXAT'] as const;
+
+const SET_RULES: OptionRules = { NX: ['XX'], XX: ['NX'], GET: [], KEEPTTL: EXPIRES };
+const GETEX_RULES: OptionRules = { PERSIST: EXPIRES };
+
+/** What an option scan read: the flags seen and the last expiry option with its value (not yet validated). */
+type ScannedOptions = { flags: Set<string>; expire?: { option: ExpireOption; raw: string } };
+
+/**
+ * Reads SET / GETEX options left to right like Redis: an option may repeat (the last expiry value wins), an option
+ * that conflicts with one already read, an unknown option or an expiry missing its value is a syntax error. The expiry
+ * value is validated later, by the caller, and only the last one.
+ */
+function scanOptions(options: string[], rules: OptionRules): ScannedOptions | null {
+  const flags = new Set<string>();
+  let expire: ScannedOptions['expire'];
+  for (let i = 0; i < options.length; i++) {
+    const option = options[i].toUpperCase();
+    const asExpire = ExpireOptionEnum.safeParse(option);
+    if (asExpire.success && i + 1 < options.length) {
+      const excluded = [...EXPIRES.filter((other) => other !== option), ...Object.keys(rules).filter((r) => rules[r] === EXPIRES)];
+      if (excluded.some((other) => flags.has(other))) return null;
+      flags.add(option);
+      expire = { option: asExpire.data, raw: options[++i] };
+    } else if (Object.hasOwn(rules, option) && !rules[option].some((other) => flags.has(other))) flags.add(option);
+    else return null;
+  }
+  return { flags, expire };
+}
 
 /**
  * SET key value [NX | XX] [GET] [EX s | PX ms | EXAT unix-s | PXAT unix-ms | KEEPTTL]
- * Options are read left to right (an invalid expire time or unknown option fails where it stands); conflicting
- * options are a syntax error once all of them are read.
+ * The options are read first (any conflict is a syntax error), then the last expiry value is validated.
  */
 export const SetDTO = z.tuple([KeySchema, ValueSchema], z.string()).transform(([key, value, ...options], ctx) => {
-  const flags = new Set<string>();
+  const scanned = scanOptions(options, SET_RULES);
+  if (!scanned) return reject(ctx, RespMessages.SYNTAX);
+  const { flags, expire } = scanned;
   let expireAt: number | undefined;
-  let expiryOptions = 0;
-  for (let i = 0; i < options.length; i++) {
-    const option = options[i].toUpperCase();
-    const expire = ExpireOptionEnum.safeParse(option);
-    if (option === 'NX' || option === 'XX' || option === 'GET') flags.add(option);
-    else if (option === 'KEEPTTL') {
-      flags.add(option);
-      expiryOptions++;
-    } else if (expire.success && i + 1 < options.length) {
-      const at = SET_EXPIRE[expire.data].safeParse(options[++i]);
-      if (!at.success) return reject(ctx, firstIssue(at.error));
-      expireAt = at.data;
-      expiryOptions++;
-    } else return reject(ctx, RespMessages.SYNTAX);
+  if (expire) {
+    const at = SET_EXPIRE[expire.option].safeParse(expire.raw);
+    if (!at.success) return reject(ctx, firstIssue(at.error));
+    expireAt = at.data;
   }
-  if ((flags.has('NX') && flags.has('XX')) || expiryOptions > 1) return reject(ctx, RespMessages.SYNTAX);
   const condition: SetCondition | undefined = flags.has('NX') ? 'NX' : flags.has('XX') ? 'XX' : undefined;
   return { key, value, condition, get: flags.has('GET'), keepTtl: flags.has('KEEPTTL'), expireAt };
 });
 
-const GETEX_EXPIRE = ExpireTimeSchemas('getex');
-
-/** GETEX key [EX s | PX ms | EXAT unix-s | PXAT unix-ms | PERSIST]: at most one option, so the shape is checked first. */
+/**
+ * GETEX key [EX s | PX ms | EXAT unix-s | PXAT unix-ms | PERSIST]. Only the option syntax is checked here: Redis looks
+ * the key up next (a missing key answers nil, another type WRONGTYPE) and validates the expiry value last, so the
+ * value's parse result (`expireAt`) is reported by the service.
+ */
 export const GetExDTO = z.tuple([KeySchema], z.string()).transform(([key, ...options], ctx) => {
-  const option = options[0]?.toUpperCase();
-  const expire = ExpireOptionEnum.safeParse(option);
-  if (options.length === 0) return { key, persist: false, expireAt: undefined };
-  if (option === 'PERSIST' && options.length === 1) return { key, persist: true, expireAt: undefined };
-  if (!expire.success || options.length !== 2) return reject(ctx, RespMessages.SYNTAX);
-  const at = GETEX_EXPIRE[expire.data].safeParse(options[1]);
-  return at.success ? { key, persist: false, expireAt: at.data } : reject(ctx, firstIssue(at.error));
+  const scanned = scanOptions(options, GETEX_RULES);
+  if (!scanned) return reject(ctx, RespMessages.SYNTAX);
+  const { flags, expire } = scanned;
+  const expireAt: Parsed<number> | undefined = expire && parseArg(GETEX_EXPIRE[expire.option], expire.raw);
+  return { key, persist: flags.has('PERSIST'), expireAt };
 });
 
 export const MGetDTO = z.array(KeySchema).transform((keys) => ({ keys }));
@@ -123,7 +149,8 @@ export const DecrByDTO = z
   .tuple([KeySchema, Int64Schema.refine((n) => n !== INT64_MIN, { error: StringsMessages.DECREMENT_OVERFLOW })])
   .transform(([key, decrement]) => ({ key, delta: -decrement }));
 
-export const IncrByFloatDTO = z.tuple([KeySchema, FloatSchema]).transform(([key, increment]) => ({ key, increment }));
+/** The increment is read as a long double, like the stored value (see `@/libs/number/long-double`). */
+export const IncrByFloatDTO = z.tuple([KeySchema, LongDoubleSchema]).transform(([key, increment]) => ({ key, increment }));
 
 // ============================================================================
 // Range DTOs: APPEND, STRLEN, GETRANGE, SUBSTR, SETRANGE
@@ -149,8 +176,8 @@ export const LcsDTO = z.tuple([KeySchema, KeySchema], z.string()).transform(([ke
   for (let i = 0; i < options.length; i++) {
     const option = options[i].toUpperCase();
     if (LcsFlagEnum.safeParse(option).success) flags.add(option);
-    else if (option === 'MINMATCHLEN') {
-      const min = IntegerSchema.safeParse(options[++i] ?? '');
+    else if (option === 'MINMATCHLEN' && i + 1 < options.length) {
+      const min = IntegerSchema.safeParse(options[++i]);
       if (!min.success) return reject(ctx, firstIssue(min.error));
       minMatchLen = Math.max(0, min.data);
     } else return reject(ctx, RespMessages.SYNTAX);

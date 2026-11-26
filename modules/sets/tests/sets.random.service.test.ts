@@ -48,6 +48,17 @@ describe('sets: random members', () => {
     await expect(t.call('SRANDMEMBER')).rejects.toThrow(arity('srandmember'));
   });
 
+  it('SRANDMEMBER count range', async () => {
+    await t.call('SADD', 's:rand-range', 'a');
+    await expect(t.call('SRANDMEMBER', 's:rand-range', '-9223372036854775808')).rejects.toThrow('ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807');
+    expect(await t.call('SRANDMEMBER', 's:rand-range', '9223372036854775807')).toEqual(['a']);
+    // the count is parsed before the key is read
+    await t.call('SET', 's:rand-str', 'x');
+    await expect(t.call('SRANDMEMBER', 's:rand-str', 'x')).rejects.toThrow(NOT_INT);
+    await expect(t.call('SPOP', 's:rand-str', 'x')).rejects.toThrow('ERR value is out of range, must be positive');
+    expect(await t.call('SPOP', 's:rand-range', '9223372036854775807')).toEqual(['a']);
+  });
+
   it('SPOP / SRANDMEMBER with extra args are a syntax error', async () => {
     await t.call('SADD', 's:pop-syn', 'a', 'b');
     await expect(t.call('SPOP', 's:pop-syn', 1, 2)).rejects.toThrow(SYNTAX);

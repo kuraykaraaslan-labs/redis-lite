@@ -24,6 +24,7 @@ export const ConnectionMessages = {
   UNBLOCK_REASON: 'ERR CLIENT UNBLOCK reason should be TIMEOUT or ERROR',
   PAUSE_TIMEOUT_NOT_INTEGER: 'ERR timeout is not an integer or out of range',
   TIMEOUT_NEGATIVE: 'ERR timeout is negative',
+  PAUSE_MODE: 'ERR CLIENT PAUSE mode must be WRITE or ALL',
 
   // Templates: fill the {placeholders} with formatMessage() from @/libs/message-format
   HELLO_SYNTAX: "ERR Syntax error in HELLO option '{option}'",

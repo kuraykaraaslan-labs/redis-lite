@@ -33,10 +33,18 @@ export default class StringsRangeService {
     return (ctx.db.get(key, 'string') ?? '').length;
   }
 
+  /** An int64 index → number, clamped just past ±length (the result of the clamping in getRange is unchanged). */
+  private static index(n: bigint, length: number): number {
+    const bound = BigInt(length + 1);
+    return Number(n > bound ? bound : n < -bound ? -bound : n);
+  }
+
   /** GETRANGE on the value read before the indexes were parsed. Negative indexes count from the end. */
-  static getRange(value: string | null, { start, end }: RangeInput): string {
+  static getRange(value: string | null, input: RangeInput): string {
     const v = value ?? '';
-    if (start < 0 && end < 0 && start > end) return '';
+    if (input.start < 0n && input.end < 0n && input.start > input.end) return '';
+    const start = StringsRangeService.index(input.start, v.length);
+    const end = StringsRangeService.index(input.end, v.length);
     const from = start < 0 ? Math.max(0, v.length + start) : start;
     let to = end < 0 ? Math.max(0, v.length + end) : end;
     if (to >= v.length) to = v.length - 1;
@@ -45,8 +53,10 @@ export default class StringsRangeService {
   }
 
   /** SUBSTR, the pre-2.0 GETRANGE: same clamping but without GETRANGE's "both negative and reversed" shortcut. */
-  static substr(value: string | null, { start, end }: RangeInput): string {
+  static substr(value: string | null, input: RangeInput): string {
     const v = value ?? '';
+    const start = StringsRangeService.index(input.start, v.length);
+    const end = StringsRangeService.index(input.end, v.length);
     const from = start < 0 ? Math.max(0, v.length + start) : start;
     let to = end < 0 ? Math.max(0, v.length + end) : end;
     if (to >= v.length) to = v.length - 1;

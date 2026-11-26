@@ -52,11 +52,12 @@ export const stringCommands: CommandSpec[] = [
     arity: -2,
     flags: WRITE,
     keys: keysAt(0),
-    // read first: WRONGTYPE beats a bad option, and a missing key never looks at its options
-    handler: (ctx, args) => {
-      const value = StringsService.get(ctx, { key: args[0] });
-      return value === null ? null : validated(GetExDTO, args, (input) => StringsService.getEx(ctx, input, value));
-    },
+    // option syntax first, then the key (a missing key never validates the expiry value; WRONGTYPE beats it)
+    handler: (ctx, args) =>
+      validated(GetExDTO, args, (input) => {
+        const value = StringsService.get(ctx, input);
+        return value === null ? null : StringsService.getEx(ctx, input, value);
+      }),
   },
   { name: 'mget', arity: -2, handler: withDTO(MGetDTO, StringsService.mGet) },
   { name: 'mset', arity: -3, flags: WRITE, keys: keysAt(0, -1, 2), handler: withDTO(MSetDTO, StringsService.mSet) },

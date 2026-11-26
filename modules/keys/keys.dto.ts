@@ -12,8 +12,10 @@ import {
   ScanOptionsSchema,
   ValueSchema,
   firstIssue,
+  parseArg,
   reject,
 } from '@/libs/schemas';
+import type { Parsed } from '@/libs/schemas';
 
 import { ExpireConditionEnum, ObjectSubcommandEnum } from './keys.enums';
 import type { ExpireCondition, ObjectSubcommand } from './keys.enums';
@@ -91,12 +93,13 @@ export const CopyDTO = z
 // ============================================================================
 
 /**
- * EXPIRE key amount [NX | XX | GT | LT]… → absolute expiry (ms). Options are any mix of the four conditions (NX with
- * another one, or GT with LT, is refused once all are read); an absolute time that overflows int64 is invalid.
+ * EXPIRE key amount [NX | XX | GT | LT]… → absolute expiry (ms). Like Redis, the options are checked before the
+ * amount: any mix of the four conditions (NX with another one, or GT with LT, is refused once all are read), then the
+ * amount must be an int64 whose absolute time in ms does not overflow int64. `exact` keeps that time as an int64.
  */
 function ExpireDTO(command: string, unit: bigint, absolute: boolean) {
   const invalid = formatMessage(KeysMessages.INVALID_EXPIRE, { command });
-  return z.tuple([KeySchema, Int64Schema], z.string()).transform(([key, amount, ...options], ctx) => {
+  return z.tuple([KeySchema, z.string()], z.string()).transform(([key, rawAmount, ...options], ctx) => {
     const conditions = new Set<ExpireCondition>();
     for (const given of options) {
       const condition = ExpireConditionEnum.safeParse(given.toLowerCase());
@@ -106,11 +109,14 @@ function ExpireDTO(command: string, unit: bigint, absolute: boolean) {
     const [nx, xx, gt, lt] = (['nx', 'xx', 'gt', 'lt'] as const).map((c) => conditions.has(c));
     if (nx && (xx || gt || lt)) return reject(ctx, KeysMessages.EXPIRE_NX_CONFLICT);
     if (gt && lt) return reject(ctx, KeysMessages.EXPIRE_GT_LT_CONFLICT);
+    const parsed = Int64Schema.safeParse(rawAmount);
+    if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
+    const amount = parsed.data;
     // Like Redis, a time that overflows int64 once converted to absolute ms is an error.
     const ms = amount * unit;
     const at = absolute ? ms : ms + BigInt(Date.now());
     if (ms > INT64_MAX || ms < INT64_MIN || at > INT64_MAX || at < INT64_MIN) return reject(ctx, invalid);
-    return { key, at: Number(at), nx, xx, gt, lt };
+    return { key, at: Number(at), exact: at, nx, xx, gt, lt };
   });
 }
 
@@ -201,32 +207,40 @@ export const SortRoDTO = SortDTO(true);
 
 export const DumpDTO = KeyDTO;
 
-const RestoreTtlSchema = IntegerSchema.refine((ttl) => ttl >= 0, { error: KeysMessages.INVALID_TTL });
+const RestoreTtlSchema = Int64Schema.refine((ttl) => ttl >= 0n, { error: KeysMessages.INVALID_TTL });
 
-/** RESTORE key ttl payload [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
+/** A non-negative int64 option value (IDLETIME) → number. */
+const IdleTimeSchema = Int64Schema.refine((n) => n >= 0n, { error: KeysMessages.INVALID_IDLETIME }).transform(Number);
+const FreqSchema = Int64Schema.refine((n) => n >= 0n && n <= 255n, { error: KeysMessages.INVALID_FREQ }).transform(Number);
+
+/**
+ * RESTORE key ttl payload [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency]
+ * Like Redis, the options are read first (IDLETIME and FREQ exclude each other; an option missing its value is a
+ * syntax error), then the service checks BUSYKEY, and only then the TTL: its parse result (`ttl`) is reported there.
+ */
 export const RestoreDTO = z
-  .tuple([KeySchema, RestoreTtlSchema, ValueSchema], z.string())
-  .transform(([key, ttl, payload, ...options], ctx) => {
+  .tuple([KeySchema, z.string(), ValueSchema], z.string())
+  .transform(([key, rawTtl, payload, ...options], ctx) => {
     let replace = false;
     let absolute = false;
     let idle: number | null = null;
     let freq: number | null = null;
     for (let i = 0; i < options.length; i++) {
       const opt = options[i].toLowerCase();
+      const hasValue = i + 1 < options.length;
       if (opt === 'replace') replace = true;
       else if (opt === 'absttl') absolute = true;
-      else if (opt === 'idletime') {
-        const parsed = IntegerSchema.safeParse(options[++i] ?? '');
+      else if (opt === 'idletime' && hasValue && freq === null) {
+        const parsed = IdleTimeSchema.safeParse(options[++i]);
         if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
-        if (parsed.data < 0) return reject(ctx, KeysMessages.INVALID_IDLETIME);
         idle = parsed.data;
-      } else if (opt === 'freq') {
-        const parsed = IntegerSchema.safeParse(options[++i] ?? '');
+      } else if (opt === 'freq' && hasValue && idle === null) {
+        const parsed = FreqSchema.safeParse(options[++i]);
         if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
-        if (parsed.data < 0 || parsed.data > 255) return reject(ctx, KeysMessages.INVALID_FREQ);
         freq = parsed.data;
       } else return reject(ctx, RespMessages.SYNTAX);
     }
+    const ttl: Parsed<bigint> = parseArg(RestoreTtlSchema, rawTtl);
     return { key, ttl, payload, replace, absolute, idle, freq };
   });
 

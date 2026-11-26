@@ -1,5 +1,5 @@
 import { AppError } from '@/libs/app-error';
-import { toFloat } from '@/libs/number';
+import { parseSortWeight } from '@/libs/number/strtod';
 import type { Reply } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
 
@@ -30,12 +30,12 @@ export default class KeysSortService {
   }
 
   /** The elements of the sorted key, in storage order; WRONGTYPE for strings, hashes and streams. */
-  private static elementsOf(ctx: CommandContext, key: string): { elements: string[]; isZset: boolean } {
+  private static elementsOf(ctx: CommandContext, key: string): { elements: string[]; type: 'list' | 'set' | 'zset' | null } {
     const v = ctx.db.lookup(key);
-    if (!v) return { elements: [], isZset: false };
-    if (v.type === 'list') return { elements: [...v.value], isZset: false };
-    if (v.type === 'set') return { elements: [...v.value], isZset: false };
-    if (v.type === 'zset') return { elements: v.value.entries.map((e) => e.member), isZset: true };
+    if (!v) return { elements: [], type: null };
+    if (v.type === 'list') return { elements: [...v.value], type: 'list' };
+    if (v.type === 'set') return { elements: [...v.value], type: 'set' };
+    if (v.type === 'zset') return { elements: v.value.entries.map((e) => e.member), type: 'zset' };
     throw new AppError(RespMessages.WRONGTYPE);
   }
 
@@ -47,7 +47,7 @@ export default class KeysSortService {
       if (alpha) weights.set(e, raw);
       else if (raw === null) weights.set(e, 0);
       else {
-        const n = toFloat(raw);
+        const n = parseSortWeight(raw);
         if (n === null) throw new AppError(KeysMessages.SORT_NOT_DOUBLE);
         weights.set(e, n);
       }
@@ -72,11 +72,12 @@ export default class KeysSortService {
 
   static sort(ctx: CommandContext, input: SortInput): Reply {
     const { key, by, limit, gets, desc, store } = input;
-    const { isZset, ...found } = KeysSortService.elementsOf(ctx, key);
+    const { type, ...found } = KeysSortService.elementsOf(ctx, key);
     let elements = found.elements;
-    const noSort = by !== null && !by.includes('*');
-    // BY nosort on a sorted set keeps the zset order; DESC walks it backwards, as Redis does.
-    if (noSort && isZset && desc) elements.reverse();
+    // BY without a star skips sorting, except for a set stored or sorted from a script (its order is not stable).
+    const noSort = by !== null && !by.includes('*') && !(type === 'set' && (store !== null || ctx.inScript));
+    // BY nosort keeps a list's or a sorted set's order; DESC walks it backwards, as Redis does.
+    if (noSort && type !== 'set' && desc) elements.reverse();
     if (!noSort) KeysSortService.sortElements(ctx, elements, input);
     if (limit) {
       const [offset, count] = limit;

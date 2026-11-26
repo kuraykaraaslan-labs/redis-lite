@@ -2,6 +2,11 @@ import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
 import type { Reply } from '@/libs/resp';
 
+import { Acl } from '@/modules/acl/acl.service';
+import CommandService from '@/modules/command/command.service';
+import { Database } from '@/modules/database/database.service';
+import TimeseriesService from '@/modules/timeseries/timeseries.service';
+
 import { ServerConfig } from './server.config';
 import type { RedisLiteServer } from './server.core';
 import { ServerFiles } from './server.files';
@@ -55,6 +60,9 @@ export class ServerSettings {
       case 'acllog-max-len':
         server.acl.logMaxLen = Number(value);
         break;
+      case 'port':
+        server.rebind(Number(value));
+        break;
       case 'acl-pubsub-default':
         server.acl.pubsubDefault = value === 'allchannels' ? 'allchannels' : 'resetchannels';
         break;
@@ -91,5 +99,34 @@ export class ServerSettings {
     const reply = this.server.persistence.debugReload(opts);
     this.server.evictor.clearPool();
     return reply;
+  }
+
+  /** The logical databases, wired to the keyspace (expiry), the memory tracker and the time series label index. */
+  buildDatabases(count: number): Database[] {
+    const server = this.server;
+    return Array.from({ length: count }, (_, i) => {
+      const db: Database = new Database(
+        (key) => server.keyspace.onExpired(i, key),
+        server.config,
+        (key) => {
+          server.memoryModel.tracker.changed(i, key);
+          TimeseriesService.keyChanged(server, db, key);
+        },
+        server.keyExpiry,
+      );
+      return db;
+    });
+  }
+
+  /** The ACL engine, built from the command metadata and the startup configuration. */
+  buildAcl(requirepass: string): Acl {
+    const config = this.server.config;
+    return new Acl({
+      allCommands: () => CommandService.allCommandsDeep().map((m) => m.fullname),
+      categoriesOf: (name) => (CommandService.getCommandMeta(name)?.acl ?? []).map((c) => `@${c}`),
+      requirepass,
+      pubsubDefault: config.get('acl-pubsub-default') === 'allchannels' ? 'allchannels' : 'resetchannels',
+      logMaxLen: config.num('acllog-max-len'),
+    });
   }
 }

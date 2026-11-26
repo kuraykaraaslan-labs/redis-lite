@@ -74,7 +74,8 @@ describe('CLIENT DTOs', () => {
       "ERR unknown subcommand or wrong number of arguments for 'UNBLOCK'. Try CLIENT HELP.",
     );
     expect(parse(ClientUnblockDTO, ['unblock', 'x', 'bogus'])).toBe('ERR CLIENT UNBLOCK reason should be TIMEOUT or ERROR');
-    expect(parse(ClientPauseDTO, ['pause', '-1', 'bogus'])).toBe('ERR timeout is negative');
+    expect(parse(ClientPauseDTO, ['pause', '-1', 'bogus'])).toBe('ERR CLIENT PAUSE mode must be WRITE or ALL');
+    expect(parse(ClientPauseDTO, ['pause', '-1', 'write'])).toBe('ERR timeout is negative');
     expect(parse(ClientPauseDTO, ['pause', 'x'])).toBe('ERR timeout is not an integer or out of range');
   });
 });

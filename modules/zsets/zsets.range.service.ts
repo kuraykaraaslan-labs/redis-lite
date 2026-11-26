@@ -3,6 +3,7 @@ import { RespDouble, RespPairs } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import DatabaseService from '@/modules/database/database.service';
 
 import type { LexRangeInput, ScoreRangeInput, ZRangeInput, ZRangeStoreInput, ZRemRangeByRankInput } from './zsets.dto';
 import { ZSet } from './zsets.structure';
@@ -63,6 +64,8 @@ export default class ZSetsRangeService {
   static rangeStore(ctx: CommandContext, { destination, range, options }: ZRangeStoreInput, source: ZSet | undefined): number {
     const out = new ZSet();
     for (const entry of ZSetsRangeService.collect(source, range, options)) out.add(entry.member, entry.score);
+    // a compact destination stores -0 as 0, as Redis does
+    if (DatabaseService.isCompact({ type: 'zset', value: out }, ctx.server.config)) out.clearNegativeZeros();
     if (out.size) ctx.db.set(destination, { type: 'zset', value: out });
     else ctx.db.remove(destination);
     return out.size;

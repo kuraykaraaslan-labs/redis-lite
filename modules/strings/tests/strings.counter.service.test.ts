@@ -111,11 +111,11 @@ describe('INCRBYFLOAT', () => {
     await t.call('SET', 'if:s', 'abc');
     expect(await err(t.call('INCRBYFLOAT', 'if:s', '1'))).toBe(NOT_FLOAT);
     expect(await err(t.call('INCRBYFLOAT', 'if:x', 'abc'))).toBe(NOT_FLOAT);
-    await t.call('SET', 'if:huge', '1e308');
-    expect(await err(t.call('INCRBYFLOAT', 'if:huge', '1e308'))).toBe('ERR increment would produce NaN or Infinity');
-    expect(await t.call('GET', 'if:huge')).toBe('1e308');
-    // unverified: whether "inf" is rejected as "not a valid float" or as "would produce NaN or Infinity"
-    expect(await err(t.call('INCRBYFLOAT', 'if:x', 'inf'))).toMatch(/^ERR (value is not a valid float|increment would produce NaN or Infinity)$/);
+    // long double range: 2e308 is finite, only sums past ~1.19e4932 overflow
+    await t.call('SET', 'if:huge', '1.1e4932');
+    expect(await err(t.call('INCRBYFLOAT', 'if:huge', '1.1e4932'))).toBe('ERR increment would produce NaN or Infinity');
+    expect(await t.call('GET', 'if:huge')).toBe('1.1e4932');
+    expect(await err(t.call('INCRBYFLOAT', 'if:x', 'inf'))).toBe('ERR increment would produce NaN or Infinity');
     expect(await err(t.call('INCRBYFLOAT', 'if:x', 'nan'))).toMatch(/^ERR /);
     expect(await t.call('EXISTS', 'if:x')).toBe(0);
     await t.call('RPUSH', 'if:l', 'x');

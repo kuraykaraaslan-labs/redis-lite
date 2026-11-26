@@ -41,6 +41,12 @@ describe('LMPopDTO / BLMPopDTO', () => {
     expect(parse(LMPopDTO, ['0', 'a', 'LEFT'])).toBe('ERR numkeys should be greater than 0');
     expect(parse(LMPopDTO, ['1', 'a', 'UP'])).toBe('ERR syntax error');
     expect(parse(LMPopDTO, ['1', 'a', 'LEFT', 'COUNT', '0'])).toBe('ERR count should be greater than 0');
+    // any numkeys / COUNT that is not a positive int64 gets the command's own text; a huge numkeys lacks its keys
+    expect(parse(LMPopDTO, ['x', 'a', 'LEFT'])).toBe('ERR numkeys should be greater than 0');
+    expect(parse(LMPopDTO, ['9223372036854775808', 'a', 'LEFT'])).toBe('ERR numkeys should be greater than 0');
+    expect(parse(LMPopDTO, ['9223372036854775807', 'a', 'LEFT'])).toBe('ERR syntax error');
+    expect(parse(LMPopDTO, ['1', 'a', 'LEFT', 'COUNT', 'x'])).toBe('ERR count should be greater than 0');
+    expect(parse(LMPopDTO, ['1', 'a', 'LEFT', 'COUNT', '9223372036854775807'])).toMatchObject({ keys: ['a'] });
   });
 
   it('BLMPOP checks the timeout first', () => {

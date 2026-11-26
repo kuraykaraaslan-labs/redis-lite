@@ -15,6 +15,9 @@ export default class GeoHash {
   static readonly LON_MAX = 180;
 
   private static readonly STEP = 26;
+  /** Redis interleaves two 32-bit offsets: an offset of exactly 2^26 (longitude 180, latitude at the top of the range)
+   * is not clamped and sets bit 52 / 53 of the score, which decodes back to the range's edge. */
+  private static readonly OFFSET_BITS = 32;
   private static readonly EARTH_RADIUS = 6372797.560856;
   private static readonly BASE32 = '0123456789bcdefghjkmnpqrstuvwxyz';
   /** Redis's `D_R`: deg→rad is `deg * (M_PI / 180.0)`; `(deg * PI) / 180` rounds differently in the last digits. */
@@ -26,7 +29,7 @@ export default class GeoHash {
 
   private static interleave(x: number, y: number): bigint {
     let out = 0n;
-    for (let i = 0; i < GeoHash.STEP; i++) {
+    for (let i = 0; i < GeoHash.OFFSET_BITS; i++) {
       out |= BigInt((x >>> i) & 1) << BigInt(2 * i);
       out |= BigInt((y >>> i) & 1) << BigInt(2 * i + 1);
     }
@@ -36,7 +39,7 @@ export default class GeoHash {
   private static deinterleave(bits: bigint): [number, number] {
     let x = 0;
     let y = 0;
-    for (let i = 0; i < GeoHash.STEP; i++) {
+    for (let i = 0; i < GeoHash.OFFSET_BITS; i++) {
       x |= Number((bits >> BigInt(2 * i)) & 1n) << i;
       y |= Number((bits >> BigInt(2 * i + 1)) & 1n) << i;
     }
@@ -51,12 +54,15 @@ export default class GeoHash {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** The 52-bit geohash of a point (the stored score); geohash strings use the full -90..90 latitude range. */
+  /**
+   * The 52-bit geohash of a point (the stored score); geohash strings use the full -90..90 latitude range. Like Redis,
+   * an offset at the top of a range (2^26) is kept as is, not clamped to 2^26 - 1.
+   */
   static encode(p: GeoPoint, latMin = GeoHash.LAT_MIN, latMax = GeoHash.LAT_MAX): bigint {
     const scale = 2 ** GeoHash.STEP;
     const latOffset = Math.floor(((p.lat - latMin) / (latMax - latMin)) * scale);
     const lonOffset = Math.floor(((p.lon - GeoHash.LON_MIN) / (GeoHash.LON_MAX - GeoHash.LON_MIN)) * scale);
-    return GeoHash.interleave(Math.min(latOffset, scale - 1), Math.min(lonOffset, scale - 1));
+    return GeoHash.interleave(latOffset, lonOffset);
   }
 
   /** The center of the geohash cell a score designates. */

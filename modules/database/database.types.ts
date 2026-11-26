@@ -8,8 +8,11 @@ import type { ZSet } from '@/modules/zsets/zsets.structure';
 // ============================================================================
 
 export type RedisValue =
-  /** `raw`: the value went through APPEND/SETRANGE/SETBIT/…, which Redis always leaves raw-encoded. */
-  | { type: 'string'; value: string; raw?: boolean }
+  /**
+   * `raw`: the value went through APPEND/SETRANGE/SETBIT/…, which Redis always leaves raw-encoded. `noInt`: written by
+   * INCRBYFLOAT, which never integer-encodes its result (embstr or raw by length, even for integer text).
+   */
+  | { type: 'string'; value: string; raw?: boolean; noInt?: boolean }
   | { type: 'hash'; value: Map<string, string> }
   | { type: 'list'; value: ListDeque }
   | { type: 'set'; value: Set<string> }

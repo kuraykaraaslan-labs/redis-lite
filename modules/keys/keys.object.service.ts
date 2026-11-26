@@ -36,7 +36,7 @@ export default class KeysObjectService {
       case 'refcount': {
         if (!v) return null;
         // Shared unless an LRU/LFU maxmemory policy is set (maxmemory is then non-zero).
-        const shared = v.type === 'string' && !v.raw && KeysObjectService.SHARED_INTEGER_RE.test(v.value) && config.get('maxmemory') === '0';
+        const shared = v.type === 'string' && !v.raw && !v.noInt && KeysObjectService.SHARED_INTEGER_RE.test(v.value) && config.get('maxmemory') === '0';
         return shared ? KeysObjectService.SHARED_REFCOUNT : 1;
       }
       case 'idletime':

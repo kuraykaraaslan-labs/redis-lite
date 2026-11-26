@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { isInteger } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { Int64Schema, IntegerSchema, IntegerSchemaWith, KeySchema, firstIssue, reject } from '@/libs/schemas';
+import { Int64Schema, IntegerSchemaWith, KeySchema, firstIssue, reject } from '@/libs/schemas';
 import type { Parsed } from '@/libs/schemas';
 
 import { BitOpEnum, BitfieldOpEnum, OverflowPolicyEnum, RangeUnitEnum } from './bitmaps.enums';
@@ -23,13 +23,23 @@ import type { BitRangeArgs, BitfieldStep, DeferredIssue, FieldType } from './bit
 /** A non-negative bit offset (the upper limit is config: checked by the services). */
 const BitOffsetSchema = IntegerSchemaWith(BitmapsMessages.BIT_OFFSET).refine((n) => n >= 0, { error: BitmapsMessages.BIT_OFFSET });
 
-/** `[start end [BYTE | BIT]]` (BITCOUNT, BITPOS with an end): a start without end is a syntax error. */
+/**
+ * An int64 range index → number. Indexes past ±2^53 behave like ±2^53 against any string length, so the clamping
+ * keeps every result while the services work with plain numbers.
+ */
+const SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const RangeIndexSchema = Int64Schema.transform((n) => Number(n > SAFE ? SAFE : n < -SAFE ? -SAFE : n));
+
+/**
+ * `[start end [BYTE | BIT]]` (BITCOUNT, BITPOS with an end): a start without end, or anything after the unit, is a
+ * syntax error (checked before the indexes are parsed).
+ */
 function readRange(rest: string[]): Parsed<BitRangeArgs | null> {
   if (rest.length === 0) return { ok: true, value: null };
-  if (rest.length === 1) return { ok: false, error: RespMessages.SYNTAX };
-  const start = IntegerSchema.safeParse(rest[0]);
+  if (rest.length === 1 || rest.length > 3) return { ok: false, error: RespMessages.SYNTAX };
+  const start = RangeIndexSchema.safeParse(rest[0]);
   if (!start.success) return { ok: false, error: firstIssue(start.error) };
-  const end = IntegerSchema.safeParse(rest[1]);
+  const end = RangeIndexSchema.safeParse(rest[1]);
   if (!end.success) return { ok: false, error: firstIssue(end.error) };
   const unit = RangeUnitEnum.safeParse((rest[2] ?? 'byte').toLowerCase());
   if (!unit.success) return { ok: false, error: RespMessages.SYNTAX };
@@ -74,16 +84,16 @@ export const BitCountDTO = z.tuple([KeySchema], z.string()).transform(([key, ...
   return range.ok ? { key, range: range.value } : reject(ctx, range.error);
 });
 
-/** BITPOS's bit, checked before the key is read. */
-export const BitPosBitDTO = z
-  .tuple([KeySchema, z.string()], z.string())
-  .transform(([key, raw], ctx) => (raw === '0' || raw === '1' ? { key, bit: Number(raw) } : reject(ctx, BitmapsMessages.BITPOS_BIT)));
+/** BITPOS's bit, checked before the key is read: an integer first, then 0 or 1. */
+export const BitPosBitDTO = z.tuple([KeySchema, Int64Schema], z.string()).transform(([key, bit], ctx) => {
+  return bit === 0n || bit === 1n ? { key, bit: Number(bit) } : reject(ctx, BitmapsMessages.BITPOS_BIT);
+});
 
 /** BITPOS key bit [start [end [BYTE | BIT]]] (the range is parsed after the key is read and found non-empty). */
 export const BitPosDTO = z.tuple([KeySchema, z.string()], z.string()).transform(([key, raw, ...rest], ctx) => {
   const bit = Number(raw);
   if (rest.length === 1) {
-    const start = IntegerSchema.safeParse(rest[0]);
+    const start = RangeIndexSchema.safeParse(rest[0]);
     if (!start.success) return reject(ctx, firstIssue(start.error));
     return { key, bit, range: { start: start.data, end: null, unit: 'byte' } as BitRangeArgs, explicitEnd: false };
   }
@@ -120,8 +130,9 @@ function BitfieldDTO(readOnly: boolean) {
       steps.length || offset !== null ? { key, steps, issue: { message, offset } } : reject(ctx, message);
     for (let i = 0; i < rest.length; i++) {
       const name = rest[i].toLowerCase();
-      if (name === 'overflow') {
-        const given = OverflowPolicyEnum.safeParse((rest[++i] ?? '').toLowerCase());
+      // OVERFLOW without its mode is a syntax error, like any subcommand missing arguments
+      if (name === 'overflow' && i + 1 < rest.length) {
+        const given = OverflowPolicyEnum.safeParse(rest[++i].toLowerCase());
         if (!given.success) return fail(BitmapsMessages.BITFIELD_OVERFLOW);
         policy = given.data;
         continue;

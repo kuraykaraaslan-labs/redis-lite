@@ -60,9 +60,9 @@ export default class BitmapsOpService {
       throw new AppError(formatMessage(BitmapsMessages.BITOP_TWO_SOURCES, { operation: operation.toUpperCase() }));
     }
     const len = Math.max(0, ...sources.map((s) => s.length));
-    const out: number[] = [];
+    const out = new Uint8Array(len);
     for (let i = 0; i < len; i++) {
-      out.push(BitmapsOpService.combine(operation, sources[0][i] ?? 0, sources.slice(1).map((s) => s[i] ?? 0)));
+      out[i] = BitmapsOpService.combine(operation, sources[0][i] ?? 0, sources.slice(1).map((s) => s[i] ?? 0));
     }
     if (out.length) BitmapStore.write(ctx, destination, out);
     else ctx.db.remove(destination);

@@ -196,6 +196,8 @@ export interface EvictionHost {
   evictKey(dbIndex: number, key: string): void;
   /** True when this server must not evict (a replica with replica-ignore-maxmemory: the master's DELs evict). */
   ignoresMaxmemory?(): boolean;
+  /** True while a busy script is suspended: background work must wait so the script stays atomic. */
+  scriptSuspended?(): boolean;
 }
 
 /** A key the evictor may pick. */

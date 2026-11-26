@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { formatMessage } from '@/libs/message-format';
 import { isInteger } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
-import { BlockTimeoutSchema, IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
+import { Int64Schema, IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
+import { BlockSecondsTimeoutSchema } from '@/libs/schemas/block-timeout';
 
 import { InsertPositionEnum, LPosOptionEnum, ListSideEnum } from './lists.enums';
 import type { ListSide } from './lists.enums';
@@ -26,20 +27,19 @@ const SideSchema = z.string().transform((raw, ctx) => {
 
 /** `numkeys key… LEFT|RIGHT [COUNT n]` (LMPOP, and BLMPOP after its timeout). */
 const MPopSchema = z.array(z.string()).transform((args, ctx) => {
-  const numKeys = IntegerSchema.safeParse(args[0]);
-  if (!numKeys.success) return reject(ctx, firstIssue(numKeys.error));
-  const n = numKeys.data;
-  if (n <= 0) return reject(ctx, ListsMessages.NUMKEYS_POSITIVE);
+  // any numkeys that is not an int64 > 0 gets the same text; a huge one fails on the missing keys (syntax error)
+  const numKeys = Int64Schema.safeParse(args[0]);
+  if (!numKeys.success || numKeys.data <= 0n) return reject(ctx, ListsMessages.NUMKEYS_POSITIVE);
+  const n = Number(numKeys.data);
   const keys = args.slice(1, 1 + n);
   const side = ListSideEnum.safeParse((args[1 + n] ?? '').toLowerCase());
   if (keys.length < n || !side.success) return reject(ctx, RespMessages.SYNTAX);
   let count = 1;
   if (args.length > 2 + n) {
     if (args[2 + n].toLowerCase() !== 'count' || args.length !== 4 + n) return reject(ctx, RespMessages.SYNTAX);
-    const parsed = IntegerSchema.safeParse(args[3 + n]);
-    if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
-    if (parsed.data <= 0) return reject(ctx, ListsMessages.COUNT_POSITIVE);
-    count = parsed.data;
+    const parsed = Int64Schema.safeParse(args[3 + n]);
+    if (!parsed.success || parsed.data <= 0n) return reject(ctx, ListsMessages.COUNT_POSITIVE);
+    count = Number(parsed.data);
   }
   return { keys, left: side.data === 'left', count };
 });
@@ -146,7 +146,7 @@ export const RPopLPushDTO = z
 /** BLPOP / BRPOP key [key …] timeout */
 function BPopDTO(left: boolean) {
   return z.array(z.string()).transform((args, ctx) => {
-    const timeout = BlockTimeoutSchema.safeParse(args[args.length - 1]);
+    const timeout = BlockSecondsTimeoutSchema.safeParse(args[args.length - 1]);
     if (!timeout.success) return reject(ctx, firstIssue(timeout.error));
     return { keys: args.slice(0, -1), timeoutMs: timeout.data, left };
   });
@@ -156,18 +156,18 @@ export const BLPopDTO = BPopDTO(true);
 export const BRPopDTO = BPopDTO(false);
 
 /** BLMPOP timeout numkeys key… LEFT|RIGHT [COUNT n]: the timeout is checked first. */
-export const BLMPopDTO = z.tuple([BlockTimeoutSchema], z.string()).transform(([timeoutMs, ...rest], ctx) => {
+export const BLMPopDTO = z.tuple([BlockSecondsTimeoutSchema], z.string()).transform(([timeoutMs, ...rest], ctx) => {
   const parsed = MPopSchema.safeParse(rest);
   return parsed.success ? { ...parsed.data, timeoutMs } : reject(ctx, firstIssue(parsed.error));
 });
 
 /** BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout: the sides are checked before the timeout. */
 export const BLMoveDTO = z
-  .tuple([KeySchema, KeySchema, SideSchema, SideSchema, BlockTimeoutSchema])
+  .tuple([KeySchema, KeySchema, SideSchema, SideSchema, BlockSecondsTimeoutSchema])
   .transform(([source, destination, from, to, timeoutMs]) => ({ source, destination, from, to, timeoutMs }));
 
 export const BRPopLPushDTO = z
-  .tuple([KeySchema, KeySchema, BlockTimeoutSchema])
+  .tuple([KeySchema, KeySchema, BlockSecondsTimeoutSchema])
   .transform(([source, destination, timeoutMs]) => ({
     source,
     destination,

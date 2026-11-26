@@ -12,8 +12,9 @@ export default class TransactionsWatchService {
   static watch(ctx: CommandContext, { keys }: WatchInput): Reply {
     if (ctx.client.multi) throw new AppError(TransactionsMessages.WATCH_IN_MULTI);
     for (const key of keys) {
-      ctx.db.peek(key); // expire first, so an already-expired key does not count as a change later (no LRU/LFU touch)
-      ctx.server.watchKey(ctx.client, ctx.client.dbIndex, key);
+      // expire first, so an already-expired key does not count as a change later (no LRU/LFU touch)
+      const alive = ctx.db.peek(key) !== undefined;
+      ctx.server.watchKey(ctx.client, ctx.client.dbIndex, key, alive);
     }
     return OK;
   }

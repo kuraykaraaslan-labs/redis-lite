@@ -1,4 +1,5 @@
-import { OK, RespDouble, RespMap, RespVerbatim, Status } from '@/libs/resp';
+import { formatMessage } from '@/libs/message-format';
+import { OK, RespDouble, RespMap, RespVerbatim } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import CommandService from '@/modules/command/command.service';
@@ -72,8 +73,11 @@ export default class ServerMemoryService {
     return new RespMap(MemoryService.memoryStats(ctx.server.memoryReport()).map(([k, v]) => [k, ServerMemoryService.statValue(v)]));
   }
 
-  static mallocStats(): Reply {
-    return new Status(ServerMessages.MALLOC_STATS);
+  /** MEMORY MALLOC-STATS: the allocator report, a verbatim text (the modelled jemalloc totals). */
+  static mallocStats(ctx: CommandContext): Reply {
+    const r = ctx.server.memoryReport();
+    const totals = `Allocated: ${r.allocatorAllocated}, active: ${r.allocatorActive}, resident: ${r.allocatorResident}, mapped: ${r.rss}`;
+    return new RespVerbatim(formatMessage(ServerMessages.MALLOC_STATS, { totals }));
   }
 
   static purge(): Reply {

@@ -57,7 +57,7 @@ export default class DatabaseEncodingService {
     switch (v.type) {
       case 'string':
         if (v.raw) return 'raw';
-        if (self.isRedisInteger(v.value)) return 'int';
+        if (!v.noInt && self.isRedisInteger(v.value)) return 'int';
         return v.value.length <= 44 ? 'embstr' : 'raw';
       case 'hash': {
         const max = config.num('hash-max-listpack-entries');

@@ -8,8 +8,8 @@ describe('addInt64', () => {
     expect(addInt64(undefined, 1n)).toBe(1);
     expect(addInt64('41', 1n)).toBe(42);
     expect(addInt64('-5', -10n)).toBe(-15);
-    expect(addInt64('-0', 0n)).toBe(0);
-    expect(Object.is(addInt64('-0', 0n), -0)).toBe(false);
+    // "-0" is not an integer to Redis (string2ll)
+    expect(addInt64('-0', 0n)).toBe('not-integer');
   });
 
   it('falls back to bigints past the safe-integer range and keeps the int64 bounds', () => {

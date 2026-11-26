@@ -200,6 +200,48 @@ describe('lists: blocking', () => {
     expect(await t.call('EXISTS', 'l:b-chain')).toBe(0);
   });
 
+  it('a waiter whose key changes type stays blocked; a wrong-type BLMOVE destination answers WRONGTYPE', async () => {
+    // Redis 7.0 (black box): SET on the key does not wake the waiter; once it is a list again the waiter is served
+    const c = t.client();
+    const p = c.call('BLPOP', 'l:b-type', '0');
+    await waitForBlocked(t);
+    await t.call('SET', 'l:b-type', 'str');
+    await t.call('DEL', 'l:b-type');
+    await t.call('RPUSH', 'l:b-type', 'v');
+    expect(await p).toEqual(['l:b-type', 'v']);
+    // another key of the waiter still serves it
+    const p2 = c.call('BLMPOP', '0', '2', 'l:b-type2', 'l:b-type3', 'LEFT');
+    await waitForBlocked(t);
+    await t.call('SET', 'l:b-type2', 'str');
+    await t.call('RPUSH', 'l:b-type3', 'w');
+    expect(await p2).toEqual(['l:b-type3', ['w']]);
+    // BLMOVE: the source turning into a string is ignored; a string destination unblocks with WRONGTYPE
+    const p3 = c.call('BLMOVE', 'l:b-type-src', 'l:b-type-dst', 'LEFT', 'LEFT', '0').catch((e: Error) => e.message);
+    await waitForBlocked(t);
+    await t.call('SET', 'l:b-type-src', 'str');
+    await t.call('DEL', 'l:b-type-src');
+    await t.call('SET', 'l:b-type-dst', 'str');
+    await t.call('RPUSH', 'l:b-type-src', 'x');
+    expect(await p3).toContain(WRONGTYPE);
+    expect(await t.call('LRANGE', 'l:b-type-src', 0, -1)).toEqual(['x']);
+  });
+
+  it('timeouts are read like Redis: long double seconds, sub-millisecond negatives wait forever', async () => {
+    await expect(t.call('BLPOP', 'l:b-err', 'inf')).rejects.toThrow('ERR timeout is negative');
+    await expect(t.call('BLPOP', 'l:b-err', '1e100')).rejects.toThrow('ERR timeout is negative');
+    await expect(t.call('BLPOP', 'l:b-err', '9223372036854776')).rejects.toThrow('ERR timeout is negative');
+    await expect(t.call('BLPOP', 'l:b-err', '-0.002')).rejects.toThrow('ERR timeout is negative');
+    await expect(t.call('BLPOP', 'l:b-err', 'nan')).rejects.toThrow('ERR timeout is not a float or out of range');
+    await expect(t.call('BLPOP', 'l:b-err', '1e5000')).rejects.toThrow('ERR timeout is not a float or out of range');
+    expect(await t.call('BLPOP', 'l:b-err', '1e-4950')).toBeNull(); // a positive fraction still waits 1 ms
+    expect(await t.call('BLPOP', 'l:b-err', '0x1p-5')).toBeNull();
+    const c = t.client();
+    const p = c.call('BLPOP', 'l:b-neg0', '-0.0009'); // truncates to 0: forever
+    await waitForBlocked(t);
+    await t.call('RPUSH', 'l:b-neg0', 'v');
+    expect(await p).toEqual(['l:b-neg0', 'v']);
+  });
+
   it('inside MULTI blocking commands do not block', async () => {
     const r = await t.raw();
     expect(await r.send('MULTI')).toBe('+OK\r\n');

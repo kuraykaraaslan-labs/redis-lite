@@ -26,7 +26,8 @@ describe('ExpireCmdDTO', () => {
 
   it('an unknown option is named as given, before conflicts and overflow', () => {
     expect(parse(ExpireCmdDTO, ['k', '10', 'nx', 'Foo', 'xx'])).toBe('ERR Unsupported option Foo');
-    expect(parse(ExpireCmdDTO, ['k', 'abc', 'Foo'])).toBe('ERR value is not an integer or out of range');
+    expect(parse(ExpireCmdDTO, ['k', 'abc', 'Foo'])).toBe('ERR Unsupported option Foo');
+    expect(parse(ExpireCmdDTO, ['k', 'abc', 'NX', 'XX'])).toBe('ERR NX and XX, GT or LT options at the same time are not compatible');
     expect(parse(ExpireCmdDTO, ['k', '9223372036854775807'])).toBe("ERR invalid expire time in 'expire' command");
   });
 });
@@ -66,9 +67,11 @@ describe('SortRoDTO / SwapDbDTO / RestoreDTO', () => {
     expect(parse(SwapDbDTO, ['0', 'y'])).toBe('ERR invalid second DB index');
   });
 
-  it('RESTORE checks the TTL before the options', () => {
-    expect(parse(RestoreDTO, ['k', '-1', 'p', 'FOO'])).toBe('ERR Invalid TTL value, must be >= 0');
+  it('RESTORE reads the options before the TTL (the service reports the TTL after BUSYKEY)', () => {
+    expect(parse(RestoreDTO, ['k', '-1', 'p', 'FOO'])).toBe('ERR syntax error');
     expect(parse(RestoreDTO, ['k', '0', 'p', 'FREQ', '256'])).toBe('ERR Invalid FREQ value, must be >= 0 and <= 255');
-    expect(parse(RestoreDTO, ['k', '0', 'p', 'IDLETIME'])).toBe('ERR value is not an integer or out of range');
+    expect(parse(RestoreDTO, ['k', '0', 'p', 'IDLETIME'])).toBe('ERR syntax error');
+    expect(parse(RestoreDTO, ['k', '0', 'p', 'IDLETIME', '1', 'FREQ', '1'])).toBe('ERR syntax error');
+    expect(parse(RestoreDTO, ['k', '-1', 'p'])).toMatchObject({ ttl: { ok: false, error: 'ERR Invalid TTL value, must be >= 0' } });
   });
 });

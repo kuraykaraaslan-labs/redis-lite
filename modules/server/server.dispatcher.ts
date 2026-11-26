@@ -8,7 +8,8 @@ import { unknownCommand, unknownSubcommand, wrongArity } from '@/libs/resp/messa
 import AclService from '@/modules/acl/acl.service';
 import { COMMANDS } from '@/modules/command/command.registry';
 import CommandService, { Block, NO_REPLY } from '@/modules/command/command.service';
-import type { CommandContext, CommandSpec, HandlerResult } from '@/modules/command/command.types';
+import type { CommandContext, CommandMeta, CommandSpec, HandlerResult } from '@/modules/command/command.types';
+import type { Database } from '@/modules/database/database.service';
 import MemoryMessages from '@/modules/memory/memory.messages';
 import NotificationsService from '@/modules/notifications/notifications.service';
 import ReplicationMessages from '@/modules/replication/replication.messages';
@@ -16,8 +17,9 @@ import TrackingService from '@/modules/tracking/tracking.service';
 
 import type { Client } from './server.client';
 import type { RedisLiteServer } from './server.core';
+import { LatencyHistogram } from './server.latency.structure';
 import ServerMessages from './server.messages';
-import type { ExecuteMode, Precheck } from './server.types';
+import type { ExecuteMode, PauseMode, Precheck } from './server.types';
 
 // ============================================================================
 // No-op Detection
@@ -37,6 +39,9 @@ const EMPTY_IS_NOOP = new Set([
 ]);
 
 /** Commands a client in MULTI runs right away instead of queueing. */
+/** Write commands whose keys Redis looks up as reads (counted in keyspace_hits / keyspace_misses). */
+const READ_LOOKUP_WRITES = new Set(['getdel', 'getex', 'getset', 'pfcount', 'pfmerge']);
+
 const MULTI_IMMEDIATE = new Set(['exec', 'discard', 'multi', 'watch', 'quit', 'reset']);
 
 /** How a command sent by a client runs (not from a script, may block). Shared: nothing writes to it. */
@@ -109,7 +114,8 @@ export class ServerDispatcher {
       client.multi = null;
       client.multiError = false;
       client.watched.clear();
-      const reason = message === ServerMessages.NOAUTH ? `${message}  ` : message;
+      // Redis quotes the error without its generic `ERR ` prefix (NOAUTH, OOM… keep their code)
+      const reason = message === ServerMessages.NOAUTH ? `${message}  ` : message.startsWith('ERR ') ? message.slice(4) : message;
       this.server.observer.replyError(client, formatMessage(ServerMessages.EXECABORT_BECAUSE, { reason }));
       return;
     }
@@ -124,6 +130,12 @@ export class ServerDispatcher {
     const isExec = name === 'exec';
     if (server.authRequired(client) && !noauth) {
       this.rejectCommand(client, ServerMessages.NOAUTH, fullname, isExec);
+      return true;
+    }
+    // While a busy script is suspended only allow_busy commands run (SCRIPT KILL, FUNCTION KILL, SHUTDOWN NOSAVE…).
+    const busy = server.lua.busyRefusal(argv);
+    if (busy) {
+      this.rejectCommand(client, busy.message, fullname, isExec);
       return true;
     }
     if (client.multi && meta?.flagSet.has('no_multi')) {
@@ -161,7 +173,7 @@ export class ServerDispatcher {
     }
     if (this.replicationRefusal(client, checked, isExec, fullname)) return true;
     if (client.resp === 2 && client.subscriptionCount > 0 && !SUBSCRIBER_ALLOWED.has(name)) {
-      this.rejectCommand(client, formatMessage(ServerMessages.SUBSCRIBE_CONTEXT, { command: name }), fullname);
+      this.rejectCommand(client, formatMessage(ServerMessages.SUBSCRIBE_CONTEXT, { command: fullname }), fullname);
       return true;
     }
     if (server.replication.servesStaleOnly && !meta?.flagSet.has('stale')) {
@@ -187,9 +199,14 @@ export class ServerDispatcher {
     return false;
   }
 
-  /** FAILOVER pauses writes (CLIENT PAUSE WRITE): commands that write or may propagate wait; replication links never do. */
-  private pausable(client: Client, name: string, checked: Precheck): boolean {
-    if (client.isMaster || client.replica || (client.multi && name !== 'exec')) return false;
+  /**
+   * FAILOVER and CLIENT PAUSE WRITE hold commands that write or may propagate, CLIENT PAUSE ALL every command; replication
+   * links never wait.
+   */
+  private pausable(client: Client, name: string, checked: Precheck, mode: PauseMode): boolean {
+    if (client.isMaster || client.replica) return false;
+    if (mode === 'all') return true;
+    if (client.multi && name !== 'exec') return false;
     const flags = checked.meta?.flagSet;
     if (flags?.has('write') || flags?.has('may_replicate')) return true;
     return name === 'exec' && (this.queuedHasFlag(client, 'write') || this.queuedHasFlag(client, 'may_replicate'));
@@ -243,6 +260,29 @@ export class ServerDispatcher {
     return { error: null, meta, statName: fullname };
   }
 
+  /**
+   * INFO keyspace_hits / keyspace_misses: Redis counts the keys a command looks up for reading: read-only key specs, and
+   * every key of the write commands that read through the same lookup (GETDEL, GETEX, GETSET, SET … GET, PFCOUNT,
+   * PFMERGE). A key of another type is a hit. Counted before the command runs, without expiring anything.
+   */
+  private countKeyspaceLookups(db: Database, meta: CommandMeta, argv: string[]): void {
+    const readAll = READ_LOOKUP_WRITES.has(meta.fullname);
+    if (!readAll && !meta.keySpecs.some((s) => s.flags.includes('RO') || s.flags.includes('variable_flags'))) return;
+    if (meta.fullname === 'memory|usage') return;
+    const refs = CommandService.keysFromSpecs(meta, argv);
+    if (!refs) return;
+    const stats = this.server.stats;
+    const now = Date.now();
+    for (const ref of refs) {
+      // SET counts its key only with GET (its flags then include `access`)
+      if (!readAll && !ref.flags.includes('RO') && !(meta.name === 'set' && ref.flags.includes('access'))) continue;
+      const key = argv[ref.index];
+      const at = db.getExpireRaw(key);
+      if (db.raw(key) !== undefined && (at === undefined || at > now)) stats.keyspaceHits++;
+      else stats.keyspaceMisses++;
+    }
+  }
+
   /** The run itself (after the checks): handler, side effects, stats. */
   private run(client: Client, argv: string[], name: string, spec: CommandSpec, mode: ExecuteMode, checked: Precheck): HandlerResult {
     const server = this.server;
@@ -265,6 +305,7 @@ export class ServerDispatcher {
     const db = server.databases[dbIndex];
     const ctx: CommandContext = { server, client, db, inScript: mode.inScript, noBlock: mode.noBlock, noop: false, name: argv[0] };
     db.touchOnRead = !client.noTouch || name === 'touch';
+    if (meta?.keySpecs.length) this.countKeyspaceLookups(db, meta, argv);
     const notify = server.keyspace.notifyFlags();
     // read commands only need their keys for keyspace notifications (keymiss)
     let keys: string[] = [];
@@ -305,6 +346,7 @@ export class ServerDispatcher {
     const stat = server.observer.commandStat(fullname);
     stat.calls++;
     stat.usec += usec;
+    if (server.config.get('latency-tracking') === 'yes') (stat.histogram ??= new LatencyHistogram()).record(usec);
     if (result instanceof RespError) {
       stat.failed++;
       if (!mode.inScript) server.countError(result.message);
@@ -333,11 +375,13 @@ export class ServerDispatcher {
     const checked = this.precheckSpec(argv, name, spec);
     if (!spec || checked.error !== null) {
       if (!spec) Logger.warn('[ServerDispatcher.runTopLevel] Unknown command', { command: name });
-      this.rejectCommand(client, checked.error ?? unknownCommand(argv[0], argv.slice(1)), checked.statName);
+      // a malformed EXEC (wrong arity) aborts the transaction like any other refused EXEC
+      this.rejectCommand(client, checked.error ?? unknownCommand(argv[0], argv.slice(1)), checked.statName, name === 'exec' && spec !== undefined);
       return;
     }
     if (this.refused(client, argv, name, checked, Boolean(spec.flags?.noauth))) return;
-    if (server.connections.writesPaused && this.pausable(client, name, checked)) {
+    const pause = server.connections.pauseMode;
+    if (pause !== null && this.pausable(client, name, checked, pause)) {
       server.connections.parkForPause(client, argv);
       return;
     }

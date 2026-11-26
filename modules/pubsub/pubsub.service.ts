@@ -1,11 +1,12 @@
 import { AppError } from '@/libs/app-error';
 import { matchGlob } from '@/libs/glob';
 import { formatMessage } from '@/libs/message-format';
-import { RespMap, RespPush } from '@/libs/resp';
+import { RespPush, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import { NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
+import TransactionsService from '@/modules/transactions/transactions.service';
 
 import type { ChannelsInput, PubSubInput, PublishInput } from './pubsub.dto';
 import PubSubMessages from './pubsub.messages';
@@ -24,16 +25,26 @@ export default class PubSubService {
     return ctx.client.channels.size + ctx.client.patterns.size;
   }
 
-  /** Subscribing is refused inside MULTI and where the client cannot block (scripts). */
-  private static checkCanSubscribe(ctx: CommandContext, command: string): void {
-    if (ctx.client.multi || ctx.noBlock) throw new AppError(formatMessage(PubSubMessages.DENY_BLOCKING, { command }));
+  /**
+   * Subscribing is refused where the client cannot block (scripts). Redis 7.0 lets SUBSCRIBE / PSUBSCRIBE run inside
+   * EXEC (`inExec`), but not SSUBSCRIBE.
+   */
+  private static checkCanSubscribe(ctx: CommandContext, command: string, allowedInExec: boolean): void {
+    if (ctx.client.multi || (ctx.noBlock && !(allowedInExec && ctx.client.inExec))) {
+      throw new AppError(formatMessage(PubSubMessages.DENY_BLOCKING, { command }));
+    }
+  }
+
+  /** One (un)subscribe confirmation: written to the client, or added to EXEC's reply when run inside a transaction. */
+  private static send(ctx: CommandContext, push: RespPush): void {
+    if (!TransactionsService.inlineReply(ctx.client, push)) ctx.client.write(push);
   }
 
   private static subscribeTo(ctx: CommandContext, { channels }: ChannelsInput, pattern: boolean): typeof NO_REPLY {
-    PubSubService.checkCanSubscribe(ctx, pattern ? 'PSUBSCRIBE' : 'SUBSCRIBE');
+    PubSubService.checkCanSubscribe(ctx, pattern ? 'PSUBSCRIBE' : 'SUBSCRIBE', true);
     for (const channel of channels) {
       ctx.server.subscribe(ctx.client, channel, pattern);
-      ctx.client.write(new RespPush([pattern ? 'psubscribe' : 'subscribe', channel, PubSubService.classicCount(ctx)]));
+      PubSubService.send(ctx, new RespPush([pattern ? 'psubscribe' : 'subscribe', channel, PubSubService.classicCount(ctx)]));
     }
     return NO_REPLY;
   }
@@ -44,12 +55,12 @@ export default class PubSubService {
     const targets = channels.length ? channels : [...current];
     const kind = pattern ? 'punsubscribe' : 'unsubscribe';
     if (!targets.length) {
-      ctx.client.write(new RespPush([kind, null, PubSubService.classicCount(ctx)]));
+      PubSubService.send(ctx, new RespPush([kind, null, PubSubService.classicCount(ctx)]));
       return NO_REPLY;
     }
     for (const channel of targets) {
       ctx.server.unsubscribe(ctx.client, channel, pattern);
-      ctx.client.write(new RespPush([kind, channel, PubSubService.classicCount(ctx)]));
+      PubSubService.send(ctx, new RespPush([kind, channel, PubSubService.classicCount(ctx)]));
     }
     return NO_REPLY;
   }
@@ -76,10 +87,10 @@ export default class PubSubService {
 
   /** SSUBSCRIBE: replies count shard channels only. */
   static sSubscribe(ctx: CommandContext, { channels }: ChannelsInput): typeof NO_REPLY {
-    PubSubService.checkCanSubscribe(ctx, 'SSUBSCRIBE');
+    PubSubService.checkCanSubscribe(ctx, 'SSUBSCRIBE', false);
     for (const channel of channels) {
       ctx.server.ssubscribe(ctx.client, channel);
-      ctx.client.write(new RespPush(['ssubscribe', channel, ctx.client.shardChannels.size]));
+      PubSubService.send(ctx, new RespPush(['ssubscribe', channel, ctx.client.shardChannels.size]));
     }
     return NO_REPLY;
   }
@@ -87,10 +98,10 @@ export default class PubSubService {
   /** SUNSUBSCRIBE: no channel given = every current shard subscription. */
   static sUnsubscribe(ctx: CommandContext, { channels }: ChannelsInput): typeof NO_REPLY {
     const targets = channels.length ? channels : [...ctx.client.shardChannels];
-    if (!targets.length) ctx.client.write(new RespPush(['sunsubscribe', null, 0]));
+    if (!targets.length) PubSubService.send(ctx, new RespPush(['sunsubscribe', null, 0]));
     for (const channel of targets) {
       ctx.server.sunsubscribe(ctx.client, channel);
-      ctx.client.write(new RespPush(['sunsubscribe', channel, ctx.client.shardChannels.size]));
+      PubSubService.send(ctx, new RespPush(['sunsubscribe', channel, ctx.client.shardChannels.size]));
     }
     return NO_REPLY;
   }
@@ -106,11 +117,12 @@ export default class PubSubService {
 
   /** PUBSUB CHANNELS | NUMSUB | NUMPAT | SHARDCHANNELS | SHARDNUMSUB | HELP. */
   static introspect(ctx: CommandContext, { subcommand, pattern, channels }: PubSubInput): Reply {
-    if (subcommand === 'help') return [...PubSubMessages.HELP];
+    if (subcommand === 'help') return PubSubMessages.HELP.map((line) => new Status(line));
     if (subcommand === 'channels') return [...ctx.server.channels.keys()].filter((c) => matchGlob(pattern, c));
-    if (subcommand === 'numsub') return new RespMap(channels.map((c) => [c, ctx.server.channels.get(c)?.size ?? 0]));
+    // NUMSUB / SHARDNUMSUB are flat channel, count arrays in RESP3 too (Redis does not send them as maps)
+    if (subcommand === 'numsub') return channels.flatMap((c) => [c, ctx.server.channels.get(c)?.size ?? 0]);
     if (subcommand === 'numpat') return ctx.server.patterns.size;
     if (subcommand === 'shardchannels') return [...ctx.server.shardChannels.keys()].filter((c) => matchGlob(pattern, c));
-    return new RespMap(channels.map((c) => [c, ctx.server.shardChannels.get(c)?.size ?? 0]));
+    return channels.flatMap((c) => [c, ctx.server.shardChannels.get(c)?.size ?? 0]);
   }
 }

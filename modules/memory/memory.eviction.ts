@@ -107,6 +107,11 @@ export class Evictor {
   private continueInBackground(): void {
     this.background = setImmediate(() => {
       this.background = null;
+      // A suspended busy script must look atomic: wait until it has finished.
+      if (this.host.scriptSuspended?.()) {
+        this.continueInBackground();
+        return;
+      }
       this.perform();
     });
   }

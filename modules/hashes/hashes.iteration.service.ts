@@ -28,15 +28,18 @@ export default class HashesIterationService {
   }
 
   /**
-   * HRANDFIELD on the hash read before the arguments were parsed (WRONGTYPE beats a bad count). A positive count
+   * HRANDFIELD on the hash read after the arguments were parsed (a bad count beats WRONGTYPE). A positive count
    * returns distinct fields, a negative one may repeat them.
    */
   static hRandField(h: HashValue | undefined, { count, withValues }: HRandFieldInput): Reply {
     const fields = [...(h?.keys() ?? [])];
     if (count === null) return fields.length ? fields[Math.floor(Math.random() * fields.length)] : null;
+    // a count covering the whole hash returns every field in stored order, as Redis does
     const picked =
-      count >= 0
-        ? fields.sort(() => Math.random() - 0.5).slice(0, count)
+      count >= fields.length
+        ? fields
+        : count >= 0
+          ? fields.sort(() => Math.random() - 0.5).slice(0, count)
         : Array.from({ length: fields.length ? -count : 0 }, () => fields[Math.floor(Math.random() * fields.length)]);
     return withValues ? new RespPairs(picked.map((f) => [f, h?.get(f) ?? ''])) : picked;
   }

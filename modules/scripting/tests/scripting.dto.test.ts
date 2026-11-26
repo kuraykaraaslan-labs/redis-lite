@@ -35,7 +35,9 @@ describe('ScriptDTO', () => {
   it('parses subcommands case-insensitively', () => {
     expect(parse(ScriptDTO, ['LoAd', 'return 1'])).toEqual({ subcommand: 'load', script: 'return 1' });
     expect(parse(ScriptDTO, ['EXISTS', 'a', 'b'])).toEqual({ subcommand: 'exists', shas: ['a', 'b'] });
-    expect(parse(ScriptDTO, ['flush', 'async'])).toEqual({ subcommand: 'flush' });
+    expect(parse(ScriptDTO, ['flush', 'async'])).toEqual({ subcommand: 'flush', mode: 'async' });
+    expect(parse(ScriptDTO, ['flush'])).toEqual({ subcommand: 'flush', mode: null });
+    expect(parse(ScriptDTO, ['help'])).toEqual({ subcommand: 'help' });
   });
 
   it('rejects a wrong LOAD arity and unknown subcommands', () => {
@@ -43,19 +45,36 @@ describe('ScriptDTO', () => {
     expect(parse(ScriptDTO, ['load', 'a', 'b'])).toBe("ERR wrong number of arguments for 'script|load' command");
     expect(parse(ScriptDTO, ['Nope'])).toBe("ERR unknown subcommand 'Nope'. Try SCRIPT HELP.");
   });
+
+  it('FLUSH takes SYNC or ASYNC only', () => {
+    expect(parse(ScriptDTO, ['flush', 'foo'])).toBe('ERR SCRIPT FLUSH only support SYNC|ASYNC option');
+    expect(parse(ScriptDTO, ['flush', 'sync', 'async'])).toBe('ERR SCRIPT FLUSH only support SYNC|ASYNC option');
+  });
 });
 
 describe('FunctionDTO', () => {
   it('LOAD with and without REPLACE', () => {
     expect(parse(FunctionDTO, ['load', 'code'])).toEqual({ subcommand: 'load', code: 'code', replace: false });
     expect(parse(FunctionDTO, ['LOAD', 'REPLACE', 'code'])).toEqual({ subcommand: 'load', code: 'code', replace: true });
-    expect(parse(FunctionDTO, ['load', 'replace'])).toBe("ERR wrong number of arguments for 'function|load' command");
-    expect(parse(FunctionDTO, ['load', 'code', 'extra'])).toBe("ERR wrong number of arguments for 'function|load' command");
+    // the code is the last argument, every argument before it an option
+    expect(parse(FunctionDTO, ['load', 'replace'])).toEqual({ subcommand: 'load', code: 'replace', replace: false });
+    expect(parse(FunctionDTO, ['load', 'code', 'extra'])).toBe('ERR Unknown option given: code');
+    expect(parse(FunctionDTO, ['load', 'FOO', 'code'])).toBe('ERR Unknown option given: FOO');
   });
 
   it('LIST options are read left to right', () => {
     expect(parse(FunctionDTO, ['list', 'WITHCODE', 'libraryname', 'a*'])).toEqual({ subcommand: 'list', pattern: 'a*', withCode: true });
-    expect(parse(FunctionDTO, ['list', 'libraryname'])).toBe('ERR syntax error');
+    expect(parse(FunctionDTO, ['list', 'libraryname'])).toBe('ERR library name argument was not given');
+    expect(parse(FunctionDTO, ['list', 'WITHCODE', 'withcode'])).toBe('ERR Unknown argument withcode');
+    expect(parse(FunctionDTO, ['list', 'FOO'])).toBe('ERR Unknown argument FOO');
+  });
+
+  it('FLUSH takes SYNC or ASYNC only', () => {
+    expect(parse(FunctionDTO, ['flush', 'SYNC'])).toEqual({ subcommand: 'flush', mode: 'sync' });
+    expect(parse(FunctionDTO, ['flush', 'foo'])).toBe('ERR FUNCTION FLUSH only supports SYNC|ASYNC option');
+    expect(parse(FunctionDTO, ['FLUSH', 'sync', 'async'])).toBe(
+      "ERR unknown subcommand or wrong number of arguments for 'FLUSH'. Try FUNCTION HELP.",
+    );
   });
 
   it('RESTORE checks the policy, not the payload', () => {

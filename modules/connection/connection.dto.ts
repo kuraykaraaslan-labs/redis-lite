@@ -117,14 +117,15 @@ export const ClientOnOffDTO = z.tuple([SubcommandSchema, z.string()]).transform(
   return { on: v === 'on' };
 });
 
-/** CLIENT PAUSE timeout [WRITE|ALL]: pausing is accepted and has no effect (one client is served at a time anyway). */
+/** CLIENT PAUSE timeout [WRITE|ALL] (ALL by default): the mode is checked before the timeout. */
 export const ClientPauseDTO = z.array(z.string()).transform((args, ctx) => {
   if (args.length > 3) return reject(ctx, clientSyntax(args[0]));
+  const mode = PauseModeEnum.safeParse(args.length === 3 ? args[2].toLowerCase() : 'all');
+  if (!mode.success) return reject(ctx, ConnectionMessages.PAUSE_MODE);
   const timeout = PauseTimeoutSchema.safeParse(args[1]);
   if (!timeout.success) return reject(ctx, firstIssue(timeout.error));
   if (timeout.data < 0) return reject(ctx, ConnectionMessages.TIMEOUT_NEGATIVE);
-  if (args.length === 3 && !PauseModeEnum.safeParse(args[2].toLowerCase()).success) return reject(ctx, RespMessages.SYNTAX);
-  return { timeout: timeout.data };
+  return { timeout: timeout.data, mode: mode.data };
 });
 
 /** CLIENT TRACKING: the options after the subcommand, in the tracking module's grammar. */

@@ -80,7 +80,7 @@ describe('XRANGE / XREVRANGE', () => {
     await setup();
     expect(ids(await t.call('XRANGE', k, '-', '+', 'COUNT', 2))).toEqual(['1-0', '1-1']);
     expect(ids(await t.call('XREVRANGE', k, '+', '-', 'COUNT', 2))).toEqual(['3-0', '2-5']);
-    expect(await t.call('XRANGE', k, '-', '+', 'COUNT', 0)).toEqual([]);
+    expect(await t.call('XRANGE', k, '-', '+', 'COUNT', 0)).toBeNull(); // Redis answers a null array for COUNT 0
     expect(ids(await t.call('XRANGE', k, '-', '+', 'COUNT', 100))).toHaveLength(5);
     expect.soft(await err(t.call('XRANGE', k, '-', '+', 'COUNT'))).toBe('ERR syntax error');
     expect.soft(await err(t.call('XRANGE', k, '-', '+', 'COUNT', 'x'))).toBe(NOT_INT);

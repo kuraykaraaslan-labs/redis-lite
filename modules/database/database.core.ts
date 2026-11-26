@@ -20,6 +20,8 @@ const LFU_INIT_VAL = 5;
 export class Database {
   private data = new Map<string, RedisValue>();
   private expires = new Map<string, number>();
+  /** The exact int64 of expiry times past 2^53, which `expires` (float ms) can only approximate (PEXPIRETIME). */
+  private farExpires = new Map<string, bigint>();
   private access = new Map<string, Access>();
   /** Random sampling of all keys / keys with a TTL (eviction). */
   private allKeys = new KeySampler();
@@ -134,6 +136,7 @@ export class Database {
     this.allKeys.add(key);
     if (!keepTtl) {
       this.expires.delete(key);
+      this.farExpires.delete(key);
       this.volatileKeys.delete(key);
     }
     if (!existed || !this.config.lfu) this.access.set(key, this.newAccess());
@@ -142,6 +145,7 @@ export class Database {
 
   remove(key: string): boolean {
     this.expires.delete(key);
+    this.farExpires.delete(key);
     this.volatileKeys.delete(key);
     this.allKeys.delete(key);
     this.access.delete(key);
@@ -167,8 +171,17 @@ export class Database {
     return this.peek(key) ? this.expires.get(key) : undefined;
   }
 
-  setExpire(key: string, at: number): void {
+  /** Exact absolute expiry (ms) as an int64, or undefined (see `farExpires`). */
+  getExpireExact(key: string): bigint | undefined {
+    const at = this.getExpire(key);
+    return at === undefined ? undefined : (this.farExpires.get(key) ?? BigInt(at));
+  }
+
+  /** Sets the absolute expiry `at` (ms); `exact` keeps the precise int64 when `at` is past 2^53. */
+  setExpire(key: string, at: number, exact?: bigint): void {
     this.expires.set(key, at);
+    if (exact !== undefined && !Number.isSafeInteger(at)) this.farExpires.set(key, exact);
+    else this.farExpires.delete(key);
     this.volatileKeys.add(key);
     this.onChange(key);
   }
@@ -176,6 +189,7 @@ export class Database {
   persist(key: string): boolean {
     this.volatileKeys.delete(key);
     const had = this.expires.delete(key);
+    this.farExpires.delete(key);
     if (had) this.onChange(key);
     return had;
   }
@@ -193,6 +207,7 @@ export class Database {
   swapWith(other: Database): void {
     [this.data, other.data] = [other.data, this.data];
     [this.expires, other.expires] = [other.expires, this.expires];
+    [this.farExpires, other.farExpires] = [other.farExpires, this.farExpires];
     [this.access, other.access] = [other.access, this.access];
     [this.allKeys, other.allKeys] = [other.allKeys, this.allKeys];
     [this.volatileKeys, other.volatileKeys] = [other.volatileKeys, this.volatileKeys];
@@ -203,6 +218,7 @@ export class Database {
   flush(): void {
     this.data.clear();
     this.expires.clear();
+    this.farExpires.clear();
     this.access.clear();
     this.allKeys.clear();
     this.volatileKeys.clear();

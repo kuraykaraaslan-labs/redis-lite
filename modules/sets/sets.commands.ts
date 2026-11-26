@@ -16,6 +16,7 @@ import {
   SPopDTO,
   SRandMemberDTO,
   SRemDTO,
+  SScanCursorDTO,
   SScanDTO,
   SUnionDTO,
   SUnionStoreDTO,
@@ -24,8 +25,8 @@ import SetsService from './sets.service';
 
 /**
  * Routing of the set commands: name, arity, flags and keys, then DTO → service. No logic lives here.
- * SPOP and SRANDMEMBER read their key BEFORE parsing their arguments, because Redis does (a WRONGTYPE beats a bad
- * count).
+ * SPOP and SRANDMEMBER parse their count before reading the key, as Redis does (a bad count beats WRONGTYPE). SSCAN
+ * checks the cursor, then the key, then the options (none are parsed on a missing key).
  */
 
 const WRITE = { write: true } as const;
@@ -49,20 +50,14 @@ export const setCommands: CommandSpec[] = [
     arity: -2,
     flags: WRITE,
     keys: keysAt(0),
-    // read first: WRONGTYPE beats a bad count
-    handler: (ctx, args) => {
-      const s = SetsService.read(ctx, args[0]);
-      return validated(SPopDTO, args, (input) => SetsService.sPop(ctx, input, s));
-    },
+    // parse first: a bad count beats WRONGTYPE, as in Redis
+    handler: (ctx, args) => validated(SPopDTO, args, (input) => SetsService.sPop(ctx, input, SetsService.read(ctx, input.key))),
   },
   {
     name: 'srandmember',
     arity: -2,
-    // read first: WRONGTYPE beats a bad count
-    handler: (ctx, args) => {
-      const s = SetsService.read(ctx, args[0]);
-      return validated(SRandMemberDTO, args, (input) => SetsService.sRandMember(input, s));
-    },
+    // parse first: a bad count beats WRONGTYPE, as in Redis
+    handler: (ctx, args) => validated(SRandMemberDTO, args, (input) => SetsService.sRandMember(input, SetsService.read(ctx, input.key))),
   },
   { name: 'smove', arity: 4, flags: WRITE, keys: keysAt(0, 1), handler: withDTO(SMoveDTO, SetsService.sMove) },
 
@@ -80,5 +75,13 @@ export const setCommands: CommandSpec[] = [
   // ============================================================================
   // Scan
   // ============================================================================
-  { name: 'sscan', arity: -3, handler: withDTO(SScanDTO, SetsService.sScan) },
+  {
+    name: 'sscan',
+    arity: -3,
+    // cursor first, then the key (missing → empty scan, WRONGTYPE), then the options
+    handler: (ctx, args) =>
+      validated(SScanCursorDTO, args, ({ key }) =>
+        SetsService.read(ctx, key) ? validated(SScanDTO, args, (input) => SetsService.sScan(ctx, input)) : ['0', []],
+      ),
+  },
 ];

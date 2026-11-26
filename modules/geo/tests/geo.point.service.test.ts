@@ -81,6 +81,12 @@ describe('GEOADD', () => {
 });
 
 describe('GEOPOS / GEODIST / GEOHASH', () => {
+  it('GEOPOS / GEOHASH at the top of the ranges (an unclamped 2^26 offset, as in Redis)', async () => {
+    await t.call('GEOADD', 'gp:edge', 180, 85.05112878, 'ne');
+    expect(await t.call('GEOPOS', 'gp:edge', 'ne')).toEqual([['180', '85.0511287799999991']]);
+    expect(await t.call('GEOHASH', 'gp:edge', 'ne')).toEqual(['bp05b5048p0']);
+  });
+
   it('GEOPOS docs example', async () => {
     await sicily('gp:doc');
     expect(await t.call('GEOPOS', 'gp:doc', 'Palermo', 'Catania', 'NonExisting')).toEqual([PALERMO_POS, CATANIA_POS, null]);

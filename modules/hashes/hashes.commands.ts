@@ -23,6 +23,7 @@ import {
   HPExpireTimeDTO,
   HPTtlDTO,
   HRandFieldDTO,
+  HScanCursorDTO,
   HScanDTO,
   HSetCmdDTO,
   HSetExDTO,
@@ -35,7 +36,8 @@ import HashesService from './hashes.service';
 
 /**
  * Routing of the hash commands: name, arity, flags and keys, then DTO → service. No logic lives here.
- * HRANDFIELD reads its key BEFORE parsing its arguments, because Redis does (a WRONGTYPE beats a bad count).
+ * HRANDFIELD parses its arguments before reading its key (a bad count beats WRONGTYPE); HSCAN checks the cursor, then
+ * the key, then the options (none are parsed on a missing key), as Redis does.
  */
 
 const WRITE = { write: true } as const;
@@ -88,14 +90,19 @@ export const hashCommands: CommandSpec[] = [
   // ============================================================================
   // Iteration
   // ============================================================================
-  { name: 'hscan', arity: -3, handler: withDTO(HScanDTO, HashesService.hScan) },
+  {
+    name: 'hscan',
+    arity: -3,
+    // cursor first, then the key (missing → empty scan, WRONGTYPE), then the options
+    handler: (ctx, args) =>
+      validated(HScanCursorDTO, args, ({ key }) =>
+        HashesService.read(ctx, key) ? validated(HScanDTO, args, (input) => HashesService.hScan(ctx, input)) : ['0', []],
+      ),
+  },
   {
     name: 'hrandfield',
     arity: -2,
-    // read first: WRONGTYPE beats a non-integer count
-    handler: (ctx, args) => {
-      const h = HashesService.read(ctx, args[0]);
-      return validated(HRandFieldDTO, args, (input) => HashesService.hRandField(h, input));
-    },
+    // parse first: a bad count (or WITHVALUES range) beats WRONGTYPE, as in Redis
+    handler: (ctx, args) => validated(HRandFieldDTO, args, (input) => HashesService.hRandField(HashesService.read(ctx, input.key), input)),
   },
 ];

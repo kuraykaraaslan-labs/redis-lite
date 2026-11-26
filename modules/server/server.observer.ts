@@ -100,6 +100,8 @@ export class ServerObserver {
     stats.errorReplies = 0;
     stats.netIn = 0;
     stats.netOut = 0;
+    stats.keyspaceHits = 0;
+    stats.keyspaceMisses = 0;
     this.server.commandStats.clear();
     this.server.errorStats.clear();
   }

@@ -35,13 +35,13 @@ describe('encode: scalars', () => {
     expect(bytes(9007199254740993n)).toBe(':9007199254740993\r\n');
   });
 
-  it('nulls, status, errors (CR/LF runs become one space)', () => {
+  it('nulls, status, errors (each CR / LF becomes a space)', () => {
     expect(bytes(null)).toBe('$-1\r\n');
     expect(bytes(null, 3)).toBe('_\r\n');
     expect(bytes(NULL_ARRAY)).toBe('*-1\r\n');
     expect(bytes(NULL_ARRAY, 3)).toBe('_\r\n');
     expect(bytes(OK)).toBe('+OK\r\n');
-    expect(bytes(new RespError('ERR a\r\n\nb\rc'))).toBe('-ERR a b c\r\n');
+    expect(bytes(new RespError('ERR a\r\n\nb\rc'))).toBe('-ERR a   b c\r\n');
   });
 
   it('RESP3-typed scalars and their RESP2 fallbacks', () => {

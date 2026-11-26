@@ -145,6 +145,22 @@ describe('BZPOPMIN / BZPOPMAX / BZMPOP', () => {
     expect(await p3).toEqual(['bz:w5', [['c', '3'], ['b', '2']]]);
   });
 
+  it('a waiter whose key changes type stays blocked and is served by another key', async () => {
+    // Redis 7.0 (black box): SET on a waited key does not wake (or error) the waiter
+    const c = t.client();
+    const p = c.call('BZPOPMIN', 'bz:t1', 'bz:t2', '0');
+    await waitForBlocked(t);
+    await t.call('SET', 'bz:t1', 'str');
+    await t.call('ZADD', 'bz:t2', 1, 'm');
+    expect(await p).toEqual(['bz:t2', 'm', '1']);
+    const p2 = c.call('BZMPOP', '0', '1', 'bz:t3', 'MIN');
+    await waitForBlocked(t);
+    await t.call('LPUSH', 'bz:t3', 'x');
+    await t.call('DEL', 'bz:t3');
+    await t.call('ZADD', 'bz:t3', 2, 'n');
+    expect(await p2).toEqual(['bz:t3', [['n', '2']]]);
+  });
+
   it('time out with a null array', async () => {
     expect(await t.call('BZPOPMIN', 'bz:to', 0.1)).toBeNull();
     expect(await t.call('BZPOPMAX', 'bz:to', '0.1')).toBeNull();

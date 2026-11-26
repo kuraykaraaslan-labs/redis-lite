@@ -10,6 +10,7 @@ export const StreamsMessages = {
   ID_INVALID: 'ERR Invalid stream ID specified as stream command argument',
   ID_SMALL: 'ERR The ID specified in XADD is equal or smaller than the target stream top item',
   ID_ZERO: 'ERR The ID specified in XADD must be greater than 0-0',
+  ID_SEQ_OVERFLOW: 'ERR Elements are too large to be stored',
   ID_EXHAUSTED: 'ERR The stream has exhausted the last possible ID, unable to add more items',
   INVALID_START_ID: 'ERR invalid start ID for the interval',
   INVALID_END_ID: 'ERR invalid end ID for the interval',
@@ -64,7 +65,6 @@ export const StreamsMessages = {
   NO_SUCH_KEY: 'ERR no such key',
   ENTRIES_ADDED_NEGATIVE: 'ERR entries_added must be positive',
   XSETID_BELOW_MAX_DELETED_ARG: 'ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id',
-  XSETID_BELOW_MAX_DELETED: 'ERR The ID specified in XSETID is smaller than current max_deleted_entry_id',
   XSETID_BELOW_TOP_ITEM: 'ERR The ID specified in XSETID is smaller than the target stream top item',
   XSETID_ENTRIES_ADDED_SMALL: 'ERR The entries_added specified in XSETID is smaller than the target stream length',
 

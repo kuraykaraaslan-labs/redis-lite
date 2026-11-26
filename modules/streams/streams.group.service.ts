@@ -1,6 +1,6 @@
 import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
-import { OK } from '@/libs/resp';
+import { OK, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
@@ -44,7 +44,7 @@ export default class StreamsGroupService {
   /** XGROUP: the key must exist (unless CREATE … MKSTREAM) and, except for CREATE and DESTROY, the group too. */
   static group(ctx: CommandContext, input: XGroupInput): Reply {
     const { sub, key, group: groupName, mkStream, entriesRead, consumer: consumerName } = input;
-    if (sub === 'help') return [...StreamsMessages.XGROUP_HELP];
+    if (sub === 'help') return StreamsMessages.XGROUP_HELP.map((line) => new Status(line));
     const s = ctx.db.get(key, 'stream');
     const g = s?.groups.get(groupName);
     if (!mkStream) {

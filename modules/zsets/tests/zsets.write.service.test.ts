@@ -195,6 +195,21 @@ describe('encodings', () => {
     expect(await t.call('OBJECT', 'ENCODING', 'enc:long')).toBe('skiplist');
   });
 
+  it('-0: a listpack stores it as 0, a skiplist keeps it; a new member replies the increment itself', async () => {
+    await t.call('ZADD', 'z:neg0', '-0', 'a');
+    expect(await t.call('ZSCORE', 'z:neg0', 'a')).toBe('0');
+    const r = await t.raw();
+    expect(await r.send('ZINCRBY', 'z:neg0', '-0', 'b')).toBe('$2\r\n-0\r\n');
+    expect(await t.call('ZSCORE', 'z:neg0', 'b')).toBe('0');
+    await t.call('CONFIG', 'SET', 'zset-max-listpack-entries', '0');
+    try {
+      await t.call('ZADD', 'z:neg0-sk', '-0', 'a');
+      expect(await t.call('ZSCORE', 'z:neg0-sk', 'a')).toBe('-0');
+    } finally {
+      await t.call('CONFIG', 'SET', 'zset-max-listpack-entries', '128');
+    }
+  });
+
   it('TYPE is zset, geo keys are zsets', async () => {
     await t.call('ZADD', 'enc:type', 1, 'a');
     expect(await t.call('TYPE', 'enc:type')).toBe('zset');

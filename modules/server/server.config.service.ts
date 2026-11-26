@@ -22,7 +22,10 @@ export default class ServerConfigService {
     return new AppError(formatMessage(ServerMessages.CONFIG_SET_FAILED, { name, reason }));
   }
 
-  /** The first unknown name, or the first immutable / duplicate one (Redis reports an unknown name first). */
+  /**
+   * The first unknown name, or the first immutable / duplicate one (Redis reports an unknown name first). A duplicate is
+   * the same name twice (in any case); a parameter and its alias are two names, the later value wins.
+   */
   private static checkNames(cfg: ServerConfig, pairs: ConfigSetInput['pairs']): [string, string] | null {
     let unknown: string | null = null;
     let failure: [string, string] | null = null;
@@ -35,8 +38,8 @@ export default class ServerConfigService {
       }
       if (unknown !== null || failure) continue;
       if (cfg.isImmutable(canonical)) failure = [name, ServerMessages.CONFIG_IMMUTABLE];
-      else if (seen.has(canonical)) failure = [name, ServerMessages.CONFIG_DUPLICATE];
-      seen.add(canonical);
+      else if (seen.has(name.toLowerCase())) failure = [name, ServerMessages.CONFIG_DUPLICATE];
+      seen.add(name.toLowerCase());
     }
     if (unknown !== null) throw new AppError(formatMessage(ServerMessages.CONFIG_SET_UNKNOWN, { name: unknown }));
     return failure;
@@ -63,27 +66,29 @@ export default class ServerConfigService {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** CONFIG GET pattern […]: exact names answer under the name as asked, glob patterns under every matching name. */
+  /**
+   * CONFIG GET pattern […]: an exact name (or alias) answers under the name exactly as typed, a glob pattern under every
+   * matching parameter name (aliases are not listed by globs). A name already answered, in any case, is not repeated.
+   */
   static get(ctx: CommandContext, { patterns }: ConfigGetInput): Reply {
     const cfg = ctx.server.config;
-    const matched = new Map<string, string>();
-    const seen = new Set<string>();
+    const matched = new Map<string, [string, string]>();
+    const add = (name: string, canonical: string) => {
+      const key = name.toLowerCase();
+      if (!matched.has(key)) matched.set(key, [name, cfg.get(canonical) ?? '']);
+    };
     for (const pattern of patterns) {
       if (!/[*?[]/.test(pattern)) {
         const canonical = ServerConfig.canonical(pattern);
-        if (seen.has(canonical) || !cfg.has(canonical)) continue;
-        seen.add(canonical);
-        matched.set(pattern.toLowerCase(), cfg.get(canonical) ?? '');
+        if (cfg.has(canonical)) add(pattern, canonical);
         continue;
       }
+      const glob = pattern.toLowerCase();
       for (const name of ServerConfig.allNames()) {
-        const canonical = ServerConfig.canonical(name);
-        if (seen.has(canonical) || !cfg.has(canonical) || !matchGlob(pattern.toLowerCase(), name)) continue;
-        seen.add(canonical);
-        matched.set(name, cfg.get(canonical) ?? '');
+        if (ServerConfig.canonical(name) === name && cfg.has(name) && matchGlob(glob, name)) add(name, name);
       }
     }
-    return new RespMap([...matched.entries()]);
+    return new RespMap([...matched.values()]);
   }
 
   /** CONFIG SET name value […]: every value is checked before any is applied; a failing side effect rolls back. */

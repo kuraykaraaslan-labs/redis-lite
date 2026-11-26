@@ -1,10 +1,13 @@
 import { AppError } from '@/libs/app-error';
-import { addInt64, formatFloat, toFloat } from '@/libs/number';
+import { addInt64 } from '@/libs/number';
+import { addLongDouble, formatLongDouble, parseLongDouble } from '@/libs/number/long-double';
 import { RespMessages } from '@/libs/resp/messages';
 
 import type { CommandContext } from '@/modules/command/command.types';
 
 import type { IncrByFloatInput, IncrByInput } from './strings.dto';
+
+const ZERO = { neg: false, m: 0n, e: 0 };
 
 /** Numeric strings: INCR, DECR, INCRBY, DECRBY (int64) and INCRBYFLOAT. Both keep the key's TTL. */
 export default class StringsCounterService {
@@ -17,14 +20,17 @@ export default class StringsCounterService {
     return result;
   }
 
-  /** INCRBYFLOAT on the value read before the arguments were parsed (Redis's precedence, see the commands layer). */
+  /**
+   * INCRBYFLOAT on the value read before the arguments were parsed (Redis's precedence, see the commands layer). Like
+   * Redis, the sum is computed in 80-bit long double precision and stored as `%.17Lf` text, never integer-encoded.
+   */
   static incrByFloat(ctx: CommandContext, { key, increment }: IncrByFloatInput, current: string | null): string {
-    const stored = current === null ? 0 : toFloat(current);
+    const stored = current === null ? ZERO : parseLongDouble(current);
     if (stored === null) throw new AppError(RespMessages.NOT_FLOAT);
-    const result = stored + increment;
-    if (!Number.isFinite(result)) throw new AppError(RespMessages.NAN_OR_INF);
-    const text = formatFloat(result);
-    ctx.db.set(key, { type: 'string', value: text }, true);
+    const result = addLongDouble(stored, increment);
+    if (result === null || result.inf) throw new AppError(RespMessages.NAN_OR_INF);
+    const text = formatLongDouble(result);
+    ctx.db.set(key, { type: 'string', value: text, noInt: true }, true);
     return text;
   }
 }

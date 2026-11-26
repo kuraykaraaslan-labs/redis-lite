@@ -189,9 +189,10 @@ describe('GEOSEARCH / GEOSEARCHSTORE', () => {
     await sicily('gs:e');
     const k = 'gs:e';
     expect.soft(await err(t.call('GEOSEARCH', k, 'BYRADIUS', 10, 'km', 'ASC', 'WITHDIST'))).toBe('ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for GEOSEARCH');
-    expect.soft(await err(t.call('GEOSEARCH', k, 'FROMMEMBER', 'Palermo', 'FROMLONLAT', 15, 37, 'BYRADIUS', 10, 'km'))).toBe('ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for GEOSEARCH');
+    // both kinds of center (or of shape) is a syntax error at the second one (Redis 7.0 black box)
+    expect.soft(await err(t.call('GEOSEARCH', k, 'FROMMEMBER', 'Palermo', 'FROMLONLAT', 15, 37, 'BYRADIUS', 10, 'km'))).toBe('ERR syntax error');
     expect.soft(await err(t.call('GEOSEARCH', k, 'FROMLONLAT', 15, 37, 'ASC', 'WITHDIST'))).toBe('ERR exactly one of BYRADIUS and BYBOX can be specified for GEOSEARCH');
-    expect.soft(await err(t.call('GEOSEARCH', k, 'FROMLONLAT', 15, 37, 'BYRADIUS', 10, 'km', 'BYBOX', 1, 1, 'km'))).toBe('ERR exactly one of BYRADIUS and BYBOX can be specified for GEOSEARCH');
+    expect.soft(await err(t.call('GEOSEARCH', k, 'FROMLONLAT', 15, 37, 'BYRADIUS', 10, 'km', 'BYBOX', 1, 1, 'km'))).toBe('ERR syntax error');
     expect.soft(await err(t.call('GEOSEARCH', k, 'FROMLONLAT', 15, 37, 'BYRADIUS', 10, 'km', 'ANY'))).toBe('ERR the ANY argument requires COUNT argument');
     expect.soft(await err(t.call('GEOSEARCH', k, 'FROMLONLAT', 15, 37, 'BYRADIUS', 10, 'km', 'COUNT', 0))).toBe('ERR COUNT must be > 0');
     expect.soft(await err(t.call('GEOSEARCH', k, 'FROMMEMBER', 'Nope', 'BYRADIUS', 10, 'km'))).toBe('ERR could not decode requested zset member');

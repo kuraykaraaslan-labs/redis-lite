@@ -33,10 +33,10 @@ describe('point DTOs', () => {
 });
 
 describe('search DTOs', () => {
-  it('cross-option checks come after every option', () => {
-    expect(parse(GeoSearchDTO, ['k', 'FROMLONLAT', '1', '2', 'BYRADIUS', '1', 'm', 'BYBOX', '1', '1', 'm'])).toBe(
-      'ERR exactly one of BYRADIUS and BYBOX can be specified for GEOSEARCH',
-    );
+  it('cross-option checks come after every option; a second shape or center kind is a syntax error at once', () => {
+    expect(parse(GeoSearchDTO, ['k', 'FROMLONLAT', '1', '2', 'BYRADIUS', '1', 'm', 'BYBOX', '1', '1', 'm'])).toBe('ERR syntax error');
+    expect(parse(GeoSearchDTO, ['k', 'FROMLONLAT', '1', '2', 'FROMMEMBER', 'a', 'BYRADIUS', '1', 'm'])).toBe('ERR syntax error');
+    expect(parse(GeoSearchDTO, ['k', 'BYRADIUS', '1', 'm', 'ANY'])).toBe('ERR exactly one of FROMMEMBER or FROMLONLAT can be specified for GEOSEARCH');
     expect(parse(GeoSearchDTO, ['k', 'FROMLONLAT', '1', '2', 'BYRADIUS', '-1', 'm'])).toBe('ERR radius cannot be negative');
     expect(parse(GeoSearchDTO, ['k', 'FROMLONLAT', '1', '2', 'BYRADIUS', '1', 'm', 'ANY'])).toBe(
       'ERR the ANY argument requires COUNT argument',

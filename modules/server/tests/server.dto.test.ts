@@ -29,7 +29,9 @@ function parse(dto: z.ZodType, args: string[]): unknown {
 
 describe('CONFIG / ACL / SLOWLOG / MEMORY', () => {
   it('CONFIG SET needs name / value pairs', () => {
-    expect(parse(ConfigSetDTO, ['set', 'a', '1', 'b'])).toBe("ERR wrong number of arguments for 'config|set' command");
+    expect(parse(ConfigSetDTO, ['set', 'a'])).toBe("ERR wrong number of arguments for 'config|set' command");
+    // past the first pair, an odd count is a syntax error
+    expect(parse(ConfigSetDTO, ['set', 'a', '1', 'b'])).toBe('ERR syntax error');
     expect(parse(ConfigSetDTO, ['set', 'a', '1'])).toEqual({ pairs: [['a', '1']] });
   });
 

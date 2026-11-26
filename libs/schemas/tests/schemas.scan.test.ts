@@ -13,10 +13,10 @@ function parse(schema: z.ZodType, input: unknown): unknown {
 }
 
 describe('ScanCursorSchema', () => {
-  it('accepts unsigned 64-bit cursors only', () => {
+  it('accepts unsigned 64-bit cursors, a negative one wrapping modulo 2^64 (strtoul)', () => {
     expect(parse(ScanCursorSchema, '0')).toBe(0);
     expect(parse(ScanCursorSchema, '18446744073709551615')).toBe(2 ** 64);
-    expect(parse(ScanCursorSchema, '-1')).toBe('ERR invalid cursor');
+    expect(parse(ScanCursorSchema, '-1')).toBe(2 ** 64 - 1);
     expect(parse(ScanCursorSchema, 'abc')).toBe('ERR invalid cursor');
     expect(parse(ScanCursorSchema, '99999999999999999999999')).toBe('ERR invalid cursor');
   });

@@ -29,10 +29,12 @@ describe('SetDTO', () => {
     });
   });
 
-  it('reports the first problem in argument order', () => {
-    expect(parse(SetDTO, ['k', 'v', 'EX', '0', 'FOO'])).toBe("ERR invalid expire time in 'set' command");
+  it('reads every option before validating the last expiry value', () => {
+    expect(parse(SetDTO, ['k', 'v', 'EX', '0', 'FOO'])).toBe('ERR syntax error');
     expect(parse(SetDTO, ['k', 'v', 'FOO', 'EX', '0'])).toBe('ERR syntax error');
-    expect(parse(SetDTO, ['k', 'v', 'EX', '10', 'PX', 'abc'])).toBe('ERR value is not an integer or out of range');
+    expect(parse(SetDTO, ['k', 'v', 'EX', '10', 'PX', 'abc'])).toBe('ERR syntax error');
+    expect(parse(SetDTO, ['k', 'v', 'EX', 'abc', 'EX', '10'])).toMatchObject({ key: 'k', expireAt: expect.any(Number) });
+    expect(parse(SetDTO, ['k', 'v', 'EX', '10', 'EX', '0'])).toBe("ERR invalid expire time in 'set' command");
   });
 
   it('rejects conflicting options once all are read', () => {

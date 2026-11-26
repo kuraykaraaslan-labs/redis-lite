@@ -87,7 +87,8 @@ describe('MULTI / EXEC / DISCARD', () => {
 
   it('arity of MULTI / EXEC / DISCARD / WATCH / UNWATCH', async () => {
     expect.soft(await errOf(t.call('MULTI', 'x'))).toBe("ERR wrong number of arguments for 'multi' command");
-    expect.soft(await errOf(t.call('EXEC', 'x'))).toBe("ERR wrong number of arguments for 'exec' command");
+    // Redis answers a wrong-arity EXEC with EXECABORT, even outside MULTI (verified against the oracle).
+    expect.soft(await errOf(t.call('EXEC', 'x'))).toBe("EXECABORT Transaction discarded because of: wrong number of arguments for 'exec' command");
     expect.soft(await errOf(t.call('DISCARD', 'x'))).toBe("ERR wrong number of arguments for 'discard' command");
     expect.soft(await errOf(t.call('WATCH'))).toBe("ERR wrong number of arguments for 'watch' command");
     expect.soft(await errOf(t.call('UNWATCH', 'x'))).toBe("ERR wrong number of arguments for 'unwatch' command");

@@ -64,6 +64,9 @@ describe('ZUNION / ZUNIONSTORE', () => {
     await t.call('ZADD', 'zu:pinf', 'inf', 'm');
     await t.call('ZADD', 'zu:ninf', '-inf', 'm');
     expect(await t.call('ZUNION', 2, 'zu:pinf', 'zu:ninf', 'WITHSCORES')).toEqual(['m', '0']);
+    // a NaN weighted score (0 × inf) is 0 before it is aggregated
+    await t.call('ZADD', 'zu:zero', 0, 'm');
+    expect(await t.call('ZUNION', 2, 'zu:zero', 'zu:pinf', 'WEIGHTS', 'inf', 1, 'WITHSCORES')).toEqual(['m', 'inf']);
   });
 
   it('errors', async () => {

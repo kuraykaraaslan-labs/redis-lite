@@ -13,18 +13,19 @@ export default class TrackingClientService {
   // Private Helpers
   // ──────────────────────────────────────────────
 
-  /** Prefixes of one client must not overlap (one being a prefix of another). */
+  /**
+   * Prefixes of one client must not overlap (one being a prefix of the other, or the same prefix twice). Each new prefix
+   * is checked against the client's prefixes first, then against every other prefix of the same command.
+   */
   private static checkPrefixes(client: Client, added: string[]): void {
-    const overlaps = (a: string, b: string): boolean => a !== b && (a.startsWith(b) || b.startsWith(a));
-    const overlapError = (prefix: string, existing: string): AppError =>
-      new AppError(formatMessage(TrackingMessages.PREFIX_OVERLAP, { prefix, existing }));
+    const overlaps = (a: string, b: string): boolean => a.startsWith(b) || b.startsWith(a);
     for (let i = 0; i < added.length; i++) {
       const p = added[i];
       for (const existing of client.trackingPrefixes) {
-        if (overlaps(p, existing)) throw overlapError(p, existing);
+        if (overlaps(p, existing)) throw new AppError(formatMessage(TrackingMessages.PREFIX_OVERLAP, { prefix: p, existing }));
       }
-      for (let j = 0; j < i; j++) {
-        if (overlaps(p, added[j])) throw overlapError(p, added[j]);
+      for (let j = 0; j < added.length; j++) {
+        if (j !== i && overlaps(p, added[j])) throw new AppError(formatMessage(TrackingMessages.PREFIX_OVERLAP_PROVIDED, { prefix: p, other: added[j] }));
       }
     }
   }

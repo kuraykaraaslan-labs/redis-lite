@@ -9,12 +9,13 @@ export { BitmapsBitService, BitmapsFieldService, BitmapsOpService, BitmapStore }
 export default class BitmapsService {
   // Store — the read step of read-first commands
   static read = BitmapStore.read.bind(BitmapStore);
+  static readExisting = BitmapStore.readExisting.bind(BitmapStore);
 
   // Bits — GETBIT, SETBIT, BITCOUNT, BITPOS
   static getBit = BitmapsBitService.getBit.bind(BitmapsBitService);
   static setBit = BitmapsBitService.setBit.bind(BitmapsBitService);
   static bitCount = BitmapsBitService.bitCount.bind(BitmapsBitService);
-  static bitPosEmpty = BitmapsBitService.bitPosEmpty.bind(BitmapsBitService);
+  static bitPosMissing = BitmapsBitService.bitPosMissing.bind(BitmapsBitService);
   static bitPos = BitmapsBitService.bitPos.bind(BitmapsBitService);
 
   // BITOP

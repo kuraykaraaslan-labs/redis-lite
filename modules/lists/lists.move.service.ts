@@ -18,15 +18,20 @@ export default class ListsMoveService {
 
   /** BLPOP / BRPOP: `[key, element]` from the first non-empty key. */
   static bPop(ctx: CommandContext, { keys, timeoutMs, left }: BPopInput): HandlerResult {
-    return CommandService.blockingCommand(ctx, keys, timeoutMs, () => ListStore.popFirst(ctx, keys, left));
+    const attempt = ListStore.blockingAttempt((serving) => ListStore.popFirst(ctx, keys, left, serving));
+    return CommandService.blockingCommand(ctx, keys, timeoutMs, attempt);
   }
 
   static bLMPop(ctx: CommandContext, { keys, left, count, timeoutMs }: BLMPopInput): HandlerResult {
-    return CommandService.blockingCommand(ctx, keys, timeoutMs, () => ListStore.mPop(ctx, keys, left, count));
+    const attempt = ListStore.blockingAttempt((serving) => ListStore.mPop(ctx, keys, left, count, serving));
+    return CommandService.blockingCommand(ctx, keys, timeoutMs, attempt);
   }
 
   /** BLMOVE / BRPOPLPUSH: timing out answers a null array, but inside MULTI / scripts a null bulk (Redis quirk). */
   static bLMove(ctx: CommandContext, { source, destination, from, to, timeoutMs }: BLMoveInput): HandlerResult {
-    return CommandService.blockingCommand(ctx, [source], timeoutMs, () => ListStore.move(ctx, source, destination, from, to), NULL_ARRAY, null);
+    const attempt = ListStore.blockingAttempt((serving) =>
+      serving ? ListStore.serveMove(ctx, source, destination, from, to) : ListStore.move(ctx, source, destination, from, to),
+    );
+    return CommandService.blockingCommand(ctx, [source], timeoutMs, attempt, NULL_ARRAY, null);
   }
 }

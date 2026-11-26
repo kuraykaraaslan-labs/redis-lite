@@ -44,10 +44,13 @@ export default class PersistenceDumpService {
     }
   }
 
-  /** Decodes a DUMP payload, including hash field TTLs. Throws 'Bad data format' on corrupt bodies. */
+  /**
+   * Decodes a DUMP payload, including hash field TTLs. Throws 'Bad data format' on corrupt bodies. Like Redis, the
+   * object is read from the whole payload, footer included: a value whose length runs into the footer takes its bytes.
+   */
   static restorePayloadEx(buf: Buffer, skipChecksum = false): DecodedObject {
     PersistenceDumpService.verifyDumpPayload(buf, skipChecksum);
-    const r = new RdbReader(buf.subarray(0, buf.length - 10));
+    const r = new RdbReader(buf);
     const decoded = PersistenceObjectDecoderCodec.readObject(r, r.u8());
     if (PersistenceObjectDecoderCodec.isEmptyAggregate(decoded.value)) throw PersistenceBytesCodec.badFormat();
     return decoded;

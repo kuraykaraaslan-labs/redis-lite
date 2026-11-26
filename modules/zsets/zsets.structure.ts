@@ -33,6 +33,18 @@ export class ZSet {
     this.entries.splice(this.lowerBound(score, member), 0, { member, score });
   }
 
+  /**
+   * A listpack-encoded sorted set cannot hold a -0 score: Redis reads it back as 0 (a skiplist keeps -0). Called by the
+   * writers once they know the set is compact; the order is unchanged (-0 and 0 compare equal).
+   */
+  clearNegativeZeros(): void {
+    for (const entry of this.entries) {
+      if (!Object.is(entry.score, -0)) continue;
+      entry.score = 0;
+      this.scores.set(entry.member, 0);
+    }
+  }
+
   remove(member: string): boolean {
     const score = this.scores.get(member);
     if (score === undefined) return false;

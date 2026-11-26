@@ -29,6 +29,7 @@ export default class ServerInfoService {
     ['modules', 'Modules', true],
     ['commandstats', 'Commandstats', false],
     ['errorstats', 'Errorstats', true],
+    ['latencystats', 'Latencystats', false],
     ['cluster', 'Cluster', true],
     ['keyspace', 'Keyspace', true],
   ];
@@ -137,8 +138,8 @@ export default class ServerInfoService {
           'evicted_scripts:0',
           `total_eviction_exceeded_time:${exceeded.total}`,
           `current_eviction_exceeded_time:${exceeded.current}`,
-          'keyspace_hits:0',
-          'keyspace_misses:0',
+          `keyspace_hits:${s.stats.keyspaceHits}`,
+          `keyspace_misses:${s.stats.keyspaceMisses}`,
           `pubsub_channels:${s.channels.size}`,
           `pubsub_patterns:${s.patterns.size}`,
           `pubsubshard_channels:${s.shardChannels.size}`,
@@ -198,7 +199,19 @@ export default class ServerInfoService {
               `rejected_calls=${st.rejected},failed_calls=${st.failed}`,
           );
       case 'errorstats':
-        return [...s.errorStats.entries()].map(([code, count]) => `errorstat_${code}:count=${count}`);
+        // Redis keeps them in a radix tree: lexicographic order
+        return [...s.errorStats.entries()]
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([code, count]) => `errorstat_${code}:count=${count}`);
+      case 'latencystats': {
+        if (cfg.get('latency-tracking') !== 'yes') return [];
+        const percentiles = (cfg.get('latency-tracking-info-percentiles') ?? '').split(' ').filter(Boolean);
+        return [...s.commandStats.entries()].flatMap(([cmd, st]) => {
+          if (!st.histogram) return [];
+          const values = percentiles.map((p) => `p${p}=${(st.histogram!.valueAt(Number(p)) / 1000).toFixed(3)}`);
+          return [`latency_percentiles_usec_${cmd}:${values.join(',')}`];
+        });
+      }
       case 'cluster':
         return ['cluster_enabled:0'];
       case 'keyspace':

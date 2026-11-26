@@ -61,6 +61,27 @@ describe('MONITOR / SLOWLOG / LATENCY / MEMORY', () => {
     expect.soft(await r.send('LATENCY', 'DOCTOR')).toMatch(/^=\d+\r\ntxt:/);
   });
 
+  it('LATENCY HISTOGRAM and INFO latencystats track every called command', async () => {
+    await t.call('CONFIG', 'RESETSTAT');
+    await t.call('SET', 'lat', 'v');
+    await t.call('GET', 'lat');
+    await t.call('GET', 'lat');
+    const reply = (await t.call('LATENCY', 'HISTOGRAM', 'get', 'set', 'lpush', 'nosuch')) as unknown[];
+    // RESP2: name, [calls, n, histogram_usec, [bucket, cumulative…]] per command; never-called / unknown left out
+    expect.soft(reply.filter((_, i) => i % 2 === 0)).toEqual(['get', 'set']);
+    const get = reply[1] as unknown[];
+    expect.soft(get.slice(0, 3)).toEqual(['calls', 2, 'histogram_usec']);
+    const buckets = get[3] as number[];
+    expect.soft(buckets.at(-1)).toBe(2);
+    // a container name stands for its subcommands
+    expect.soft(((await t.call('LATENCY', 'HISTOGRAM', 'config')) as unknown[])[0]).toBe('config|resetstat');
+    const info = String(await t.call('INFO', 'latencystats'));
+    expect.soft(info).toMatch(/^latency_percentiles_usec_get:p50=\d+\.\d{3},p99=\d+\.\d{3},p99\.9=\d+\.\d{3}\r?$/m);
+    await t.call('CONFIG', 'SET', 'latency-tracking', 'no');
+    expect.soft(String(await t.call('INFO', 'latencystats'))).toBe('# Latencystats\r\n');
+    await t.call('CONFIG', 'SET', 'latency-tracking', 'yes');
+  });
+
   it('MEMORY USAGE', async () => {
     await t.call('SET', 'mem:k', 'hello');
     const used = (await t.call('MEMORY', 'USAGE', 'mem:k')) as number;

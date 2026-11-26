@@ -31,7 +31,7 @@ describe('hashes: HSCAN', () => {
 
   it('hashtable hash iterates with a cursor and visits every field', async () => {
     const args: string[] = [];
-    for (let i = 0; i < 300; i++) args.push(`f${i}`, `v${i}`);
+    for (let i = 0; i < 600; i++) args.push(`f${i}`, `v${i}`);
     await t.call('HSET', 'h:scanbig', ...args);
     expect(await enc('h:scanbig')).toBe('hashtable');
     const seen = new Map<string, string>();
@@ -44,7 +44,7 @@ describe('hashes: HSCAN', () => {
       calls++;
     } while (cursor !== '0');
     expect(calls).toBeGreaterThan(1);
-    expect(seen.size).toBe(300);
+    expect(seen.size).toBe(600);
     expect(seen.get('f42')).toBe('v42');
     // NOVALUES on hashtable
     const keys = new Set<string>();
@@ -67,6 +67,9 @@ describe('hashes: HSCAN', () => {
     await expect(t.call('HSCAN', 'h:scanerr', 0, 'FOO')).rejects.toThrow(SYNTAX);
     await expect(t.call('HSCAN', 'h:scanerr', 0, 'MATCH')).rejects.toThrow(SYNTAX);
     await expect(t.call('HSCAN', 'h:scanerr')).rejects.toThrow(arity('hscan'));
+    // TYPE belongs to the keyspace SCAN only; options are not parsed on a missing key
+    await expect(t.call('HSCAN', 'h:scanerr', 0, 'TYPE', 'string')).rejects.toThrow(SYNTAX);
+    expect(await t.call('HSCAN', 'h:scanerr-missing', 0, 'COUNT', 'x')).toEqual(['0', []]);
   });
 
   it('RESP3 reply stays a two-element array', async () => {
@@ -108,6 +111,18 @@ describe('hashes: HRANDFIELD', () => {
     await expect(t.call('HRANDFIELD', 'h:rand-err', 'x')).rejects.toThrow(NOT_INT);
     await expect(t.call('HRANDFIELD', 'h:rand-err', 'WITHVALUES')).rejects.toThrow(NOT_INT);
     await expect(t.call('HRANDFIELD')).rejects.toThrow(arity('hrandfield'));
+    await expect(t.call('HRANDFIELD', 'h:rand-err', '-9223372036854775808')).rejects.toThrow('ERR value is out of range, value must between -9223372036854775807 and 9223372036854775807');
+    await expect(t.call('HRANDFIELD', 'h:rand-err', '-4611686018427387904', 'WITHVALUES')).rejects.toThrow('ERR value is out of range');
+    expect(await t.call('HRANDFIELD', 'h:rand-err', '9223372036854775807')).toEqual(['a']);
+    // the count is parsed before the key is read
+    await t.call('SET', 'h:rand-str', 'x');
+    await expect(t.call('HRANDFIELD', 'h:rand-str', 'x')).rejects.toThrow(NOT_INT);
+  });
+
+  it('a count covering the hash returns every field in stored order', async () => {
+    await t.call('HSET', 'h:rand-all', 'a', '1', 'b', '2', 'c', '3');
+    expect(await t.call('HRANDFIELD', 'h:rand-all', 3)).toEqual(['a', 'b', 'c']);
+    expect(await t.call('HRANDFIELD', 'h:rand-all', 10, 'WITHVALUES')).toEqual(['a', '1', 'b', '2', 'c', '3']);
   });
 
   it('extra args after count are a syntax error', async () => {

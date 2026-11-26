@@ -30,7 +30,9 @@ export default class CommandReplyService {
         'type', 'keynum', 'spec', RespMap.from(['keynumidx', spec.find.keynumidx, 'firstkey', spec.find.firstkey, 'keystep', spec.find.keystep]),
       ]);
     else find = RespMap.from(['type', 'unknown', 'spec', new RespMap([])]);
-    return RespMap.from(['flags', CommandReplyService.statuses(spec.flags), 'begin_search', begin, 'find_keys', find]);
+    const fields: Reply[] = spec.notes === undefined ? [] : ['notes', spec.notes];
+    fields.push('flags', CommandReplyService.statuses(spec.flags), 'begin_search', begin, 'find_keys', find);
+    return RespMap.from(fields);
   }
 
   private static argReply(a: ArgDoc): RespMap {
@@ -76,6 +78,7 @@ export default class CommandReplyService {
     if (m.docFlags.length) flat.push('doc_flags', CommandReplyService.statuses(m.docFlags));
     if (m.deprecatedSince) flat.push('deprecated_since', m.deprecatedSince);
     if (m.replacedBy) flat.push('replaced_by', m.replacedBy);
+    if (m.history.length) flat.push('history', m.history.map(([version, change]) => [version, change]));
     if (m.args.length) flat.push('arguments', m.args.map((arg) => CommandReplyService.argReply(arg)));
     if (m.subcommands.size) {
       flat.push('subcommands', new RespMap([...m.subcommands.values()].map((s) => [s.fullname, CommandReplyService.commandDocsReply(s)])));

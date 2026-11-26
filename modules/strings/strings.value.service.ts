@@ -1,3 +1,4 @@
+import { AppError } from '@/libs/app-error';
 import { OK } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
@@ -54,10 +55,14 @@ export default class StringsValueService {
     return value;
   }
 
-  /** GETEX on an existing key (`value` read first, see the commands layer): applies PERSIST or the new expiry. */
+  /**
+   * GETEX on an existing key (`value` read after the option syntax, see the commands layer): validates the expiry value
+   * only now, as Redis does, then applies PERSIST or the new expiry.
+   */
   static getEx(ctx: CommandContext, { key, persist, expireAt }: GetExInput, value: string): string {
+    if (expireAt && !expireAt.ok) throw new AppError(expireAt.error);
     if (persist) ctx.db.persist(key);
-    else if (expireAt !== undefined) ctx.db.setExpire(key, expireAt);
+    else if (expireAt) ctx.db.setExpire(key, expireAt.value);
     return value;
   }
 

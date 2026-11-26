@@ -1,4 +1,5 @@
 import { AppError } from '@/libs/app-error';
+import { INT64_MAX } from '@/libs/number';
 import { OK } from '@/libs/resp';
 import type { Status } from '@/libs/resp';
 
@@ -51,6 +52,7 @@ export default class KeysDumpService {
   /** RESTORE: creates the key from a DUMP payload; a TTL already in the past just deletes the key. */
   static restore(ctx: CommandContext, { key, ttl, payload, replace, absolute, idle, freq }: RestoreInput): Status {
     if (ctx.db.has(key) && !replace) throw new AppError(KeysMessages.BUSYKEY);
+    if (!ttl.ok) throw new AppError(ttl.error);
     let decoded: DecodedObject;
     try {
       decoded = PersistenceService.restorePayloadEx(Buffer.from(payload, 'latin1'));
@@ -58,7 +60,9 @@ export default class KeysDumpService {
       throw KeysDumpService.rdbError(error);
     }
     const value = decoded.value;
-    const at = ttl === 0 ? undefined : absolute ? ttl : Date.now() + ttl;
+    // a relative TTL that overflows int64 once added to the clock wraps into the past, as in Redis
+    const sum = ttl.value === 0n ? undefined : absolute ? ttl.value : BigInt(Date.now()) + ttl.value;
+    const at = sum === undefined ? undefined : sum > INT64_MAX ? -1 : Number(sum);
     if (at !== undefined && at <= Date.now()) {
       ctx.db.remove(key);
       return OK;

@@ -100,10 +100,13 @@ export default class ServerService {
   static debugStringMatchLen = ServerDebugService.stringMatchLen.bind(ServerDebugService);
   static debugAccepted = ServerDebugService.accepted.bind(ServerDebugService);
 
-  // Admin — TIME, DBSIZE, ROLE, FLUSH*, MONITOR, SAVE / BGSAVE / BGREWRITEAOF / LASTSAVE, SHUTDOWN, WAIT, WAITAOF
+  // Admin — TIME, DBSIZE, ROLE, MODULE, FLUSH*, MONITOR, SAVE / BGSAVE / BGREWRITEAOF / LASTSAVE, SHUTDOWN, WAIT, WAITAOF
   static time = ServerAdminService.time.bind(ServerAdminService);
   static dbSize = ServerAdminService.dbSize.bind(ServerAdminService);
   static role = ServerAdminService.role.bind(ServerAdminService);
+  static moduleList = ServerAdminService.moduleList.bind(ServerAdminService);
+  static moduleHelp = ServerAdminService.moduleHelp.bind(ServerAdminService);
+  static moduleNotAllowed = ServerAdminService.moduleNotAllowed.bind(ServerAdminService);
   static flush = ServerAdminService.flush.bind(ServerAdminService);
   static monitor = ServerAdminService.monitor.bind(ServerAdminService);
   static save = ServerAdminService.save.bind(ServerAdminService);

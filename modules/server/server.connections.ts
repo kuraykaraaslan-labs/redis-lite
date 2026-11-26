@@ -8,11 +8,16 @@ import TrackingService from '@/modules/tracking/tracking.service';
 import { Client } from './server.client';
 import type { RedisLiteServer } from './server.core';
 import ServerMessages from './server.messages';
+import type { PauseMode } from './server.types';
 
 /** Connections and their I/O: accepting sockets, parsing requests, running a client's queued commands, closing. */
 export class ServerConnections {
-  /** FAILOVER: write commands of normal clients wait (Client.paused) until resumeWrites(). */
-  writesPaused = false;
+  /** What normal clients may not run now: FAILOVER and CLIENT PAUSE WRITE hold writes, CLIENT PAUSE ALL every command. */
+  pauseMode: PauseMode | null = null;
+  /** FAILOVER holds writes until resumeWrites(). */
+  private failoverPause = false;
+  /** CLIENT PAUSE: the mode and the end (ms) until CLIENT UNPAUSE or the timer. */
+  private clientPause: { mode: PauseMode; end: number; timer: NodeJS.Timeout } | null = null;
   private nextClientId = 1;
   private readonly clientsById = new Map<number, Client>();
   private readonly pausedClients = new Set<Client>();
@@ -61,14 +66,38 @@ export class ServerConnections {
     this.pausedClients.add(client);
   }
 
+  /** FAILOVER: write commands of normal clients wait until resumeWrites(). */
+  pauseWrites(): void {
+    this.failoverPause = true;
+    this.updatePauseMode();
+  }
+
   resumeWrites(): void {
-    this.writesPaused = false;
-    const clients = [...this.pausedClients];
-    this.pausedClients.clear();
-    for (const client of clients) {
-      client.paused = false;
-      this.drain(client);
-    }
+    this.failoverPause = false;
+    this.updatePauseMode();
+  }
+
+  /**
+   * CLIENT PAUSE timeout mode: a pause already running keeps the stricter mode and the later end of the two. Paused
+   * clients run again on CLIENT UNPAUSE or when the time is up.
+   */
+  pauseClients(mode: PauseMode, ms: number): void {
+    const now = Date.now();
+    const current = this.clientPause;
+    const end = Math.max(now + ms, current?.end ?? 0);
+    const strict: PauseMode = mode === 'all' || current?.mode === 'all' ? 'all' : 'write';
+    if (current) clearTimeout(current.timer);
+    const timer = setTimeout(() => this.unpauseClients(), Math.max(0, end - now));
+    timer.unref();
+    this.clientPause = { mode: strict, end, timer };
+    this.updatePauseMode();
+  }
+
+  /** CLIENT UNPAUSE, or the CLIENT PAUSE timeout. */
+  unpauseClients(): void {
+    if (this.clientPause) clearTimeout(this.clientPause.timer);
+    this.clientPause = null;
+    this.updatePauseMode();
   }
 
   clientById(id: number): Client | undefined {
@@ -133,6 +162,7 @@ export class ServerConnections {
   closeAll(): void {
     const server = this.server;
     this.pausedClients.clear();
+    this.unpauseClients();
     for (const client of server.clients) {
       client.closed = true;
       client.socket?.destroy();
@@ -140,5 +170,24 @@ export class ServerConnections {
     server.clients.clear();
     this.clientsById.clear();
     server.keyspace.watches.clear();
+  }
+
+  // ──────────────────────────────────────────────
+  // Private Helpers
+  // ──────────────────────────────────────────────
+
+  /** Recomputes the pause mode from FAILOVER and CLIENT PAUSE; clients parked by a mode that ended run again. */
+  private updatePauseMode(): void {
+    const pause = this.clientPause;
+    const before = this.pauseMode;
+    this.pauseMode = pause?.mode === 'all' ? 'all' : pause || this.failoverPause ? 'write' : null;
+    if (this.pauseMode === before || this.pauseMode === 'all') return;
+    // a lighter pause: the dispatcher parks again the clients whose next command is still held
+    const clients = [...this.pausedClients];
+    this.pausedClients.clear();
+    for (const client of clients) {
+      client.paused = false;
+      this.drain(client);
+    }
   }
 }

@@ -3,14 +3,15 @@ import { formatMessage } from '@/libs/message-format';
 import { RespParser } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import type LuaReplyConverter from './scripting.convert.engine';
+import LuaReplyConverter from './scripting.convert.engine';
 import ScriptingMessages from './scripting.messages';
 import type LuaStack from './scripting.stack.engine';
 import type { FunctionMeta, LibraryMetadata, LuaLibrary } from './scripting.types';
 
 /**
  * Redis Functions: the FUNCTION libraries of one Lua state. Loading runs the library body under the prelude's
- * `__rl_begin_load` … `__rl_commit` protocol, which collects its redis.register_function calls.
+ * begin_load … commit protocol (RL helpers), which gives the body its load-time environment and collects its
+ * redis.register_function calls. Function names are unique case-insensitively across libraries (FCALL ignores case).
  */
 export default class LuaFunctionLibraries {
   // ──────────────────────────────────────────────
@@ -20,6 +21,11 @@ export default class LuaFunctionLibraries {
 
   /** FUNCTION libraries by name. */
   readonly libraries = new Map<string, LuaLibrary>();
+  /**
+   * Each function by lowercased name: its library and its name as registered (of names differing only in case, the
+   * last registered, like the prelude's table of callable functions).
+   */
+  private readonly owners = new Map<string, { library: LuaLibrary; name: string }>();
 
   constructor(
     private readonly stack: LuaStack,
@@ -52,15 +58,14 @@ export default class LuaFunctionLibraries {
     return { engine, name };
   }
 
-  /** Calls a prelude helper with string arguments and returns its (converted) result. */
-  private callGlobal(name: string, args: string[]): Reply {
+  /** Calls an RL helper with string arguments and returns its (converted) result. */
+  private callHelper(name: string, args: string[]): Reply {
     const { lw, L } = this.stack;
-    lw.lua_getglobal(L, name);
-    for (const a of args) this.stack.pushBytes(L, a);
+    this.stack.callHelper(name, 1, () => {
+      for (const a of args) this.stack.pushBytes(L, a);
+      return args.length;
+    });
     try {
-      if (lw.lua_pcallk(L, args.length, 1, 0, 0, null) !== 0) {
-        throw new Error(formatMessage(ScriptingMessages.PRELUDE_CALL_FAILED, { name, error: this.stack.errorText() }));
-      }
       return this.converter.toReply(-1);
     } finally {
       lw.lua_settop(L, 0);
@@ -69,7 +74,7 @@ export default class LuaFunctionLibraries {
 
   /** Aborts a load in progress and throws `message`. */
   private abort(message: string): never {
-    this.callGlobal('__rl_abort_load', []);
+    this.callHelper('abort_load', []);
     throw new AppError(message);
   }
 
@@ -77,40 +82,55 @@ export default class LuaFunctionLibraries {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** FUNCTION LOAD: runs the library body, collecting redis.register_function calls. Returns the library name. */
-  load(code: string, replace: boolean): string {
+  /**
+   * FUNCTION LOAD (and FUNCTION RESTORE, `restore`): runs the library body, collecting redis.register_function calls.
+   * Returns the library name.
+   */
+  load(code: string, replace: boolean, restore = false): string {
     const { lw, L } = this.stack;
     const newline = code.indexOf('\n');
     const { engine, name: libName } = LuaFunctionLibraries.parseMetadata(newline < 0 ? code : code.slice(0, newline), code);
     if (!LuaFunctionLibraries.LIBRARY_NAME_RE.test(libName)) throw new AppError(ScriptingMessages.LIBRARY_NAME_INVALID);
     if (engine.toLowerCase() !== 'lua') throw new AppError(formatMessage(ScriptingMessages.ENGINE_NOT_FOUND, { engine }));
     const existing = this.libraries.get(libName);
-    if (existing && !replace) throw new AppError(formatMessage(ScriptingMessages.LIBRARY_EXISTS, { name: libName }));
+    if (existing && !replace) {
+      const text = restore ? ScriptingMessages.RESTORE_LIBRARY_EXISTS : ScriptingMessages.LIBRARY_EXISTS;
+      throw new AppError(formatMessage(text, { name: libName }));
+    }
 
     // Keep line numbers: the shebang line becomes an empty line.
     const body = newline < 0 ? '' : `\n${code.slice(newline + 1)}`;
-    this.callGlobal('__rl_begin_load', []);
     const loadError = this.stack.load(body, '@user_function');
-    if (loadError !== null) this.abort(formatMessage(ScriptingMessages.COMPILE_FUNCTION, { error: loadError }));
+    if (loadError !== null) {
+      throw new AppError(formatMessage(ScriptingMessages.COMPILE_FUNCTION, { error: LuaReplyConverter.toLua51(loadError) }));
+    }
+    // begin_load(chunk) gives the chunk the libraries' environment; the chunk stays below the helper's (absent) result
+    lw.lua_pushvalue(L, -1);
+    this.stack.callHelper('begin_load', 0, () => {
+      lw.lua_rotate(L, -2, 1);
+      return 1;
+    });
     if (lw.lua_pcallk(L, 0, 0, 0, 0, null) !== 0) {
-      const msg = this.stack.errorText();
+      const msg = this.converter.errorMessage();
       lw.lua_settop(L, 0);
       this.abort(formatMessage(ScriptingMessages.REGISTER_FUNCTIONS, { error: msg }));
     }
-    const names = this.callGlobal('__rl_finish_load', []) as string[];
+    const names = this.callHelper('finish_load', []) as string[];
     if (!names.length) this.abort(ScriptingMessages.NO_FUNCTIONS);
     for (const fn of names) {
-      const owner = this.owner(fn);
-      if (owner && owner !== libName) this.abort(formatMessage(ScriptingMessages.FUNCTION_EXISTS, { name: fn }));
+      const owner = this.owners.get(fn.toLowerCase());
+      if (owner && owner.library.name !== libName) this.abort(formatMessage(ScriptingMessages.FUNCTION_EXISTS, { name: fn }));
     }
     const meta = new Map<string, FunctionMeta>();
     for (const fn of names) {
-      const raw = this.callGlobal('__rl_staged_meta', [fn]) as Reply[];
+      const raw = this.callHelper('staged_meta', [fn]) as Reply[];
       meta.set(fn, { description: raw[0] === 1 ? (raw[1] as string) : null, flags: raw.slice(2) as string[] });
     }
-    if (existing) for (const fn of existing.functions) this.callGlobal('__rl_unregister', [fn]);
-    this.callGlobal('__rl_commit', []);
-    this.libraries.set(libName, { name: libName, code, functions: names, meta });
+    if (existing) this.delete(libName);
+    this.callHelper('commit', []);
+    const library: LuaLibrary = { name: libName, code, functions: [...names].sort(), meta };
+    this.libraries.set(libName, library);
+    for (const fn of names) this.owners.set(fn.toLowerCase(), { library, name: fn });
     return libName;
   }
 
@@ -118,23 +138,23 @@ export default class LuaFunctionLibraries {
   delete(name: string): boolean {
     const lib = this.libraries.get(name);
     if (!lib) return false;
-    for (const fn of lib.functions) this.callGlobal('__rl_unregister', [fn]);
+    for (const fn of lib.functions) {
+      this.callHelper('unregister', [fn]);
+      this.owners.delete(fn.toLowerCase());
+    }
     this.libraries.delete(name);
     return true;
   }
 
-  /** The library that registered function `fn`. */
+  /** The library that registered function `fn` (case-insensitive). */
   owner(fn: string): string | undefined {
-    for (const lib of this.libraries.values()) if (lib.functions.includes(fn)) return lib.name;
-    return undefined;
+    return this.owners.get(fn.toLowerCase())?.library.name;
   }
 
-  /** Description and flags of function `fn`. */
-  meta(fn: string): FunctionMeta | undefined {
-    for (const lib of this.libraries.values()) {
-      const meta = lib.meta.get(fn);
-      if (meta) return meta;
-    }
-    return undefined;
+  /** Function `fn` (case-insensitive): its name as registered, description and flags. */
+  find(fn: string): ({ name: string } & FunctionMeta) | undefined {
+    const owner = this.owners.get(fn.toLowerCase());
+    const meta = owner?.library.meta.get(owner.name);
+    return owner && meta ? { name: owner.name, ...meta } : undefined;
   }
 }

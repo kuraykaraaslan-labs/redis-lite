@@ -34,9 +34,19 @@ export const RespMessages = {
   PROTOCOL_EXPECTED_DOLLAR: "Protocol error: expected '$', got '{got}'",
 } as const;
 
+/** Longest name, and longest argument listing, an unknown-command error quotes. */
+const UNKNOWN_COMMAND_LISTING = 128;
+
+/**
+ * The unknown-command error: the name cut to 128 characters, then `'arg' ` items while the listing is shorter than 128
+ * characters, each argument cut to what is left of those 128.
+ */
 export function unknownCommand(name: string, args: string[]): string {
-  const shown = args.slice(0, 20).map((a) => `'${a.slice(0, 128)}'`).join(' ');
-  return formatMessage(RespMessages.UNKNOWN_COMMAND, { command: name, args: shown ? `${shown} ` : '' });
+  let shown = '';
+  for (let i = 0; i < args.length && shown.length < UNKNOWN_COMMAND_LISTING; i++) {
+    shown += `'${args[i].slice(0, UNKNOWN_COMMAND_LISTING - shown.length)}' `;
+  }
+  return formatMessage(RespMessages.UNKNOWN_COMMAND, { command: name.slice(0, UNKNOWN_COMMAND_LISTING), args: shown });
 }
 
 export function wrongArity(name: string): string {

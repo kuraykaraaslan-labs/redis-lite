@@ -41,7 +41,8 @@ export default class StreamsAppendService {
       return now > s.lastId.ms ? { ms: now, seq: 0n } : (nextId(s.lastId) as StreamId);
     }
     if (seqGiven || s.lastId.ms !== id.ms) return id;
-    if (s.lastId.seq === U64_MAX) throw new AppError(StreamsMessages.ID_SMALL);
+    // Redis streamAppendItem() cannot go past the last sequence of that ms and answers with its generic EDOM error
+    if (s.lastId.seq === U64_MAX) throw new AppError(StreamsMessages.ID_SEQ_OVERFLOW);
     return { ms: id.ms, seq: s.lastId.seq + 1n };
   }
 

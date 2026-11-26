@@ -4,6 +4,7 @@ import type { Reply } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import DatabaseService from '@/modules/database/database.service';
 
 import type { CombineInput, CombineStoreInput } from './zsets.dto';
 import { ZSet } from './zsets.structure';
@@ -15,7 +16,10 @@ export default class ZSetsCombineService {
   // Private Helpers
   // ──────────────────────────────────────────────
 
-  /** Applies the operation with WEIGHTS and AGGREGATE; a NaN score (inf * 0, inf - inf) becomes 0, as in Redis. */
+  /**
+   * Applies the operation with WEIGHTS and AGGREGATE. As in Redis, a NaN is replaced by 0 where it appears: a weighted
+   * score (inf × 0) before it is aggregated, and a sum (inf + -inf).
+   */
   private static combine(sources: ScoreSource[], { op, weights, aggregate }: CombineInput): ZSet {
     const acc = new Map<string, number>();
     if (op === 'diff') {
@@ -25,10 +29,14 @@ export default class ZSetsCombineService {
     } else {
       sources.forEach((src, j) => {
         for (const [member, score] of src) {
-          const weighted = score * weights[j];
+          const product = score * weights[j];
+          const weighted = Number.isNaN(product) ? 0 : product;
           const current = acc.get(member);
           if (current === undefined) acc.set(member, weighted);
-          else if (aggregate === 'sum') acc.set(member, current + weighted);
+          else if (aggregate === 'sum') {
+            const sum = current + weighted;
+            acc.set(member, Number.isNaN(sum) ? 0 : sum);
+          }
           else acc.set(member, aggregate === 'min' ? Math.min(current, weighted) : Math.max(current, weighted));
         }
       });
@@ -66,6 +74,8 @@ export default class ZSetsCombineService {
   /** ZUNIONSTORE / ZINTERSTORE / ZDIFFSTORE: an empty result deletes the destination. */
   static store(ctx: CommandContext, input: CombineStoreInput, sources: ScoreSource[]): number {
     const out = ZSetsCombineService.combine(sources, input);
+    // a compact destination stores -0 as 0 (Redis converts the result to a listpack)
+    if (DatabaseService.isCompact({ type: 'zset', value: out }, ctx.server.config)) out.clearNegativeZeros();
     if (out.size) ctx.db.set(input.destination, { type: 'zset', value: out });
     else ctx.db.remove(input.destination);
     return out.size;

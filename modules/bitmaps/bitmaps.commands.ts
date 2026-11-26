@@ -44,11 +44,11 @@ export const bitmapCommands: CommandSpec[] = [
   {
     name: 'bitpos',
     arity: -3,
-    // the bit first, then the key (WRONGTYPE), then the range; an empty string answers without parsing the range
+    // the bit first, then the key (WRONGTYPE), then the range; a missing key answers without parsing the range
     handler: (ctx, args) =>
       validated(BitPosBitDTO, args, (bitInput) => {
-        const bytes = BitmapsService.read(ctx, bitInput.key);
-        if (!bytes.length) return BitmapsService.bitPosEmpty(bitInput);
+        const bytes = BitmapsService.readExisting(ctx, bitInput.key);
+        if (bytes === null) return BitmapsService.bitPosMissing(bitInput);
         return validated(BitPosDTO, args, (input) => BitmapsService.bitPos(bytes, input));
       }),
   },

@@ -42,6 +42,9 @@ export const ServerMessages = {
   CONFIG_INT: "argument couldn't be parsed into an integer",
   CONFIG_RANGE: 'argument must be between {min} and {max} inclusive',
   CONFIG_MEMORY: 'argument must be a memory value',
+  CONFIG_MEMORY_OR_PERCENT: 'argument must be a memory or percent value',
+  CONFIG_PERCENTILES: 'Invalid latency-tracking-info-percentiles parameters',
+  CONFIG_PERCENT_RANGE: 'percentage argument must be less or equal to 100',
   CONFIG_KEYSPACE_EVENTS: "Invalid event class character. Use 'Ag$lshzxeKEtmdn'.",
   CONFIG_SAVE: 'Invalid save parameters',
   CONF_FATAL: "\n*** FATAL CONFIG FILE ERROR (Redis {version}) ***\nReading the configuration file, at line {line}\n>>> '{text}'\n{reason}",
@@ -58,6 +61,10 @@ export const ServerMessages = {
   CONFIG_IMMUTABLE: "can't set immutable config",
   CONFIG_DUPLICATE: 'duplicate parameter',
   NO_CONFIG_FILE: 'ERR The server is running without a config file',
+
+  // MODULE
+  MODULE_NOT_ALLOWED:
+    'ERR MODULE command not allowed. If the enable-module-command option is set to "local", you can run it from a local connection, otherwise you need to set this option in the configuration file, and then restart the server.',
 
   // ============================================================================
   // COMMAND
@@ -90,7 +97,7 @@ export const ServerMessages = {
   // ============================================================================
   // MEMORY
   // ============================================================================
-  MALLOC_STATS: 'Stats not supported for the current allocator',
+  MALLOC_STATS: '___ Begin jemalloc statistics ___\n{totals}\n--- End jemalloc statistics ---\n',
   MEMORY_DOCTOR_EMPTY:
     "Hi Sam, this instance is empty or is using very little memory, my issues detector can't be used in these conditions. Please, leave for your mission on Earth and fill it with some data. The new Sam and I will be back to our programming as soon as I finished rebooting.\n",
   MEMORY_DOCTOR_OK: "Hi Sam, I can't find any memory issue in your instance. I can only account for what occurs on this base.\n",

@@ -114,7 +114,7 @@ describe('FCALL / FCALL_RO', () => {
     expect(await errorOf(t.call('FCALL', 'no_such_fn', 0))).toBe('ERR Function not found');
     expect(await errorOf(t.call('FCALL', 'fa_echo', 2, 'a'))).toBe("ERR Number of keys can't be greater than number of args");
     expect(await errorOf(t.call('FCALL', 'fa_echo', -1))).toBe("ERR Number of keys can't be negative");
-    expect(await errorOf(t.call('FCALL', 'fa_echo', 'x'))).toBe('ERR value is not an integer or out of range');
+    expect(await errorOf(t.call('FCALL', 'fa_echo', 'x'))).toBe('ERR Bad number of keys provided');
     expect(await errorOf(t.call('FCALL', 'fa_echo'))).toBe("ERR wrong number of arguments for 'fcall' command");
   });
 
@@ -210,8 +210,9 @@ describe('FUNCTION DUMP / RESTORE', () => {
     await t.call('FUNCTION', 'FLUSH');
     await t.call('FUNCTION', 'LOAD', LIB_A);
     const payload = await dump();
-    expect(await errorOf(t.call('FUNCTION', 'RESTORE', payload))).toBe("ERR Library 'liba' already exists");
-    expect(await errorOf(t.call('FUNCTION', 'RESTORE', payload, 'APPEND'))).toBe("ERR Library 'liba' already exists");
+    // RESTORE does not quote the name (FUNCTION LOAD does)
+    expect(await errorOf(t.call('FUNCTION', 'RESTORE', payload))).toBe('ERR Library liba already exists');
+    expect(await errorOf(t.call('FUNCTION', 'RESTORE', payload, 'APPEND'))).toBe('ERR Library liba already exists');
   });
 
   it('APPEND adds to other libraries', async () => {
@@ -245,7 +246,7 @@ describe('FUNCTION DUMP / RESTORE', () => {
   });
 
   it('invalid payload and invalid policy', async () => {
-    expect(await errorOf(t.call('FUNCTION', 'RESTORE', 'garbage'))).toBe('ERR payload version or checksum are wrong');
+    expect(await errorOf(t.call('FUNCTION', 'RESTORE', 'garbage'))).toBe('ERR DUMP payload version or checksum are wrong');
     const payload = await dump();
     // unverified: exact wording of the policy error
     expect(await errorOf(t.call('FUNCTION', 'RESTORE', payload, 'BOGUS'))).toMatch(/^ERR Wrong restore policy given/);

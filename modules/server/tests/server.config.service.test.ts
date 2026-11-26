@@ -1,6 +1,11 @@
+import { createServer } from 'node:net';
+import type { AddressInfo } from 'node:net';
+
 import { describe, expect, it } from 'vitest';
 
-import { useServer } from '@/tests/helpers';
+import Redis from 'ioredis';
+
+import { eventually, useServer } from '@/tests/helpers';
 
 import { errOf, pairs } from './server.test_helpers';
 
@@ -34,8 +39,8 @@ describe('CONFIG', () => {
   });
 
   it('GET of an alias returns the alias name', async () => {
-    expect.soft(await t.call('CONFIG', 'GET', 'hash-max-ziplist-entries')).toEqual(['hash-max-ziplist-entries', '128']);
-    expect.soft(await t.call('CONFIG', 'GET', 'hash-max-listpack-entries')).toEqual(['hash-max-listpack-entries', '128']);
+    expect.soft(await t.call('CONFIG', 'GET', 'hash-max-ziplist-entries')).toEqual(['hash-max-ziplist-entries', '512']);
+    expect.soft(await t.call('CONFIG', 'GET', 'hash-max-listpack-entries')).toEqual(['hash-max-listpack-entries', '512']);
   });
 
   it('SET through an alias changes the real option', async () => {
@@ -59,9 +64,7 @@ describe('CONFIG', () => {
       "ERR CONFIG SET failed (possibly related to argument 'maxmemory') - argument must be a memory value",
     );
     expect.soft(await errOf(t.call('CONFIG', 'SET', 'maxmemory'))).toBe("ERR wrong number of arguments for 'config|set' command");
-    expect.soft(await errOf(t.call('CONFIG', 'SET', 'maxmemory', '1', 'maxmemory-samples'))).toBe(
-      "ERR wrong number of arguments for 'config|set' command",
-    );
+    expect.soft(await errOf(t.call('CONFIG', 'SET', 'maxmemory', '1', 'maxmemory-samples'))).toBe('ERR syntax error');
     expect.soft(await errOf(t.call('CONFIG', 'SET', 'maxmemory-policy', 'bogus'))).toMatch(
       /^ERR CONFIG SET failed \(possibly related to argument 'maxmemory-policy'\) - argument\(s\) must be one of the following: /,
     );
@@ -83,6 +86,29 @@ describe('CONFIG', () => {
     expect.soft(await t.call('CONFIG', 'RESETSTAT')).toBe('OK');
     expect.soft(String(await t.call('INFO', 'stats'))).toContain('total_error_replies:0');
     expect.soft(await errOf(t.call('CONFIG', 'RESETSTAT', 'x'))).toBe("ERR wrong number of arguments for 'config|resetstat' command");
+  });
+
+  it('SET port listens on the new port', async () => {
+    const free = await new Promise<number>((resolve) => {
+      const probe = createServer().listen(0, '127.0.0.1', () => {
+        const { port } = probe.address() as AddressInfo;
+        probe.close(() => resolve(port));
+      });
+    });
+    const old = t.server.port;
+    expect.soft(await t.call('CONFIG', 'SET', 'port', String(free))).toBe('OK');
+    const moved = new Redis(free, '127.0.0.1', { maxRetriesPerRequest: null, retryStrategy: () => null });
+    try {
+      await eventually(async () => expect(await moved.ping()).toBe('PONG'));
+      expect.soft(await moved.call('CONFIG', 'GET', 'port')).toEqual(['port', String(free)]);
+      // connections made before the move stay; the move back works the same way
+      expect.soft(await t.call('CONFIG', 'SET', 'port', String(old))).toBe('OK');
+    } finally {
+      moved.disconnect();
+    }
+    expect.soft(await errOf(t.call('CONFIG', 'SET', 'port', 'abc'))).toBe(
+      "ERR CONFIG SET failed (possibly related to argument 'port') - argument couldn't be parsed into an integer",
+    );
   });
 
   it('GET in RESP3 is a map', async () => {

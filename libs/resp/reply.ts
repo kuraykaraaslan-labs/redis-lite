@@ -104,5 +104,10 @@ export function formatDouble(n: number): string {
   if (n === Infinity) return 'inf';
   if (n === -Infinity) return '-inf';
   if (Object.is(n, -0)) return '-0';
+  if (n === 0) return '0';
+  // shortest round-trip digits in the %.17g layout: exponent form below 1e-4 and from 1e17, two exponent digits at least
+  const [digits, exponent] = n.toExponential().split('e');
+  const e = Number(exponent);
+  if (e < -4 || e >= 17) return `${digits}e${e < 0 ? '-' : '+'}${String(Math.abs(e)).padStart(2, '0')}`;
   return String(n);
 }

@@ -5,7 +5,7 @@ import { AclCategoryEnum } from '@/modules/acl/acl.enums';
 import { COMMAND_FLAG_ORDER } from './command.enums';
 import CommandMessages from './command.messages';
 import type { Row } from './command.meta_table';
-import { COMMAND_TABLE } from './command.meta_table';
+import { COMMAND_HISTORY, COMMAND_TABLE } from './command.meta_table';
 import type { ArgDoc, BeginSearch, CommandLookup, CommandMeta, CommandSpec, FindKeys, KeySpec } from './command.types';
 
 /**
@@ -97,7 +97,7 @@ export default class CommandLookupService {
   private static parseKeySpecs(spec: string): KeySpec[] {
     if (!spec) return [];
     return spec.split(';').map((one) => {
-      const [flags, begin = '1', find = '0'] = one.split('|');
+      const [flags, begin = '1', find = '0', ...notes] = one.split('|');
       let b: BeginSearch;
       if (begin === '?') b = { type: 'unknown' };
       else if (/^-?\d+$/.test(begin)) b = { type: 'index', index: Number(begin) };
@@ -114,7 +114,9 @@ export default class CommandLookupService {
         const [last, step = '1', limit = '0'] = find.split('/');
         f = { type: 'range', lastkey: Number(last), keystep: Number(step), limit: Number(limit) };
       }
-      return { flags: flags.split(' ').filter(Boolean), begin: b, find: f };
+      const spec: KeySpec = { flags: flags.split(' ').filter(Boolean), begin: b, find: f };
+      if (notes.length) spec.notes = notes.join('|');
+      return spec;
     });
   }
 
@@ -125,8 +127,8 @@ export default class CommandLookupService {
     let step = 0;
     let prevLast = 0;
     for (const s of specs) {
+      // not_key specs count too: Redis reports the channels of SSUBSCRIBE / SPUBLISH as legacy key positions
       if (s.begin.type !== 'index' || s.find.type !== 'range') continue;
-      if (s.flags.includes('not_key')) continue;
       const index = s.begin.index;
       const specLast = s.find.lastkey >= 0 ? index + s.find.lastkey : s.find.lastkey;
       if (!first) {
@@ -188,6 +190,7 @@ export default class CommandLookupService {
       docFlags: (extra?.docFlags ?? '').split(' ').filter(Boolean),
       deprecatedSince: extra?.dep?.[0],
       replacedBy: extra?.dep?.[1],
+      history: COMMAND_HISTORY[parent ? `${parent.name}|${name}` : name] ?? [],
       args: CommandLookupService.parseArgs(argStr),
       parent,
       module,

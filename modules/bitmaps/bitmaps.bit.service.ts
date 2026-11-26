@@ -44,7 +44,7 @@ export default class BitmapsBitService {
   // ──────────────────────────────────────────────
 
   /** GETBIT on the bytes read before the offset was parsed (WRONGTYPE beats a bad offset). */
-  static getBit(ctx: CommandContext, bytes: number[], { offset }: GetBitInput): number {
+  static getBit(ctx: CommandContext, bytes: Uint8Array, { offset }: GetBitInput): number {
     BitmapStore.checkOffset(ctx, offset);
     return BitmapStore.getBit(bytes, offset);
   }
@@ -55,19 +55,18 @@ export default class BitmapsBitService {
     if (issue !== null) return new RespError(issue);
     const bytes = BitmapStore.read(ctx, key);
     const old = BitmapStore.getBit(bytes, offset);
-    BitmapStore.setBit(bytes, offset, bit);
-    BitmapStore.write(ctx, key, bytes);
+    BitmapStore.write(ctx, key, BitmapStore.setBit(bytes, offset, bit));
     return old;
   }
 
   /** BITCOUNT on the bytes read before the range was parsed. */
-  static bitCount(bytes: number[], { range }: BitCountInput): number {
+  static bitCount(bytes: Uint8Array, { range }: BitCountInput): number {
     const r = BitmapsBitService.resolveRange(bytes.length, range);
     if (!r) return 0;
     let n = 0;
     for (let bit = r[0]; bit <= r[1]; ) {
       if ((bit & 7) === 0 && bit + 7 <= r[1]) {
-        n += BitmapsBitService.popcount(bytes[bit >> 3]);
+        n += BitmapsBitService.popcount(bytes[bit >>> 3]);
         bit += 8;
       } else {
         n += BitmapStore.getBit(bytes, bit);
@@ -77,13 +76,13 @@ export default class BitmapsBitService {
     return n;
   }
 
-  /** BITPOS on an empty (or missing) string: no set bit, and the first clear bit is bit 0. The range is not parsed. */
-  static bitPosEmpty({ bit }: BitPosBitInput): number {
+  /** BITPOS on a missing key: no set bit, and the first clear bit is bit 0. The range is not parsed. */
+  static bitPosMissing({ bit }: BitPosBitInput): number {
     return bit ? -1 : 0;
   }
 
   /** BITPOS: the first bit equal to `bit` in the range, -1 when none. */
-  static bitPos(bytes: number[], { bit, range, explicitEnd }: BitPosInput): number {
+  static bitPos(bytes: Uint8Array, { bit, range, explicitEnd }: BitPosInput): number {
     const r = BitmapsBitService.resolveRange(bytes.length, range);
     if (!r) return -1;
     for (let i = r[0]; i <= r[1]; i++) if (BitmapStore.getBit(bytes, i) === bit) return i;

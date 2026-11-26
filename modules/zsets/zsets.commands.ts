@@ -124,11 +124,8 @@ export const zsetCommands: CommandSpec[] = [
   {
     name: 'zrandmember',
     arity: -2,
-    // read first: WRONGTYPE beats a bad count
-    handler: (ctx, args) => {
-      const zset = ZSetsService.get(ctx, { key: args[0] });
-      return validated(ZRandMemberDTO, args, (input) => ZSetsService.randMember(zset, input));
-    },
+    // parse first: a bad count (or WITHSCORES range) beats WRONGTYPE, as in Redis
+    handler: (ctx, args) => validated(ZRandMemberDTO, args, (input) => ZSetsService.randMember(ZSetsService.get(ctx, { key: input.key }), input)),
   },
 
   // ============================================================================

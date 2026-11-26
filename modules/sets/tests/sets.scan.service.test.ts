@@ -34,5 +34,8 @@ describe('sets: SSCAN', () => {
     await expect(t.call('SSCAN', 's:scan', 0, 'COUNT', 0)).rejects.toThrow(SYNTAX);
     await expect(t.call('SSCAN', 's:scan', 0, 'FOO')).rejects.toThrow(SYNTAX);
     await expect(t.call('SSCAN', 's:scan')).rejects.toThrow(arity('sscan'));
+    // NOVALUES is HSCAN's, TYPE the keyspace SCAN's
+    await expect(t.call('SSCAN', 's:scan', 0, 'NOVALUES')).rejects.toThrow(SYNTAX);
+    await expect(t.call('SSCAN', 's:scan', 0, 'TYPE', 'set')).rejects.toThrow(SYNTAX);
   });
 });

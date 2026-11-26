@@ -1,4 +1,5 @@
 import { AppError } from '@/libs/app-error';
+import { RespError } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
 
@@ -36,6 +37,36 @@ export default class ListStore {
   /** The list at `key`; undefined when missing; WRONGTYPE otherwise. */
   static read(ctx: CommandContext, key: string): ListValue | undefined {
     return ctx.db.get(key, 'list');
+  }
+
+  /**
+   * The list at `key` for a blocked client being served: a key of another type counts as not ready (undefined), never
+   * as WRONGTYPE. Redis leaves such a client blocked until the key holds a list again (or another of its keys does).
+   */
+  static readServing(ctx: CommandContext, key: string): ListValue | undefined {
+    const value = ctx.db.lookup(key);
+    return value?.type === 'list' ? value.value : undefined;
+  }
+
+  /**
+   * The attempt of a blocking command: `attempt(false)` runs as the command itself (errors are thrown as usual); every
+   * later call serves the blocked client (`attempt(true)`), where an error becomes the client's reply instead of being
+   * thrown out of the server's wake-up loop.
+   */
+  static blockingAttempt(attempt: (serving: boolean) => Reply | undefined): () => Reply | undefined {
+    let serving = false;
+    return () => {
+      if (!serving) {
+        serving = true;
+        return attempt(false);
+      }
+      try {
+        return attempt(true);
+      } catch (err) {
+        if (err instanceof AppError) return new RespError(err.message);
+        throw err;
+      }
+    };
   }
 
   /** Overwrites the element at `index` (0 ≤ index < length) in place. */
@@ -90,10 +121,22 @@ export default class ListStore {
     return value;
   }
 
-  /** BLPOP / BRPOP attempt: one element from the first non-empty key, as `[key, element]`. */
-  static popFirst(ctx: CommandContext, keys: string[], left: boolean): Reply | undefined {
+  /**
+   * BLMOVE / BRPOPLPUSH serving a blocked client: a source of another type is not ready; a destination of another type
+   * answers WRONGTYPE (the client is unblocked with the error and the source keeps its element), as in Redis.
+   */
+  static serveMove(ctx: CommandContext, source: string, destination: string, from: ListSide, to: ListSide): Reply | undefined {
+    const s = ListStore.readServing(ctx, source);
+    if (!s || !s.length) return undefined;
+    const d = ctx.db.lookup(destination);
+    if (d && d.type !== 'list') return new RespError(RespMessages.WRONGTYPE);
+    return ListStore.move(ctx, source, destination, from, to);
+  }
+
+  /** BLPOP / BRPOP attempt: one element from the first non-empty key, as `[key, element]` (`serving`: see readServing). */
+  static popFirst(ctx: CommandContext, keys: string[], left: boolean, serving = false): Reply | undefined {
     for (const key of keys) {
-      const l = ListStore.read(ctx, key);
+      const l = serving ? ListStore.readServing(ctx, key) : ListStore.read(ctx, key);
       if (!l || !l.length) continue;
       const value = (left ? l.shift() : l.pop()) as string;
       ctx.db.removeIfEmpty(key);
@@ -104,9 +147,9 @@ export default class ListStore {
   }
 
   /** LMPOP / BLMPOP attempt: up to `count` elements from the first non-empty key, as `[key, elements]`. */
-  static mPop(ctx: CommandContext, keys: string[], left: boolean, count: number): Reply | undefined {
+  static mPop(ctx: CommandContext, keys: string[], left: boolean, count: number, serving = false): Reply | undefined {
     for (const key of keys) {
-      const l = ListStore.read(ctx, key);
+      const l = serving ? ListStore.readServing(ctx, key) : ListStore.read(ctx, key);
       if (!l || !l.length) continue;
       const out = ListStore.take(l, left, count);
       ctx.db.removeIfEmpty(key);

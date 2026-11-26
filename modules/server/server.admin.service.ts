@@ -2,7 +2,7 @@ import { AppError } from '@/libs/app-error';
 import { OK } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { NO_REPLY } from '@/modules/command/command.service';
+import CommandService, { NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 
 import type { BgsaveInput, ShutdownInput, WaitAofInput, WaitInput } from './server.dto';
@@ -20,8 +20,23 @@ export default class ServerAdminService {
     return [String(us / 1000000n), String(us % 1000000n)];
   }
 
+  /** DBSIZE: the stored keys, expired ones that were not reclaimed yet included (as Redis counts them). */
   static dbSize(ctx: CommandContext): Reply {
-    return ctx.db.size;
+    return ctx.db.storedKeys;
+  }
+
+  /** MODULE LIST: redis-lite loads no module (its time series commands are built in). */
+  static moduleList(): Reply {
+    return [];
+  }
+
+  /** MODULE LOAD / LOADEX / UNLOAD: refused, as with `enable-module-command no`. */
+  static moduleNotAllowed(): Reply {
+    throw new AppError(ServerMessages.MODULE_NOT_ALLOWED);
+  }
+
+  static moduleHelp(): Reply {
+    return CommandService.helpReply('module');
   }
 
   /** ROLE: the replication role (the replication runtime answers). */

@@ -16,4 +16,5 @@ export default class TransactionsService {
 
   // Exec — EXEC
   static exec = TransactionsExecService.exec.bind(TransactionsExecService);
+  static inlineReply = TransactionsExecService.inlineReply.bind(TransactionsExecService);
 }

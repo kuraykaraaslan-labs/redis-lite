@@ -1,9 +1,10 @@
 import { AppError } from '@/libs/app-error';
 import { matchGlob } from '@/libs/glob';
-import { OK, RespMap, RespSet } from '@/libs/resp';
+import { OK, RespError, RespMap, RespSet, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import type { CommandContext } from '@/modules/command/command.types';
+import CommandService from '@/modules/command/command.service';
+import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 import PersistenceService from '@/modules/persistence/persistence.service';
 
 import type { FcallInput, FunctionInput } from './scripting.dto';
@@ -24,7 +25,7 @@ export default class ScriptingFunctionsService {
     for (const name of [...lua.libraries.keys()]) lua.deleteLibrary(name);
   }
 
-  /** One FUNCTION LIST entry. */
+  /** One FUNCTION LIST entry; flags are simple strings. */
   private static describe(lib: LuaLibrary, withCode: boolean): RespMap {
     const entry: Reply[] = [
       'library_name',
@@ -34,7 +35,8 @@ export default class ScriptingFunctionsService {
       'functions',
       lib.functions.map((f) => {
         const meta = lib.meta.get(f);
-        return RespMap.from(['name', f, 'description', meta?.description ?? null, 'flags', new RespSet(meta?.flags ?? [])]);
+        const flags = (meta?.flags ?? []).map((flag) => new Status(flag));
+        return RespMap.from(['name', f, 'description', meta?.description ?? null, 'flags', new RespSet(flags)]);
       }),
     ];
     if (withCode) entry.push('library_code', lib.code);
@@ -47,11 +49,17 @@ export default class ScriptingFunctionsService {
       .map((lib) => ScriptingFunctionsService.describe(lib, withCode));
   }
 
+  /** FUNCTION STATS: the running function (refused while an EVAL script runs) and the engine's counts. */
   private static stats(lua: LuaEngine): Reply {
+    const running = lua.running;
+    if (running?.kind === 'eval') return new RespError(ScriptingMessages.BUSY_SCRIPT);
+    const runningScript = running
+      ? RespMap.from(['name', running.name, 'command', running.command, 'duration_ms', Date.now() - running.startedAt])
+      : null;
     const libs = [...lua.libraries.values()];
     const functionsCount = libs.reduce((n, l) => n + l.functions.length, 0);
     const engine = RespMap.from(['libraries_count', libs.length, 'functions_count', functionsCount]);
-    return RespMap.from(['running_script', null, 'engines', RespMap.from(['LUA', engine])]);
+    return RespMap.from(['running_script', runningScript, 'engines', RespMap.from(['LUA', engine])]);
   }
 
   /** FUNCTION RESTORE: the payload is checked whole before any library changes. */
@@ -66,7 +74,7 @@ export default class ScriptingFunctionsService {
       );
     }
     if (policy === 'flush') ScriptingFunctionsService.deleteAll(lua);
-    for (const code of codes) lua.loadLibrary(code, policy === 'replace');
+    for (const code of codes) lua.loadLibrary(code, policy === 'replace', true);
     return OK;
   }
 
@@ -75,8 +83,10 @@ export default class ScriptingFunctionsService {
   // ──────────────────────────────────────────────
 
   /** FCALL / FCALL_RO (`readOnly`). */
-  static fcall(ctx: CommandContext, { name, keys, argv }: FcallInput, readOnly = false): Reply {
-    return ctx.server.lua.callFunction(ctx.client, name, keys, argv, readOnly);
+  static fcall(ctx: CommandContext, { name, keys, argv }: FcallInput, readOnly = false): HandlerResult {
+    const command = [ctx.name ?? 'FCALL', name, String(keys.length), ...keys, ...argv];
+    const call = { client: ctx.client, command, readOnly, topLevel: !ctx.noBlock && !ctx.inScript };
+    return ctx.server.lua.callFunction(call, name, keys, argv);
   }
 
   /** FUNCTION <subcommand>. */
@@ -100,9 +110,9 @@ export default class ScriptingFunctionsService {
       case 'restore':
         return ScriptingFunctionsService.restore(lua, input);
       case 'kill':
-        throw new AppError(ScriptingMessages.NOTBUSY);
+        return lua.kill('function') ?? OK;
       case 'help':
-        return [ScriptingMessages.FUNCTION_HELP];
+        return CommandService.helpReply('function', ScriptingMessages.FUNCTION_HELP);
     }
   }
 }

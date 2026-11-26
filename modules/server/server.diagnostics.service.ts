@@ -6,7 +6,7 @@ import type { Reply } from '@/libs/resp';
 import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 
-import type { LatencyEventInput, SlowlogGetInput } from './server.dto';
+import type { LatencyEventInput, LatencyHistogramInput, SlowlogGetInput } from './server.dto';
 import ServerMessages from './server.messages';
 
 /** Diagnostics: SLOWLOG and LATENCY (latency monitoring keeps no samples, so its reports are empty). */
@@ -53,8 +53,29 @@ export default class ServerDiagnosticsService {
     throw new AppError(formatMessage(ServerMessages.LATENCY_NO_SAMPLES, { event }));
   }
 
-  static latencyHistogram(): Reply {
-    return new RespMap([]);
+  /**
+   * LATENCY HISTOGRAM [command …]: per command, its calls and the cumulative call count per power-of-two µs bucket. A
+   * container name stands for its subcommands; unknown and never-called commands are left out, repeated names repeat.
+   */
+  static latencyHistogram(ctx: CommandContext, { names }: LatencyHistogramInput): Reply {
+    const stats = ctx.server.commandStats;
+    let selected: string[];
+    if (!names.length) selected = [...stats.keys()];
+    else {
+      selected = names.flatMap((n) => {
+        const meta = CommandService.getCommandMeta(n);
+        if (!meta) return [];
+        return meta.subcommands.size ? [...meta.subcommands.values()].map((m) => m.fullname) : [meta.fullname];
+      });
+    }
+    const entries: Array<[string, Reply]> = [];
+    for (const name of selected) {
+      const histogram = stats.get(name)?.histogram;
+      if (!histogram) continue;
+      const buckets = new RespMap(histogram.cumulativeBuckets());
+      entries.push([name, RespMap.from(['calls', histogram.calls, 'histogram_usec', buckets])]);
+    }
+    return new RespMap(entries);
   }
 
   static latencyDoctor(ctx: CommandContext): Reply {

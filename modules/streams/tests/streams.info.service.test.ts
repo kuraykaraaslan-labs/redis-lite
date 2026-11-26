@@ -16,6 +16,29 @@ const resp3 = () => openResp3(t);
 // XINFO / XSETID
 // ============================================================================
 describe('XINFO', () => {
+  it('STREAM radix-tree-nodes counts the nodes of the compressed trie of master ids', async () => {
+    const counters = async (key: string): Promise<[unknown, unknown]> => {
+      const m = toMap((await t.call('XINFO', 'STREAM', key)) as unknown[]);
+      return [m['radix-tree-keys'], m['radix-tree-nodes']];
+    };
+    // values observed on Redis 7.0: head + shared prefix, a branch per diverging byte, a leaf per key
+    for (let i = 1; i <= 250; i++) await t.call('XADD', 'xi:rax', `${i}-0`, 'f', 'v');
+    expect(await counters('xi:rax')).toEqual([3, 8]);
+    await t.call('XTRIM', 'xi:rax', 'MAXLEN', '~', '120');
+    expect(await counters('xi:rax')).toEqual([2, 6]);
+    await t.call('CONFIG', 'SET', 'stream-node-max-entries', '1');
+    try {
+      for (const id of ['1-0', '2-0', '65536-0']) await t.call('XADD', 'xi:rax2', id, 'f', 'v');
+      expect(await counters('xi:rax2')).toEqual([3, 10]);
+      await t.call('XDEL', 'xi:rax2', '2-0');
+      expect(await counters('xi:rax2')).toEqual([2, 6]);
+    } finally {
+      await t.call('CONFIG', 'SET', 'stream-node-max-entries', '100');
+    }
+    await t.call('XADD', 'xi:rax3', 'MAXLEN', '0', '1-0', 'f', 'v');
+    expect(await counters('xi:rax3')).toEqual([0, 1]);
+  });
+
   it('STREAM fields, order and values', async () => {
     for (let i = 1; i <= 3; i++) await t.call('XADD', 'xi:s', `${i}-0`, 'f', String(i));
     await t.call('XDEL', 'xi:s', '2-0');

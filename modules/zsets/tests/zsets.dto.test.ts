@@ -97,6 +97,13 @@ describe('pop DTOs', () => {
     expect(parse(BZMPopDTO, ['-1', '1', 'k', 'MIN'])).toBe('ERR timeout is negative');
     expect(parse(BZMPopDTO, ['0.5', '1', 'k', 'MAX', 'COUNT', '2'])).toEqual({ timeoutMs: 500, keys: ['k'], max: true, count: 2 });
     expect(parse(BZMPopDTO, ['1', '0', 'k', 'MIN'])).toBe('ERR numkeys should be greater than 0');
+    expect(parse(BZMPopDTO, ['1', 'x', 'k', 'MIN'])).toBe('ERR numkeys should be greater than 0');
+    expect(parse(BZMPopDTO, ['1', '1', 'k', 'MIN', 'COUNT', 'x'])).toBe('ERR count should be greater than 0');
+    // seconds are long doubles: inf and ms past the long long range are "negative", -0.5 ms waits forever
+    expect(parse(BZMPopDTO, ['inf', '1', 'k', 'MIN'])).toBe('ERR timeout is negative');
+    expect(parse(BZMPopDTO, ['1e17', '1', 'k', 'MIN'])).toBe('ERR timeout is negative');
+    expect(parse(BZMPopDTO, ['-0.0005', '1', 'k', 'MIN'])).toMatchObject({ timeoutMs: 0 });
+    expect(parse(BZMPopDTO, ['0x1p-12', '1', 'k', 'MIN'])).toMatchObject({ timeoutMs: 1 });
   });
 });
 

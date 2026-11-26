@@ -72,8 +72,15 @@ export default class ConnectionClientService {
     return NO_REPLY;
   }
 
-  /** CLIENT PAUSE / UNPAUSE are accepted and have no effect: one client is served at a time anyway. */
-  static pause(_ctx: CommandContext, _input?: ClientPauseInput): Reply {
+  /** CLIENT PAUSE timeout [WRITE|ALL]: normal clients' writes (or all their commands) wait for UNPAUSE or the timeout. */
+  static pause(ctx: CommandContext, { timeout, mode }: ClientPauseInput): Reply {
+    ctx.server.pauseClients(mode, timeout);
+    return OK;
+  }
+
+  /** CLIENT UNPAUSE: paused clients run their held commands. */
+  static unpause(ctx: CommandContext): Reply {
+    ctx.server.unpauseClients();
     return OK;
   }
 

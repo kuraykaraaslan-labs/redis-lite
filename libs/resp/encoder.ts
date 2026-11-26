@@ -26,14 +26,14 @@ import type { Protocol, Reply } from './reply';
 // ============================================================================
 
 const CRLF = '\r\n';
-const LINE_BREAKS = /[\r\n]+/g;
+const LINE_BREAKS = /[\r\n]/g;
 
 /** `$<len>\r\n<bytes>\r\n` */
 function bulk(text: string): string {
   return '$' + text.length + CRLF + text + CRLF;
 }
 
-/** Errors are one line: CR / LF runs become a space. */
+/** Errors are one line: every CR and LF becomes a space (Redis maps each character, so CRLF gives two spaces). */
 function errorLine(message: string): string {
   const oneLine = message.indexOf('\r') < 0 && message.indexOf('\n') < 0 ? message : message.replace(LINE_BREAKS, ' ');
   return '-' + oneLine + CRLF;

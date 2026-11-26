@@ -37,7 +37,8 @@ describe('object encodings follow Redis conversion rules', () => {
   it('hashes are sticky once converted', async () => {
     await redis.hset('h1', 'a', '1');
     expect(await enc('h1')).toBe('listpack');
-    for (let i = 0; i < 129; i++) await redis.hset('h1', `f${i}`, 'v');
+    // one more field than hash-max-listpack-entries (512 by default, as in Redis)
+    for (let i = 0; i < 512; i++) await redis.hset('h1', `f${i}`, 'v');
     expect(await enc('h1')).toBe('hashtable');
     await redis.del('h1');
     await redis.hset('h1', 'a', 'x'.repeat(65));

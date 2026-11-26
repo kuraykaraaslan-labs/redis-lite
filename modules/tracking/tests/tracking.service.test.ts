@@ -216,7 +216,7 @@ describe('BCAST', () => {
     const r = await resp3();
     expect(await r.send('CLIENT', 'TRACKING', 'ON', 'PREFIX', 'a')).toBe('-ERR PREFIX option requires BCAST mode to be enabled\r\n');
     expect(await r.send('CLIENT', 'TRACKING', 'ON', 'BCAST', 'PREFIX', 'ab', 'PREFIX', 'abc')).toBe(
-      "-ERR Prefix 'abc' overlaps with an existing prefix 'ab'. Prefixes for a single client must not overlap.\r\n",
+      "-ERR Prefix 'ab' overlaps with another provided prefix 'abc'. Prefixes for a single client must not overlap.\r\n",
     );
     await r.send('CLIENT', 'TRACKING', 'ON', 'BCAST', 'PREFIX', 'foo');
     expect(await r.send('CLIENT', 'TRACKING', 'ON', 'BCAST', 'PREFIX', 'fo')).toBe(
@@ -316,7 +316,7 @@ describe('introspection', () => {
 
   it('option errors', async () => {
     const r = await resp3();
-    expect(await r.send('CLIENT', 'TRACKING', 'ON', 'OPTIN', 'OPTOUT')).toBe("-ERR You can't use both OPTIN and OPTOUT\r\n");
+    expect(await r.send('CLIENT', 'TRACKING', 'ON', 'OPTIN', 'OPTOUT')).toBe("-ERR You can't specify both OPTIN mode and OPTOUT mode\r\n");
     expect(await r.send('CLIENT', 'TRACKING', 'maybe')).toBe('-ERR syntax error\r\n');
     expect(await r.send('CLIENT', 'TRACKING', 'ON', 'BOGUS')).toBe('-ERR syntax error\r\n');
   });

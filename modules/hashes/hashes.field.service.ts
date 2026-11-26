@@ -1,5 +1,6 @@
 import { AppError } from '@/libs/app-error';
-import { addInt64, formatFloat, toFloat } from '@/libs/number';
+import { addInt64 } from '@/libs/number';
+import { addLongDouble, formatLongDouble, parseLongDouble } from '@/libs/number/long-double';
 import { OK, RespMap } from '@/libs/resp';
 import type { Status } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
@@ -9,6 +10,8 @@ import type { CommandContext } from '@/modules/command/command.types';
 import type { HIncrByFloatInput, HIncrByInput, HSetInput, HSetNxInput, KeyFieldInput, KeyFieldsInput, KeyInput } from './hashes.dto';
 import HashesMessages from './hashes.messages';
 import HashStore from './hashes.structure';
+
+const ZERO = { neg: false, m: 0n, e: 0 };
 
 /** Fields and values: HSET, HMSET, HSETNX, HGET, HMGET, HGETALL, HDEL, HEXISTS, HLEN, HKEYS, HVALS, HSTRLEN, HINCRBY*. */
 export default class HashesFieldService {
@@ -63,14 +66,15 @@ export default class HashesFieldService {
     return result;
   }
 
+  /** Like Redis, the sum is computed in 80-bit long double precision and stored as `%.17Lf` text. */
   static hIncrByFloat(ctx: CommandContext, { key, field, increment }: HIncrByFloatInput): string {
     const h = HashStore.readForWrite(ctx, key);
     const cur = h.get(field);
-    const base = cur === undefined ? 0 : toFloat(cur);
+    const base = cur === undefined ? ZERO : parseLongDouble(cur);
     if (base === null) throw new AppError(HashesMessages.HASH_NOT_FLOAT);
-    const result = base + increment;
-    if (!Number.isFinite(result)) throw new AppError(RespMessages.NAN_OR_INF);
-    const text = formatFloat(result);
+    const result = addLongDouble(base, increment);
+    if (result === null || result.inf) throw new AppError(RespMessages.NAN_OR_INF);
+    const text = formatLongDouble(result);
     h.set(field, text);
     return text;
   }

@@ -4,7 +4,8 @@ import type { Reply } from '@/libs/resp';
 
 import type { AclDenial } from '@/modules/acl/acl.types';
 import { Block, NO_REPLY } from '@/modules/command/command.service';
-import type { CommandContext } from '@/modules/command/command.types';
+import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
+import type { Client } from '@/modules/server/server.service';
 
 import TransactionsMessages from './transactions.messages';
 
@@ -21,9 +22,23 @@ export default class TransactionsExecService {
     channel: TransactionsMessages.ACL_REASON_CHANNEL,
   };
 
+  /**
+   * Clients running EXEC → the replies the current queued command wrote itself (SUBSCRIBE's pushes). Redis appends
+   * them to the client's output in place, so they land inside EXEC's array instead of before it.
+   */
+  private static readonly inlined = new WeakMap<Client, Reply[]>();
+
   // ──────────────────────────────────────────────
   // Public Methods
   // ──────────────────────────────────────────────
+
+  /** A command that writes its own replies (the (UN)SUBSCRIBE family) hands them to EXEC; false outside EXEC. */
+  static inlineReply(client: Client, reply: Reply): boolean {
+    const sink = TransactionsExecService.inlined.get(client);
+    if (!sink) return false;
+    sink.push(reply);
+    return true;
+  }
 
   /** EXEC: one reply per queued command; null when a WATCHed key changed, EXECABORT when queueing failed. */
   static exec(ctx: CommandContext): Reply {
@@ -31,7 +46,7 @@ export default class TransactionsExecService {
     const queued = client.multi;
     if (!queued) return new RespError(TransactionsMessages.EXEC_WITHOUT_MULTI);
     const aborted = client.multiError;
-    const dirty = client.watched.dirty;
+    const dirty = client.watched.dirty || server.watchedKeyExpired(client);
     client.multi = null;
     client.multiError = false;
     client.watched.clear();
@@ -51,8 +66,17 @@ export default class TransactionsExecService {
           replies.push(new RespError(message));
           continue;
         }
-        const r = server.execute(client, argv, { inScript: false, noBlock: true });
-        replies.push(r instanceof Block || r === NO_REPLY ? NULL_ARRAY : r);
+        const sink: Reply[] = [];
+        TransactionsExecService.inlined.set(client, sink);
+        let r: HandlerResult;
+        try {
+          r = server.execute(client, argv, { inScript: false, noBlock: true });
+        } finally {
+          TransactionsExecService.inlined.delete(client);
+        }
+        // a command answering with several pushes (SUBSCRIBE a b) adds them all; Redis still counts it as one reply
+        if (r === NO_REPLY && sink.length) replies.push(...sink);
+        else replies.push(r instanceof Block || r === NO_REPLY ? NULL_ARRAY : r);
       }
     } finally {
       client.inExec = false;

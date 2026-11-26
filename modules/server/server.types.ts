@@ -3,6 +3,7 @@ import type { Reply } from '@/libs/resp';
 import type { CommandMeta } from '@/modules/command/command.types';
 
 import type { Client } from './server.client';
+import type { LatencyHistogram } from './server.latency.structure';
 
 /** Options of a RedisLiteServer (the RedisLite API and the CLI build them). */
 export interface ServerOptions {
@@ -38,6 +39,8 @@ export interface CommandStat {
   usec: number;
   rejected: number;
   failed: number;
+  /** Durations of its calls (LATENCY HISTOGRAM, INFO latencystats); created on the first call while latency-tracking is on. */
+  histogram?: LatencyHistogram;
 }
 
 /** One SLOWLOG entry. */
@@ -70,4 +73,7 @@ export interface KeyState {
 }
 
 /** CONFIG SET validation outcome for one directive. */
+/** What a pause holds: write commands (CLIENT PAUSE WRITE, FAILOVER) or every command (CLIENT PAUSE ALL). */
+export type PauseMode = 'write' | 'all';
+
 export type ConfigCheck = { value: string } | { error: string };

@@ -71,7 +71,9 @@ describe('Lua -> Redis conversion', () => {
   });
 
   it('error_reply / status_reply build tables', async () => {
-    expect(await evalLua("local t = redis.error_reply('x'); return {type(t), t.err}")).toEqual(['table', 'x']);
+    // a message without a space has no error code: "ERR " is added (and a leading "-" dropped)
+    expect(await evalLua("local t = redis.error_reply('x'); return {type(t), t.err}")).toEqual(['table', 'ERR x']);
+    expect(await evalLua("return redis.error_reply('-MYCODE x').err")).toBe('MYCODE x');
     expect(await evalLua("local t = redis.status_reply('y'); return {type(t), t.ok}")).toEqual(['table', 'y']);
   });
 });

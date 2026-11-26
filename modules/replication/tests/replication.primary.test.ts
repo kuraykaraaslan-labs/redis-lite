@@ -61,8 +61,8 @@ describe('the propagated stream', () => {
     await tx.exec();
     await m.call('EVAL', "redis.call('SET', KEYS[1], 'from-lua'); redis.call('INCRBY', KEYS[2], 5); return 1", '2', 'l1', 'l2');
     await m.call('SET', 'gone', 'v', 'PX', '1');
-    await sleep(10);
-    expect(await m.call('GET', 'gone')).toBeNull();
+    // the key is gone once its 1 ms TTL passed on the server clock (which can step backwards under load)
+    await waitFor(async () => (await m.call('GET', 'gone')) === null);
     const expected =
       resp('SELECT', '0') +
       resp('SET', 'a', '1') +

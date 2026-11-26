@@ -4,9 +4,9 @@ import { formatMessage } from '@/libs/message-format';
 import { toFloat } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
 import {
-  BlockTimeoutSchema,
   FloatSchema,
   FloatSchemaWith,
+  Int64Schema,
   IntegerSchema,
   IntegerSchemaWith,
   KeySchema,
@@ -15,6 +15,8 @@ import {
   parseArg,
   reject,
 } from '@/libs/schemas';
+import { BlockSecondsTimeoutSchema } from '@/libs/schemas/block-timeout';
+import { RandomCountMessages, RandomCountSchema, isPairCountInRange } from '@/libs/schemas/random-count';
 import type { Parsed } from '@/libs/schemas';
 
 import { AggregateEnum, PopSideEnum } from './zsets.enums';
@@ -166,10 +168,12 @@ export const ZScanDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).trans
 /** ZRANDMEMBER key [count [WITHSCORES]]: the count is parsed before the trailing option is checked. */
 export const ZRandMemberDTO = z.tuple([KeySchema], z.string()).transform(([key, ...rest], ctx) => {
   if (!rest.length) return { key, count: null, withScores: false };
-  const count = parseArg(IntegerSchema, rest[0]);
+  const count = parseArg(RandomCountSchema, rest[0]);
   if (!count.ok) return reject(ctx, count.error);
   if (rest.length > 2 || (rest.length === 2 && rest[1].toLowerCase() !== 'withscores')) return reject(ctx, RespMessages.SYNTAX);
-  return { key, count: count.value, withScores: rest.length === 2 };
+  const withScores = rest.length === 2;
+  if (withScores && !isPairCountInRange(count.value)) return reject(ctx, RandomCountMessages.PAIRS_RANGE);
+  return { key, count: Number(count.value), withScores };
 });
 
 // ============================================================================
@@ -285,7 +289,7 @@ export const ZPopMaxDTO = PopDTO(true);
 /** BZPOPMIN / BZPOPMAX key [key …] timeout. */
 function BlockingPopDTO(max: boolean) {
   return z.array(KeySchema).transform((args, ctx) => {
-    const timeoutMs = unwrap(ctx, parseArg(BlockTimeoutSchema, args[args.length - 1]));
+    const timeoutMs = unwrap(ctx, parseArg(BlockSecondsTimeoutSchema, args[args.length - 1]));
     return { keys: args.slice(0, -1), timeoutMs, max };
   });
 }
@@ -295,20 +299,19 @@ export const BZPopMaxDTO = BlockingPopDTO(true);
 
 /** `numkeys key … MIN|MAX [COUNT count]` → keys, side, count. */
 function mpopArgs(args: string[]): Parsed<{ keys: string[]; max: boolean; count: number }> {
-  const numKeys = parseArg(IntegerSchema, args[0]);
-  if (!numKeys.ok) return numKeys;
-  const n = numKeys.value;
-  if (n <= 0) return fail(ZSetsMessages.NUMKEYS_NOT_POSITIVE);
+  // any numkeys that is not an int64 > 0 gets the same text; a huge one fails on the missing keys (syntax error)
+  const numKeys = parseArg(Int64Schema, args[0]);
+  if (!numKeys.ok || numKeys.value <= 0n) return fail(ZSetsMessages.NUMKEYS_NOT_POSITIVE);
+  const n = Number(numKeys.value);
   const keys = args.slice(1, 1 + n);
   const side = PopSideEnum.safeParse((args[1 + n] ?? '').toLowerCase());
   if (keys.length < n || !side.success) return fail(RespMessages.SYNTAX);
   let count = 1;
   if (args.length > 2 + n) {
     if (args[2 + n].toLowerCase() !== 'count' || args.length !== 4 + n) return fail(RespMessages.SYNTAX);
-    const parsed = parseArg(IntegerSchema, args[3 + n]);
-    if (!parsed.ok) return parsed;
-    if (parsed.value <= 0) return fail(ZSetsMessages.COUNT_NOT_POSITIVE);
-    count = parsed.value;
+    const parsed = parseArg(Int64Schema, args[3 + n]);
+    if (!parsed.ok || parsed.value <= 0n) return fail(ZSetsMessages.COUNT_NOT_POSITIVE);
+    count = Number(parsed.value);
   }
   return { ok: true, value: { keys, max: side.data === 'max', count } };
 }
@@ -317,7 +320,7 @@ export const ZMPopDTO = z.array(z.string()).transform((args, ctx) => unwrap(ctx,
 
 /** BZMPOP timeout numkeys key … MIN|MAX [COUNT count]: the timeout first. */
 export const BZMPopDTO = z.tuple([z.string()], z.string()).transform(([timeout, ...args], ctx) => {
-  const timeoutMs = parseArg(BlockTimeoutSchema, timeout);
+  const timeoutMs = parseArg(BlockSecondsTimeoutSchema, timeout);
   if (!timeoutMs.ok) return reject(ctx, timeoutMs.error);
   return { timeoutMs: timeoutMs.value, ...unwrap(ctx, mpopArgs(args)) };
 });
