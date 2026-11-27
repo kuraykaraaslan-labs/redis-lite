@@ -147,7 +147,7 @@ describe('RESET / QUIT', () => {
     expect.soft(await r.send('CLIENT', 'GETNAME')).toBe('$-1\r\n');
     const info = await r.send('CLIENT', 'INFO');
     expect.soft(info).toMatch(/ db=0 /);
-    expect.soft(info).toMatch(/ resp=2 /);
+    expect.soft(info).toMatch(/ resp=2\n\r\n$/);
     expect.soft(await r.send('EXEC')).toBe('-ERR EXEC without MULTI\r\n');
   });
 

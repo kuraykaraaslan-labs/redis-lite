@@ -2,7 +2,8 @@
  * Lua prelude, part 1 of 8: Lua 5.1 compatibility. Captures the Lua 5.4 builtins the later parts use (as locals, before
  * the sandbox prunes the globals), and defines the 5.1 behaviours scripts can observe:
  * - numbers print with "%.14g" (tostring, string.format('%s'), table.concat);
- * - `error(42)` gets a position like a string, `pcall` / `xpcall` / `coroutine.resume` hand out 5.1 error texts;
+ * - `error(42)` gets a position like a string, `pcall` / `xpcall` / `coroutine.resume` hand out 5.1 error texts, and
+ *   `pcall` turns an error table into its `err` text (Redis 7.0);
  * - `string.format` truncates non-integral numbers for %d / %i / %c / %o / %u / %x / %X, `%q` quotes numbers,
  *   `string.rep` has no separator;
  * - `setfenv` / `getfenv` (over `_ENV` upvalues), `newproxy`, `gcinfo`, `unpack`, `loadstring`, the 5.1 math and table
@@ -114,7 +115,26 @@ local function to51_result(ok, ...)
   if __type(e) == 'string' then e = __to51(sgsub(e, '^prelude:%d+: ', '')) end
   return false, e
 end
-pcall = function(f, ...) return to51_result(__pcall(f, ...)) end
+-- pcall (only pcall: xpcall handlers and coroutine.resume get the table) hands out the 'err' field of an error table
+-- when it is a string or a number: pcall(redis.call, ...) gives the error text (Redis 7.0). A library function called by
+-- pcall itself has no name in its argument errors ("bad argument #1 to '?'"), as a C function called from C in 5.1.
+local function pcall_result(f, ok, ...)
+  if ok then return true, ... end
+  local e = ...
+  if __type(e) == 'table' then
+    local v = e.err
+    local t = __type(v)
+    if t == 'string' or t == 'number' then return false, v end
+    return false, e
+  end
+  local _, r = to51_result(false, e)
+  if __type(r) == 'string' and __type(f) == 'function' and sfind(r, '^bad argument #') then
+    local info = __getinfo(f, 'S')
+    if info.what == 'C' or info.source == '=prelude' then r = sgsub(r, "^(bad argument #%-?%d+ to )'[^']*'", "%1'?'") end
+  end
+  return false, r
+end
+pcall = function(f, ...) return pcall_result(f, __pcall(f, ...)) end
 xpcall = function(f, handler)
   return __xpcall(f, function(e)
     if __type(e) == 'string' then e = __to51(e) end

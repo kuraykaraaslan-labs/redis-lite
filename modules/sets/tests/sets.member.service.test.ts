@@ -119,30 +119,23 @@ describe('sets: basic', () => {
 });
 
 describe('sets: encodings', () => {
-  it('intset → listpack → hashtable', async () => {
+  it('intset → hashtable (Redis 7.0 has no listpack sets), never back', async () => {
     await t.call('SADD', 's:enc1', 1, 2, 3);
     expect(await enc('s:enc1')).toBe('intset');
     await t.call('SADD', 's:enc1', 'a');
-    expect(await enc('s:enc1')).toBe('listpack');
-    const many: string[] = [];
-    for (let i = 0; i < 124; i++) many.push(`m${i}`);
-    await t.call('SADD', 's:enc1', ...many);
-    expect(await t.call('SCARD', 's:enc1')).toBe(128);
-    expect(await enc('s:enc1')).toBe('listpack');
-    await t.call('SADD', 's:enc1', 'one-more');
     expect(await enc('s:enc1')).toBe('hashtable');
-    await t.call('SREM', 's:enc1', ...many);
+    await t.call('SREM', 's:enc1', 'a');
     expect(await enc('s:enc1')).toBe('hashtable');
   });
 
-  it('intset limit 512 and long members', async () => {
+  it('intset limit 512 and string members', async () => {
     const ints: number[] = [];
     for (let i = 0; i < 512; i++) ints.push(i);
     await t.call('SADD', 's:enc2', ...ints);
     expect(await enc('s:enc2')).toBe('intset');
     await t.call('SADD', 's:enc2', 512);
     expect(await enc('s:enc2')).toBe('hashtable');
-    // more than 128 ints + a string goes straight to hashtable
+    // ints + a string go to hashtable
     const ints2: number[] = [];
     for (let i = 0; i < 200; i++) ints2.push(i);
     await t.call('SADD', 's:enc3', ...ints2);
@@ -150,8 +143,6 @@ describe('sets: encodings', () => {
     await t.call('SADD', 's:enc3', 'x');
     expect(await enc('s:enc3')).toBe('hashtable');
     await t.call('SADD', 's:enc4', 'x'.repeat(64));
-    expect(await enc('s:enc4')).toBe('listpack');
-    await t.call('SADD', 's:enc4', 'y'.repeat(65));
     expect(await enc('s:enc4')).toBe('hashtable');
   });
 

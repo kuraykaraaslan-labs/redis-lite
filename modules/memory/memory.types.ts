@@ -8,12 +8,22 @@ import type { RedisValue } from '@/modules/database/database.types';
 
 export type SdsType = 5 | 8 | 16 | 32 | 64;
 
+/** One sds allocation: its zmalloc usable size and its capacity (the header's alloc field; = len for sdshdr5). */
+export interface SdsAlloc {
+  size: number;
+  cap: number;
+}
+
+/** A string value as the sds helpers read it. */
+export type StringValue = Extract<RedisValue, { type: 'string' }>;
+
 export interface QuicklistNodeInfo {
-  /** PLAIN node (one large element stored as a raw buffer) vs PACKED (listpack). */
-  plain: boolean;
   count: number;
-  /** node->sz: listpack bytes, or the element length for a plain node. */
+  /** node->sz: listpack bytes (uncompressed). */
   bytes: number;
+  /** zmalloc_size of the node's data: the listpack, or the compressed form of an interior node. */
+  alloc: number;
+  compressed: boolean;
 }
 
 /** The ql_* fields DEBUG OBJECT prints for a quicklist-encoded list. */
@@ -23,6 +33,32 @@ export interface QuicklistDebugInfo {
   listpackMax: number;
   compressed: number;
   uncompressedSize: number;
+}
+
+/** The kind of value a dict belongs to (the cost of an insert differs). */
+export type DictKind = 'set' | 'hash' | 'zset' | 'keyspace' | 'plain';
+
+/** A value dict's tables: size0 (main), size1 (rehash target, 0 when not rehashing). */
+export interface DictTables {
+  size0: number;
+  size1: number;
+}
+
+/** A tracked dict: its tables, the rehash steps left and the entries it holds. */
+export interface DictState extends DictTables {
+  steps: number;
+  used: number;
+  /** Steps the running rehash needed in all, the entries it started with, and the entries added since. */
+  stepsTotal: number;
+  usedAtStart: number;
+  added: number;
+}
+
+/** What a command's key held before the command ran. */
+export interface DictSnapshot {
+  container: object | undefined;
+  size: number;
+  hashtable: boolean;
 }
 
 /** One node of the rax shape model (rax.c raxNode). */
@@ -37,19 +73,30 @@ export interface RaxNode {
 // MEMORY USAGE
 // ============================================================================
 
-/** Hash fields with a TTL: their names, or just how many (enough for listpackex; HT then assumes the first N). */
-export type FieldTtls = number | ReadonlySet<string> | ReadonlyMap<string, number>;
-
 export interface MemoryUsageOptions {
   /** MEMORY USAGE SAMPLES: default 5; 0 samples every element. */
   samples: number;
   hasExpire: boolean;
-  fieldTtls?: FieldTtls;
   /** list-max-listpack-size (default -2). */
   listMaxListpackSize?: number;
   /** stream-node-max-entries / stream-node-max-bytes (defaults 100 / 4096). */
   streamNodeMaxEntries?: number;
   streamNodeMaxBytes?: number;
+  /** What the allocator holds (used_memory) instead of objectComputeSize's sizeof-based figure. */
+  allocated?: boolean;
+  /** Integers 0..9999 are shared objects (maxmemory off). */
+  sharedIntegers?: boolean;
+}
+
+/** The struct sizes objectComputeSize adds (sizeof, or the allocator's size class). */
+export interface StructSizes {
+  dict: number;
+  dictEntry: number;
+  quicklist: number;
+  quicklistNode: number;
+  streamCG: number;
+  streamConsumer: number;
+  streamNACK: number;
 }
 
 // ============================================================================
@@ -61,7 +108,6 @@ export interface KeyRecord {
   value: RedisValue;
   encoding: string;
   hasExpire: boolean;
-  fieldTtls?: FieldTtls;
 }
 
 export interface DbSnapshot {
@@ -70,29 +116,29 @@ export interface DbSnapshot {
   keys?: Iterable<KeyRecord>;
   /** Already-summed figures (incremental accounting keeps them up to date instead of rescanning the keys). */
   totals?: { keys: number; expires: number; dataset: number };
-  /**
-   * Whether the db's dicts are allocated. Standalone Redis allocates a db's dicts on first use and keeps them after
-   * the db empties (shown in MEMORY STATS as db.N). Default: the db has keys.
-   */
-  allocated?: boolean;
+  /** Bucket slots of the main / expires dicts (both tables while rehashing). Default: settled tables. */
+  mainSlots?: number;
+  expiresSlots?: number;
 }
 
 export interface DbOverhead {
   id: number;
   keys: number;
   expires: number;
-  /** overhead.hashtable.main: kvstoreMemUsage(keys) + keys × sizeof(robj). */
+  /** overhead.hashtable.main: keys × (sizeof(dictEntry) + sizeof(robj)) + slots × sizeof(dictEntry*). */
   main: number;
-  /** overhead.hashtable.expires: kvstoreMemUsage(expires). */
+  /** overhead.hashtable.expires: expires × sizeof(dictEntry) + slots × sizeof(dictEntry*). */
   expiresOverhead: number;
-  /** Bucket arrays of both dicts (overhead.db.hashtable.lut contribution). */
-  lut: number;
+  /** What the keyspace dicts and the keys allocate: dict entries, buckets, key sds and values. */
+  allocated: number;
   /** Sum of objectSize over the db's keys. */
   dataset: number;
 }
 
 export interface DbSizeOptions {
   samples?: number;
+  /** Integers 0..9999 are shared objects (maxmemory off; default true). */
+  sharedIntegers?: boolean;
   listMaxListpackSize?: number;
   streamNodeMaxEntries?: number;
   streamNodeMaxBytes?: number;
@@ -100,10 +146,40 @@ export interface DbSizeOptions {
 
 /** What one normal client holds beyond its struct. */
 export interface ClientMemoryInput {
+  /** The query buffer's allocation (default: the empty buffer of a client that sent nothing yet). */
+  queryBuf?: SdsAlloc;
+  /** Bytes in the query buffer not consumed yet (the command being run). */
+  queryLen?: number;
+  /** The arguments of the command being run. */
+  argv?: readonly string[] | null;
+  /** Commands queued by MULTI. */
+  multi?: readonly (readonly string[])[] | null;
+  channels?: number;
+  patterns?: number;
+  shardChannels?: number;
+  /** Size of the static reply buffer (rbs). */
   replyBuffer?: number;
-  queryBuffer?: number;
-  argvBytes?: number;
+  /** Bytes in the reply list (omem). */
   outputBytes?: number;
+}
+
+/** The per-client memory figures CLIENT LIST prints. */
+export interface ClientMemory {
+  qbuf: number;
+  qbufFree: number;
+  argvMem: number;
+  multiMem: number;
+  totMem: number;
+}
+
+/** A cached script (lua.caches): its SHA1 and body. */
+export type ScriptEntry = [sha: string, body: string];
+
+/** A FUNCTION library as functions.caches counts it. */
+export interface LibraryEntry {
+  name: string;
+  code: string;
+  functions: readonly string[];
 }
 
 export interface MemoryInput {
@@ -113,6 +189,8 @@ export interface MemoryInput {
   peak?: number;
   replicationBacklog?: number;
   clientsSlaves?: number;
+  /** Bytes pending in the replicas' output buffers (not counted for maxmemory). */
+  replicaOutputBuffers?: number;
   clientsNormal?: number;
   clusterLinks?: number;
   aofBuffer?: number;
@@ -135,9 +213,6 @@ export interface MemoryReport {
   luaCaches: number;
   functionsCaches: number;
   dbs: DbOverhead[];
-  hashtableLut: number;
-  hashtableRehashing: number;
-  dictRehashingCount: number;
   overheadTotal: number;
   keysCount: number;
   bytesPerKey: number;

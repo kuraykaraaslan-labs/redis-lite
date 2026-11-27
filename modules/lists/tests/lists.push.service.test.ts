@@ -102,16 +102,13 @@ describe('lists: multi-pop', () => {
 });
 
 describe('lists: encodings', () => {
-  it('listpack → quicklist and back', async () => {
+  it('every list is a quicklist (Redis 7.0), small or large', async () => {
     await t.call('RPUSH', 'l:enc', 'a', 'b');
-    expect(await enc('l:enc')).toBe('listpack');
+    expect(await enc('l:enc')).toBe('quicklist');
     const big = 'x'.repeat(100);
     for (let i = 0; i < 100; i++) await t.call('RPUSH', 'l:enc', big);
     expect(await enc('l:enc')).toBe('quicklist');
     await t.call('LTRIM', 'l:enc', 0, 1);
-    expect(await enc('l:enc')).toBe('listpack');
-    await t.call('RPUSH', 'l:enc2', 'y'.repeat(9000));
-    expect(await enc('l:enc2')).toBe('quicklist');
-    // unverified: whether a single 9000-byte element is converted back after shrinking; not asserted
+    expect(await enc('l:enc')).toBe('quicklist');
   });
 });

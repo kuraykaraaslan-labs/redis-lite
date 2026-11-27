@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { isInt64, isInteger, toFloat } from '@/libs/number';
+import { isInt64, toFloat } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
 
 import { reject } from './issue';
@@ -30,16 +30,35 @@ function shortInteger(value: string): number | null {
 }
 
 /**
- * Strict Redis integer (no spaces, `+` or leading zeros) within the JS safe-integer range → number, whose failure
+ * Strict Redis int64 (string2ll rules: no spaces, `+` or leading zeros; within [-2^63, 2^63-1]) → number, whose failure
  * reports `message` (commands that word the error themselves: SWAPDB's index, XCLAIM's IDLE, CLIENT KILL's ID…).
+ * Beyond ±2^53 the number is the nearest double: right wherever the value is only compared with a length or clamped;
+ * an argument whose exact value matters takes `Int64Schema` (bigint).
  */
 export function IntegerSchemaWith(message: string) {
   return z.string().transform((value, ctx) => {
     const n = shortInteger(value);
     if (n !== null) return n;
-    return isInteger(value) ? Number(value) : reject(ctx, message);
+    return isInt64(value) ? Number(value) : reject(ctx, message);
   });
 }
+
+const INT_MIN = -(2 ** 31);
+const INT_MAX = 2 ** 31 - 1;
+
+/**
+ * A C `int` argument: an int64 first (else `message`), then within the int range (else `rangeMessage`) → number.
+ * SWAPDB words both failures itself; SELECT, MOVE and COPY DB take `IntSchema`.
+ */
+export function IntSchemaWith(message: string, rangeMessage: string) {
+  return z.string().transform((value, ctx) => {
+    const n = shortInteger(value) ?? (isInt64(value) ? Number(value) : reject(ctx, message));
+    return n < INT_MIN || n > INT_MAX ? reject(ctx, rangeMessage) : n;
+  });
+}
+
+/** A C `int` argument: `ERR value is not an integer…`, then `ERR value is out of range, value must between …`. */
+export const IntSchema = IntSchemaWith(RespMessages.NOT_INTEGER, RespMessages.INT_RANGE);
 
 /** Redis float (decimal, exponent, `inf` / `+inf` / `-inf`; NaN rejected) → number, whose failure reports `message`. */
 export function FloatSchemaWith(message: string) {
@@ -49,7 +68,7 @@ export function FloatSchemaWith(message: string) {
   });
 }
 
-/** Strict Redis integer within the JS safe-integer range → number (`ERR value is not an integer or out of range`). */
+/** Strict Redis int64 → number (`ERR value is not an integer or out of range`); see `IntegerSchemaWith`. */
 export const IntegerSchema = IntegerSchemaWith(RespMessages.NOT_INTEGER);
 
 /** Strict Redis int64 (string2ll rules) within [-2^63, 2^63-1] → bigint. */

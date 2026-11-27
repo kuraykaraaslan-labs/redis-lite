@@ -7,7 +7,7 @@
  *
  * then either `+FULLRESYNC <replid> <offset>` and the RDB payload, or `+CONTINUE [<replid>]`, then the command stream.
  * The handshake is pipelined (the master answers in order). Every second while connected the replica sends
- * `REPLCONF ACK <offset> FACK <aof offset>`.
+ * `REPLCONF ACK <offset>`.
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  *
@@ -245,10 +245,10 @@ export class ReplicaLink {
     socket.on('error', lost);
   }
 
-  /** REPLCONF ACK <offset> [FACK <aofoffset>]. */
-  sendAck(offset: number, fack: number | null): void {
+  /** REPLCONF ACK <offset>. */
+  sendAck(offset: number): void {
     if (!this.connected) return;
-    this.send(fack === null ? ['REPLCONF', 'ACK', String(offset)] : ['REPLCONF', 'ACK', String(offset), 'FACK', String(fack)]);
+    this.send(['REPLCONF', 'ACK', String(offset)]);
   }
 
   /** repl-timeout: no data from an online master for that long drops the link. */

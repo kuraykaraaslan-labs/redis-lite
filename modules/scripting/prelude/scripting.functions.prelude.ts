@@ -1,7 +1,8 @@
 /**
  * Lua prelude, part 3 of 8: Redis Functions. A library body runs with its own `_ENV` (`fn_env`): while FUNCTION LOAD
  * runs it, that environment holds only a reduced `redis` table (register_function, log, the LOG_* levels and the
- * version); afterwards it falls through to the scripts' globals, so the registered functions see the full runtime
+ * version); afterwards it falls through to the functions' globals (the scripts' ones without KEYS, ARGV and the EVAL
+ * error handler), so the registered functions see the full runtime
  * (where `redis.register_function` does not exist). Functions are found case-insensitively by FCALL.
  *
  * The engine drives a load with the `RL.*_load` helpers (the `RL` table lives in the registry, out of the scripts'
@@ -68,7 +69,8 @@ local function register_function(...)
   else
     register_error('wrong number of arguments to redis.register_function')
   end
-  if not smatch(name, '^[%w_]+$') then register_error('Function names can only contain letters, numbers, or underscores(_) and must be at least one character long') end
+  if not smatch(name, '^[%w_]+$') then -- Redis 7.0 words a bad function name like a bad library name
+    register_error('Library names can only contain letters, numbers, or underscores(_) and must be at least one character long') end
   if __pending.byname[name] then register_error('Function already exists in the library') end
   __pending.byname[name] = { fn = cb, flags = flags, description = desc }
   __pending.names[#__pending.names + 1] = name
@@ -83,6 +85,8 @@ local load_redis = __setmetatable({
 }, { __index = missing_global, __newindex = readonly_error, __metatable = false })
 local load_env = __setmetatable({ redis = load_redis }, { __index = missing_global, __newindex = readonly_error, __metatable = false })
 -- The _ENV of every library; its __index is switched to the scripts' globals by the sandbox and after each load.
+-- The __index of a library's _ENV once loaded (set by the sandbox).
+local fn_globals = nil
 local fn_env_mt = { __index = load_env, __newindex = readonly_error, __metatable = false }
 local fn_env = __setmetatable({}, fn_env_mt)
 
@@ -95,11 +99,11 @@ RL.begin_load = function(chunk)
 end
 RL.abort_load = function()
   __pending, __staged = nil, nil
-  fn_env_mt.__index = __globals
+  fn_env_mt.__index = fn_globals
 end
 RL.finish_load = function()
   __staged, __pending = __pending, nil
-  fn_env_mt.__index = __globals
+  fn_env_mt.__index = fn_globals
   return __staged.names
 end
 -- {has_description (0/1), description, flag...} of a staged function.

@@ -130,27 +130,21 @@ export const ZMScoreDTO = KeyMembersDTO;
 export const ZCountDTO = ScoreRangeDTO;
 export const ZLexCountDTO = LexRangeDTO;
 
-/** ZRANK / ZREVRANK key member [WITHSCORE]: more arguments are an arity error naming the command. */
-function RankDTO(command: string) {
-  const arity = formatMessage(RespMessages.WRONG_ARITY, { command });
-  return z.tuple([KeySchema, ValueSchema], z.string()).transform(([key, member, ...rest], ctx) => {
-    if (rest.length > 1) return reject(ctx, arity);
-    if (rest.length === 1 && rest[0].toLowerCase() !== 'withscore') return reject(ctx, RespMessages.SYNTAX);
-    return { key, member, withScore: rest.length === 1, reverse: command === 'zrevrank' };
-  });
+/** ZRANK / ZREVRANK key member. */
+function RankDTO(reverse: boolean) {
+  return z.tuple([KeySchema, ValueSchema]).transform(([key, member]) => ({ key, member, reverse }));
 }
 
-export const ZRankDTO = RankDTO('zrank');
-export const ZRevRankDTO = RankDTO('zrevrank');
+export const ZRankDTO = RankDTO(false);
+export const ZRevRankDTO = RankDTO(true);
 
 /** ZSCAN key cursor …: the cursor alone, checked before the key is read. */
 export const ZScanCursorDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor]) => ({ key, cursor }));
 
-/** ZSCAN key cursor [MATCH pattern] [COUNT count] [NOSCORES], parsed once the key is known to hold a sorted set. */
+/** ZSCAN key cursor [MATCH pattern] [COUNT count], parsed once the key is known to hold a sorted set. */
 export const ZScanDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).transform(([key, cursor, ...options], ctx) => {
   let match = '*';
   let count = 10;
-  let noScores = false;
   for (let i = 0; i < options.length; i++) {
     const option = options[i].toLowerCase();
     if (option === 'count' && i + 1 < options.length) {
@@ -159,10 +153,9 @@ export const ZScanDTO = z.tuple([KeySchema, ScanCursorSchema], z.string()).trans
       if (parsed.value < 1) return reject(ctx, RespMessages.SYNTAX);
       count = parsed.value;
     } else if (option === 'match' && i + 1 < options.length) match = options[++i];
-    else if (option === 'noscores') noScores = true;
     else return reject(ctx, RespMessages.SYNTAX);
   }
-  return { key, cursor, match, count, noScores };
+  return { key, cursor, match, count };
 });
 
 /** ZRANDMEMBER key [count [WITHSCORES]]: the count is parsed before the trailing option is checked. */

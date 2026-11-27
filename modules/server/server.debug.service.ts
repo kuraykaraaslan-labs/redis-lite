@@ -2,13 +2,13 @@
 import { AppError } from '@/libs/app-error';
 import Logger from '@/libs/logger';
 import { formatMessage } from '@/libs/message-format';
-import { OK, Status } from '@/libs/resp';
+import { formatFixed } from '@/libs/number';
+import { OK, RespVerbatim, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 import DatabaseService from '@/modules/database/database.service';
-import HashesService from '@/modules/hashes/hashes.service';
 import KeysService from '@/modules/keys/keys.service';
 import MemoryService from '@/modules/memory/memory.service';
 import type { RedisValue } from '@/modules/database/database.types';
@@ -37,7 +37,7 @@ export default class ServerDebugService {
   // ──────────────────────────────────────────────
 
   private static encodingOf(ctx: CommandContext, v: RedisValue): string {
-    return DatabaseService.objectEncoding(v, ctx.server.config, v.type === 'hash' && HashesService.hashFieldExpires(v.value) !== undefined);
+    return DatabaseService.objectEncoding(v, ctx.server.config);
   }
 
   /** A stable fake object address for DEBUG OBJECT `Value at:%p`. */
@@ -73,15 +73,15 @@ export default class ServerDebugService {
       ? (((Math.floor(now / 60000) & 0xffff) << 8) | ctx.db.frequency(key)) >>> 0
       : (Math.floor(now / 1000) - idle) & 0xffffff;
     let quicklist = '';
-    if (v.type === 'list' && enc === 'quicklist') {
-      const q = MemoryService.debugQuicklistInfo(v.value, cfg.num('list-max-listpack-size'), cfg.num('list-compress-depth'));
+    if (v.type === 'list') {
+      const q = MemoryService.debugQuicklistInfo(v.value);
       quicklist =
-        ` ql_nodes:${q.nodes} ql_avg_node:${q.avgNode.toFixed(2)} ql_listpack_max:${q.listpackMax}` +
+        ` ql_nodes:${q.nodes} ql_avg_node:${formatFixed(q.avgNode, 2)} ql_listpack_max:${q.listpackMax}` +
         ` ql_compressed:${q.compressed} ql_uncompressed_size:${q.uncompressedSize}`;
     }
     const serialized = fast
       ? ''
-      : ` serializedlength:${MemoryService.serializedLength(v, KeysService.rdbOptions(ctx), v.type === 'hash' ? HashesService.hashFieldExpires(v.value) : undefined)}`;
+      : ` serializedlength:${MemoryService.serializedLength(v, KeysService.rdbOptions(ctx))}`;
     return new Status(
       formatMessage(ServerMessages.DEBUG_OBJECT, { address: ServerDebugService.fakeAddress(key), refcount, encoding: enc, serialized, lru, idle, quicklist }),
     );
@@ -89,8 +89,31 @@ export default class ServerDebugService {
 
   static listpack(ctx: CommandContext, { key }: DebugKeyInput): Reply {
     const enc = ServerDebugService.encodingOf(ctx, ServerDebugService.value(ctx, key));
-    if (enc !== 'listpack' && enc !== 'listpackex') throw new AppError(ServerMessages.DEBUG_NOT_LISTPACK);
+    if (enc !== 'listpack') throw new AppError(ServerMessages.DEBUG_NOT_LISTPACK);
     return new Status(ServerMessages.DEBUG_LISTPACK_PRINTED);
+  }
+
+  /** DEBUG HTSTATS dbid: the stats of the database's main and expires dicts. */
+  static htstats(ctx: CommandContext, { db }: { db: number }): Reply {
+    if (db < 0 || db >= ctx.server.databases.length) throw new AppError(ServerMessages.DEBUG_DB_RANGE);
+    const database = ctx.server.databases[db];
+    const t = ctx.server.memoryModel.keyspaceTables(db);
+    const text =
+      ServerMessages.DEBUG_HTSTATS_MAIN + MemoryService.htStats(t.main, database.storedKeys) +
+      ServerMessages.DEBUG_HTSTATS_EXPIRES + MemoryService.htStats(t.expires, database.expiresCount);
+    return new RespVerbatim(text);
+  }
+
+  /** DEBUG HTSTATS-KEY key: the stats of a hashtable-encoded value's dict. */
+  static htstatsKey(ctx: CommandContext, { key }: DebugKeyInput): Reply {
+    const v = ctx.db.peek(key);
+    if (!v) throw new AppError(ServerMessages.NO_SUCH_KEY);
+    const enc = ServerDebugService.encodingOf(ctx, v);
+    if ((enc !== 'hashtable' && enc !== 'skiplist') || (v.type !== 'set' && v.type !== 'hash' && v.type !== 'zset')) {
+      throw new AppError(ServerMessages.DEBUG_NOT_HASHTABLE);
+    }
+    const size = v.value.size;
+    return new RespVerbatim(MemoryService.htStats(MemoryService.dictTables(v.value, size), size));
   }
 
   static quicklist(ctx: CommandContext, { key }: DebugKeyInput): Reply {

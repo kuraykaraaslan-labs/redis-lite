@@ -110,8 +110,6 @@ export abstract class PersistenceState {
       hashMaxListpackEntries: c.num('hash-max-listpack-entries'),
       hashMaxListpackValue: c.num('hash-max-listpack-value'),
       setMaxIntsetEntries: c.num('set-max-intset-entries'),
-      setMaxListpackEntries: c.num('set-max-listpack-entries'),
-      setMaxListpackValue: c.num('set-max-listpack-value'),
       zsetMaxListpackEntries: c.num('zset-max-listpack-entries'),
       zsetMaxListpackValue: c.num('zset-max-listpack-value'),
       listMaxListpackSize: c.num('list-max-listpack-size'),

@@ -1,10 +1,10 @@
 import { keysAt, withDTO } from '@/modules/command/command.service';
 import type { CommandSpec } from '@/modules/command/command.types';
 
-import { DumpDTO, MoveDTO, RestoreDTO, SortCmdDTO, SortRoDTO, SwapDbDTO } from './keys.dto';
+import { DumpDTO, MigrateDTO, MoveDTO, RestoreDTO, SortCmdDTO, SortRoDTO, SwapDbDTO } from './keys.dto';
 import KeysService from './keys.service';
 
-/** Routing of SORT, MOVE, SWAPDB, DUMP and RESTORE: DTO → service. No logic lives here. */
+/** Routing of SORT, MOVE, SWAPDB, DUMP, RESTORE and MIGRATE: DTO → service. No logic lives here. */
 
 const WRITE = { write: true } as const;
 
@@ -22,8 +22,12 @@ export const extraKeyCommands: CommandSpec[] = [
   { name: 'swapdb', arity: 3, flags: WRITE, handler: withDTO(SwapDbDTO, KeysService.swapDb) },
 
   // ============================================================================
-  // DUMP / RESTORE
+  // DUMP / RESTORE / MIGRATE
   // ============================================================================
   { name: 'dump', arity: 2, handler: withDTO(DumpDTO, KeysService.dump) },
   { name: 'restore', arity: -4, flags: WRITE, keys: keysAt(0), handler: withDTO(RestoreDTO, KeysService.restore) },
+  // the cluster flavour MIGRATE uses towards a node that is importing the slot; outside a cluster, RESTORE itself
+  { name: 'restore-asking', arity: -4, flags: WRITE, keys: keysAt(0), handler: withDTO(RestoreDTO, KeysService.restore) },
+  // keys are touched by the service (only the ones the target accepted, and only without COPY)
+  { name: 'migrate', arity: -6, flags: WRITE, handler: withDTO(MigrateDTO, KeysService.migrate) },
 ];

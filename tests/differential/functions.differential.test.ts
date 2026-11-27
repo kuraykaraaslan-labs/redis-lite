@@ -3,6 +3,7 @@ import { expect, it } from 'vitest';
 import { differential, s, v } from './differential.harness';
 import type { StepObject } from './differential.harness';
 import { sorted, sortedDeep } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 import { parseResp, payload, show } from './differential.resp';
 
 /** FUNCTION LOAD [REPLACE] of a library source. */
@@ -52,6 +53,9 @@ differential(
       load('#!lua name=x\nredis.register_function()'),
     ]),
     s('register_function invalid name text', [load("#!lua name=x\nredis.register_function('bad-name', function() end)")], v("invalid function names were reported with the 'Library names can only contain' text in 7.0; later versions say 'Function names'", 'low')),
+    s('function globals', [load(lib('g', { types: "{type(KEYS), type(ARGV), type(os), type(__redis__err__handler)}" })), 'FCALL types 0', load(lib('g2', { gl: "(function() local t = {} for k in pairs(_G) do t[#t + 1] = k end table.sort(t) return t end)()" })), 'FCALL gl 0', load(lib('g3', { genv: "{tostring(_G == getfenv(0)), tostring(rawget(_G, 'KEYS')), tostring(rawget(_G, 'redis') ~= nil), type(getmetatable(_G))}" })), 'FCALL genv 0', load(lib('g4', { gk: 'KEYS' })), 'FCALL gk 0', load(lib('g5', { ga: '_G.ARGV' })), 'FCALL ga 0']),
+    s('function errors from redis.call', [load(lib('e', { e1: "(function() local ok, e = pcall(redis.call, 'NOSUCH') return {type(e), e} end)()", e2: "redis.call('INCR', 'k', 'x')" })), 'FCALL e1 0', 'FCALL e2 0', load("#!lua name=bad\nerror({err = 5})")]),
+    s('function error table without err', [load("#!lua name=t\nredis.register_function('t', function() error({foo = 1}) end)"), 'FCALL t 0'], { fresh: true }),
     s('function name already in another library', [load(MYLIB), load(lib('other', { myfunc: '1' }))]),
     s('register_function with description and flags', [load("#!lua name=d\nredis.register_function{function_name = 'f', callback = function() return 1 end, description = 'desc', flags = {'no-writes', 'allow-oom', 'allow-stale', 'no-cluster', 'allow-cross-slot-keys'}}"), 'FCALL_RO f 0', 'FUNCTION LIST']),
     s('redis.call unavailable while loading', [load("#!lua name=x\nreturn redis.call('PING')"), load('#!lua name=x\nreturn redis.setresp(3)')]),
@@ -92,6 +96,9 @@ differential(
     s('FUNCTION RESTORE unknown policy', ['FUNCTION RESTORE "" FOO']),
     s('FUNCTION RESTORE trailing argument', ['FUNCTION RESTORE x APPEND extra']),
     s('FUNCTION LIST after FLUSHALL keeps functions', [load(MYLIB), 'FLUSHALL', { cmd: 'FUNCTION LIST', norm: sorted }]),
+
+    // integer arguments at the int64 and int32 edges (see differential.probes): the function is looked up first
+    ...intProbes('FCALL numkeys', ['FCALL nofunc $N', 'FCALL_RO nofunc $N', load(MYLIB), 'FCALL myfunc $N', 'FCALL_RO myfunc $N']),
   ],
   ({ env }) => {
     // FUNCTION DUMP payloads embed the RDB version, so they are not compared byte for byte: a payload dumped by each

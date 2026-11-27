@@ -1,4 +1,4 @@
-import { differential, s, v } from './differential.harness';
+import { differential, gap, s } from './differential.harness';
 import type { Scenario, StepObject } from './differential.harness';
 
 /** EVAL `body` with no keys. */
@@ -19,7 +19,7 @@ function each(group: string, steps: StepObject[]): Scenario[] {
   return steps.map((st) => {
     const script = (st.cmd as string[])[1];
     const name = `${group}: ${script}${(st.cmd as string[]).length > 3 ? ` ${(st.cmd as string[]).slice(3).join(' ')}` : ''}`;
-    return NEGATIVE_ZERO_GAP.has(script) ? s(name, [st], v(NEGATIVE_ZERO_WHY, 'high')) : s(name, [st]);
+    return NEGATIVE_ZERO_GAP.has(script) ? s(name, [st], gap(NEGATIVE_ZERO_WHY, 'high')) : s(name, [st]);
   });
 }
 
@@ -28,7 +28,7 @@ function each(group: string, steps: StepObject[]): Scenario[] {
  * exists in a script and these probes print `0` where Redis's Lua 5.1 prints `-0`. Fixing them needs a real Lua 5.1
  * engine (see docs/DIFFERENTIAL.md, Known gaps).
  */
-const NEGATIVE_ZERO_WHY = 'KNOWN GAP (not a version difference): Lua 5.4 has no negative-zero literal; needs a Lua 5.1 engine';
+const NEGATIVE_ZERO_WHY = 'Lua 5.4 has no negative-zero literal; needs a Lua 5.1 engine';
 const NEGATIVE_ZERO_GAP = new Set(['return tostring(-0)', "return -0 .. ''", 'return cjson.encode(-0)']);
 
 differential('scripting.lua', [

@@ -21,9 +21,9 @@ import { parseResp, payload, show, tokenize } from './differential.resp';
  *   ]);
  */
 
-/** A mismatch caused by the oracle's version (7.0) vs redis-lite's target (8.x): the test is expected to fail. */
+/** A known gap redis-lite cannot close yet (the test is expected to fail). The oracle (7.0.15) is the target. */
 export interface KnownDiff {
-  /** What changed after 7.0 and in which version. */
+  /** Why redis-lite still differs. */
   why: string;
   confidence: 'high' | 'medium' | 'low';
   /** Only this protocol differs (the other one is a normal test). */
@@ -62,7 +62,7 @@ export interface Scenario {
   norm?: Normalizer;
   /** Run only over this protocol. */
   proto?: 2 | 3;
-  /** Expected to differ because of the version gap (the test is `it.fails`). */
+  /** Expected to differ because of a known gap (the test is `it.fails`). */
   diff?: KnownDiff;
   /** Restart the oracle after the scenario (it changes state FLUSHALL / CONFIG cannot restore: DEBUG, ACL…). */
   fresh?: boolean;
@@ -76,9 +76,17 @@ export function s(name: string, steps: Step[], options: ScenarioOptions = {}): S
   return { name, steps, ...options };
 }
 
-/** Marks a scenario as a version difference. */
-export function v(why: string, confidence: KnownDiff['confidence'] = 'high', proto?: 2 | 3): { diff: KnownDiff } {
+/** Marks a scenario as a known gap. */
+export function gap(why: string, confidence: KnownDiff['confidence'] = 'high', proto?: 2 | 3): { diff: KnownDiff } {
   return { diff: { why, confidence, proto } };
+}
+
+/**
+ * Former version-difference tag (7.0 oracle vs an 8.x target). The target is now 7.0.15 itself, so these scenarios must
+ * match exactly: the tag no longer changes anything and is kept only as a note on what changed after 7.0.
+ */
+export function v(_why: string, _confidence: KnownDiff['confidence'] = 'high', _proto?: 2 | 3): Record<string, never> {
+  return {};
 }
 
 /** One recorded step: what was sent and the (normalised) reply bytes. */
@@ -316,7 +324,7 @@ export function differential(group: string, scenarios: Scenario[], extra?: (hook
       for (const proto of [2, 3] as const) {
         if (sc.proto && sc.proto !== proto) continue;
         const known = sc.diff && (!sc.diff.proto || sc.diff.proto === proto);
-        const title = `${sc.name} [RESP${proto}]${known ? ` (version: ${sc.diff?.why})` : ''}`;
+        const title = `${sc.name} [RESP${proto}]${known ? ` (gap: ${sc.diff?.why})` : ''}`;
         (known ? it.fails : it)(title, async () => {
           const { oracle, lite } = await env.run(sc, proto);
           const a = render(oracle);

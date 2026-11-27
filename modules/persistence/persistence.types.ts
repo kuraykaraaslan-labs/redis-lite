@@ -17,8 +17,6 @@ export interface RdbOptions {
   hashMaxListpackEntries: number; // hash-max-listpack-entries
   hashMaxListpackValue: number; // hash-max-listpack-value
   setMaxIntsetEntries: number; // set-max-intset-entries
-  setMaxListpackEntries: number; // set-max-listpack-entries
-  setMaxListpackValue: number; // set-max-listpack-value
   zsetMaxListpackEntries: number; // zset-max-listpack-entries
   zsetMaxListpackValue: number; // zset-max-listpack-value
   listMaxListpackSize: number; // list-max-listpack-size
@@ -31,9 +29,6 @@ export interface RdbOptions {
 /** A listpack element: strings that look like canonical int64s are stored as integers (lpAppend). */
 export type ListpackEntry = string | number | bigint;
 
-/** Field TTLs (absolute ms) for hashes using Redis 7.4+ hash field expiration. */
-export type FieldExpires = Map<string, number>;
-
 export interface EncodedObject {
   type: number;
   body: Buffer;
@@ -41,15 +36,12 @@ export interface EncodedObject {
 
 export interface DecodedObject {
   value: RedisValue;
-  /** Absolute ms field TTLs for hashes saved with field expiration (types 22-25). */
-  fieldExpires?: FieldExpires;
 }
 
-/** One key in an RDB database. `expireAt` and field TTLs are absolute unix ms. */
+/** One key in an RDB database. `expireAt` is absolute unix ms. */
 export interface RdbKeyEntry {
   value: RedisValue;
   expireAt?: number;
-  fieldExpires?: FieldExpires;
   /** LRU idle seconds (RDB_OPCODE_IDLE), only written when set. */
   idle?: number;
   /** LFU counter (RDB_OPCODE_FREQ), only written when set. */

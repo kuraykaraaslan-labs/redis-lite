@@ -53,6 +53,14 @@ export interface SlowlogEntry {
   name: string;
 }
 
+/** One latency monitor event (LATENCY LATEST / HISTORY): one sample per second, the newest last. */
+export interface LatencyEvent {
+  /** [unix seconds, milliseconds], at most 160 samples. */
+  samples: Array<[number, number]>;
+  /** The all-time maximum in milliseconds. */
+  max: number;
+}
+
 /** How a command is run: from a script (`redis.call`), and whether it may block. */
 export interface ExecuteMode {
   inScript: boolean;

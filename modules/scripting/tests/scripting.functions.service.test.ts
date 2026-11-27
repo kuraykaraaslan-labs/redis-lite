@@ -75,7 +75,8 @@ describe('FUNCTION LOAD', () => {
 
   it('invalid function name', async () => {
     const msg = await errorOf(t.call('FUNCTION', 'LOAD', "#!lua name=badname\nredis.register_function('bad-name', function() return 1 end)"));
-    expect(msg).toMatch(/Function names can only contain letters, numbers, or underscores\(_\) and must be at least one character long/);
+    // Redis 7.0 words it like a bad library name
+    expect(msg).toMatch(/Library names can only contain letters, numbers, or underscores\(_\) and must be at least one character long/);
   });
 
   it('unknown flag', async () => {

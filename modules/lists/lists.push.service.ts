@@ -11,7 +11,7 @@ export default class ListsPushService {
   /** The *PUSH family: the new length; the X forms push only onto an existing list (0 otherwise). */
   static push(ctx: CommandContext, { key, values, left, onlyIfExists }: PushInput): number {
     if (onlyIfExists && !ListStore.read(ctx, key)) return 0;
-    const l = ctx.db.getOrCreate(key, 'list', ListStore.create);
+    const l = ctx.db.getOrCreate(key, 'list', ListStore.creator(ctx));
     if (left) for (let i = 0; i < values.length; i++) l.unshift(values[i]);
     else for (let i = 0; i < values.length; i++) l.push(values[i]);
     return l.length;

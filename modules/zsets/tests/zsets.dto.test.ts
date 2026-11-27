@@ -72,15 +72,15 @@ describe('range DTOs', () => {
 });
 
 describe('query DTOs', () => {
-  it('ZRankDTO: extra arguments are an arity error naming the command', () => {
-    expect(parse(ZRankDTO, ['k', 'm', 'WITHSCORE', 'x'])).toBe("ERR wrong number of arguments for 'zrank' command");
-    expect(parse(ZRankDTO, ['k', 'm', 'FOO'])).toBe('ERR syntax error');
+  it('ZRankDTO: key and member only (no WITHSCORE in Redis 7.0)', () => {
+    expect(parse(ZRankDTO, ['k', 'm'])).toEqual({ key: 'k', member: 'm', reverse: false });
   });
 
   it('ZScanDTO: COUNT must be at least 1', () => {
     expect(parse(ZScanDTO, ['k', '0', 'COUNT', '0'])).toBe('ERR syntax error');
     expect(parse(ZScanDTO, ['k', 'x'])).toBe('ERR invalid cursor');
-    expect(parse(ZScanDTO, ['k', '0', 'NOSCORES', 'MATCH', 'a*'])).toEqual({ key: 'k', cursor: 0, match: 'a*', count: 10, noScores: true });
+    expect(parse(ZScanDTO, ['k', '0', 'MATCH', 'a*'])).toEqual({ key: 'k', cursor: 0, match: 'a*', count: 10 });
+    expect(parse(ZScanDTO, ['k', '0', 'NOSCORES'])).toBe('ERR syntax error');
   });
 });
 

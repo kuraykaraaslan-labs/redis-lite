@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import Redis from 'ioredis';
 
 import { RedisLite } from '@/index';
-import { waitFor, waitForBlocked } from '@/tests/helpers';
+import { waitForBlocked } from '@/tests/helpers';
 
 let server: RedisLite;
 let redis: Redis;
@@ -259,30 +259,6 @@ describe('keys', () => {
     await call('SWAPDB', 0, 3);
     expect(await redis.exists('dz2')).toBe(1);
     await call('SWAPDB', 0, 3);
-  });
-});
-
-describe('hash field expiration', () => {
-  it('HEXPIRE / HTTL / HPERSIST / HGETDEL / HSETEX / HGETEX', async () => {
-    await redis.hset('hf', 'a', '1', 'b', '2');
-    expect(await call('HEXPIRE', 'hf', 100, 'FIELDS', 2, 'a', 'zz')).toEqual([
-      1, -2,
-    ]);
-    expect(await call('HTTL', 'hf', 'FIELDS', 2, 'a', 'b')).toEqual([100, -1]);
-    expect(await call('HPERSIST', 'hf', 'FIELDS', 1, 'a')).toEqual([1]);
-    expect(await call('HPEXPIRE', 'hf', 30, 'FIELDS', 1, 'b')).toEqual([1]);
-    await waitFor(async () => (await call('HEXISTS', 'hf', 'b')) === 0);
-    expect(await redis.hgetall('hf')).toEqual({ a: '1' });
-    expect(await call('HGETDEL', 'hf', 'FIELDS', 1, 'a')).toEqual(['1']);
-    expect(await redis.exists('hf')).toBe(0);
-    expect(
-      await call('HSETEX', 'hs', 'FNX', 'EX', 100, 'FIELDS', 1, 'f', 'v'),
-    ).toBe(1);
-    expect(await call('HSETEX', 'hs', 'FNX', 'FIELDS', 1, 'f', 'v2')).toBe(0);
-    expect(await call('HGETEX', 'hs', 'PERSIST', 'FIELDS', 1, 'f')).toEqual([
-      'v',
-    ]);
-    expect(await call('HTTL', 'hs', 'FIELDS', 1, 'f')).toEqual([-1]);
   });
 });
 

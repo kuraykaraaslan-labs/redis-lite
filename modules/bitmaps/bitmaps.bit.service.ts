@@ -21,7 +21,8 @@ export default class BitmapsBitService {
 
   /**
    * Resolves a range given in bytes or bits (negative = from the end) to inclusive bit bounds; null when empty. No
-   * range = the whole string; a null end = from `start` byte to the end of the string (BITPOS key bit start).
+   * range = the whole string; a null end = from `start` byte to the end of the string (BITPOS key bit start). Like
+   * Redis 7.0, a negative bound still negative once the length is added is 0 (the end too: the first byte or bit).
    */
   private static resolveRange(totalBytes: number, range: BitRangeArgs | null): [number, number] | null {
     if (!range) return totalBytes ? [0, totalBytes * 8 - 1] : null;
@@ -33,7 +34,7 @@ export default class BitmapsBitService {
     let { start, end } = range;
     const total = range.unit === 'bit' ? totalBytes * 8 : totalBytes;
     if (start < 0) start = Math.max(0, total + start);
-    if (end < 0) end = Math.max(-1, total + end);
+    if (end < 0) end = Math.max(0, total + end);
     if (end >= total) end = total - 1;
     if (start > end || total === 0) return null;
     return range.unit === 'bit' ? [start, end] : [start * 8, end * 8 + 7];

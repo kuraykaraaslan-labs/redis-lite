@@ -135,8 +135,6 @@ describe('ZRANK / ZREVRANK', () => {
     await seed123('zrk:doc');
     expect(await t.call('ZRANK', 'zrk:doc', 'three')).toBe(2);
     expect(await t.call('ZRANK', 'zrk:doc', 'four')).toBeNull();
-    expect(await t.call('ZRANK', 'zrk:doc', 'three', 'WITHSCORE')).toEqual([2, '3']);
-    expect(await t.call('ZRANK', 'zrk:doc', 'four', 'WITHSCORE')).toBeNull();
     expect(await t.call('ZRANK', 'zrk:missing', 'a')).toBeNull();
   });
 
@@ -144,27 +142,21 @@ describe('ZRANK / ZREVRANK', () => {
     await seed123('zrrk:doc');
     expect(await t.call('ZREVRANK', 'zrrk:doc', 'one')).toBe(2);
     expect(await t.call('ZREVRANK', 'zrrk:doc', 'four')).toBeNull();
-    expect(await t.call('ZREVRANK', 'zrrk:doc', 'three', 'withscore')).toEqual([0, '3']);
-    expect(await t.call('ZREVRANK', 'zrrk:doc', 'four', 'WITHSCORE')).toBeNull();
   });
 
-  it('wire shapes: null bulk vs null array, RESP3', async () => {
+  it('wire shapes: null bulk, RESP3 null', async () => {
     await t.call('ZADD', 'zrk:wire', 1.5, 'a');
     const r = await t.raw();
     expect.soft(await r.send('ZRANK', 'zrk:wire', 'x')).toBe('$-1\r\n');
-    expect.soft(await r.send('ZRANK', 'zrk:wire', 'x', 'WITHSCORE')).toBe('*-1\r\n');
-    expect.soft(await r.send('ZRANK', 'zrk:nokey', 'x', 'WITHSCORE')).toBe('*-1\r\n');
-    expect.soft(await r.send('ZRANK', 'zrk:wire', 'a', 'WITHSCORE')).toBe('*2\r\n:0\r\n$3\r\n1.5\r\n');
     const r3 = await resp3();
-    expect.soft(await r3.send('ZRANK', 'zrk:wire', 'a', 'WITHSCORE')).toBe('*2\r\n:0\r\n,1.5\r\n');
-    expect.soft(await r3.send('ZRANK', 'zrk:wire', 'x', 'WITHSCORE')).toBe('_\r\n');
+    expect.soft(await r3.send('ZRANK', 'zrk:wire', 'x')).toBe('_\r\n');
     expect.soft(await r3.send('ZREVRANK', 'zrk:wire', 'x')).toBe('_\r\n');
   });
 
   it('errors', async () => {
     await seed123('zrk:e');
-    expect.soft(await err(t.call('ZRANK', 'zrk:e', 'one', 'FOO'))).toBe(SYNTAX);
-    expect.soft(await err(t.call('ZRANK', 'zrk:e', 'one', 'WITHSCORE', 'x'))).toBe(arity('zrank'));
+    expect.soft(await err(t.call('ZRANK', 'zrk:e', 'one', 'WITHSCORE'))).toBe(arity('zrank'));
+    expect.soft(await err(t.call('ZREVRANK', 'zrk:e', 'one', 'WITHSCORE'))).toBe(arity('zrevrank'));
     expect.soft(await err(t.call('ZRANK', 'zrk:e'))).toBe(arity('zrank'));
     expect.soft(await err(t.call('ZREVRANK', 'zrk:e'))).toBe(arity('zrevrank'));
     await t.call('SET', 'zrk:str', 'x');
@@ -182,9 +174,9 @@ describe('ZSCAN', () => {
     expect(await t.call('ZSCAN', 'zsc:missing', 0)).toEqual(['0', []]);
   });
 
-  it('NOSCORES (Redis 8.0+)', async () => {
+  it('NOSCORES is a syntax error (Redis 7.0)', async () => {
     await t.call('ZADD', 'zsc:ns', 1, 'one', 2, 'two');
-    expect(await t.call('ZSCAN', 'zsc:ns', 0, 'NOSCORES')).toEqual(['0', ['one', 'two']]);
+    expect(await err(t.call('ZSCAN', 'zsc:ns', 0, 'NOSCORES'))).toBe(SYNTAX);
   });
 
   it('large set iterates fully', async () => {

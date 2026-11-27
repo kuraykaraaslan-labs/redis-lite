@@ -10,12 +10,11 @@ import type {
   ClientOnOffInput,
   ClientPauseInput,
   ClientReplyInput,
-  ClientSetInfoInput,
   ClientSetNameInput,
   ClientTrackingInput,
 } from './connection.dto';
 
-/** The calling connection's own settings: CLIENT SETNAME, GETNAME, ID, SETINFO, REPLY, NO-TOUCH, NO-EVICT, tracking… */
+/** The calling connection's own settings: CLIENT SETNAME, GETNAME, ID, REPLY, NO-EVICT, tracking… */
 export default class ConnectionClientService {
   // ──────────────────────────────────────────────
   // Public Methods: identity
@@ -34,12 +33,6 @@ export default class ConnectionClientService {
     return ctx.client.id;
   }
 
-  static setInfo(ctx: CommandContext, { attr, value }: ClientSetInfoInput): Reply {
-    if (attr === 'lib-name') ctx.client.libName = value;
-    else ctx.client.libVer = value;
-    return OK;
-  }
-
   static help(): Reply {
     return CommandService.helpReply('client');
   }
@@ -47,11 +40,6 @@ export default class ConnectionClientService {
   // ──────────────────────────────────────────────
   // Public Methods: behaviour
   // ──────────────────────────────────────────────
-
-  static noTouch(ctx: CommandContext, { on }: ClientOnOffInput): Reply {
-    ctx.client.noTouch = on;
-    return OK;
-  }
 
   static noEvict(ctx: CommandContext, { on }: ClientOnOffInput): Reply {
     ctx.client.noEvict = on;

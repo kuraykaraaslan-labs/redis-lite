@@ -1,4 +1,5 @@
 import { differential, s, v } from './differential.harness';
+import { intProbes } from './differential.probes';
 
 differential('bitmaps', [
   // SETBIT / GETBIT
@@ -50,4 +51,11 @@ differential('bitmaps', [
   s('BITOP ANDOR', ['SET a "\\xff"', 'SET b "\\x0f"', 'BITOP ANDOR d a b', 'GET d'], v('BITOP ANDOR added in 8.2')),
   s('BITOP ONE', ['SET a "\\xff"', 'SET b "\\x0f"', 'BITOP ONE d a b', 'GET d'], v('BITOP ONE added in 8.2')),
   s('BITOP DIFF needs two keys', ['SET a "\\xff"', 'BITOP DIFF d a'], v('BITOP DIFF added in 8.2 (7.0: unknown op syntax error)', 'medium')),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('SETBIT value', ['SETBIT k 0 $N', 'EXISTS k']),
+  ...intProbes('GETBIT SETBIT', ['SET k hello', 'GETBIT k $N', 'SETBIT k $N 1', 'STRLEN k']),
+  ...intProbes('BITCOUNT', ['SET k hello', 'BITCOUNT k $N -1', 'BITCOUNT k 0 $N', 'BITCOUNT k 0 $N BIT', 'BITCOUNT k $N -1 BIT']),
+  ...intProbes('BITPOS', ['SET k hello', 'BITPOS k 1 $N', 'BITPOS k 1 0 $N', 'BITPOS k 0 $N -1 BIT', 'BITPOS k 1 0 $N BIT']),
+  ...intProbes('BITFIELD', ['SET k hello', 'BITFIELD k GET u8 $N', 'BITFIELD k INCRBY i8 0 $N', 'BITFIELD k SET i64 0 $N', 'BITFIELD k INCRBY i64 0 $N', 'BITFIELD_RO k GET u8 $N', 'GET k']),
 ]);

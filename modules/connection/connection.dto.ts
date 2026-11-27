@@ -3,12 +3,12 @@ import { z } from 'zod';
 import { formatMessage } from '@/libs/message-format';
 import type { Protocol } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, IntegerSchemaWith, SubcommandSchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
+import { Int64Schema, IntSchema, IntegerSchema, IntegerSchemaWith, SubcommandSchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
 
 import CommandService from '@/modules/command/command.service';
 import TrackingService from '@/modules/tracking/tracking.service';
 
-import { ClientAttributeEnum, PauseModeEnum, ReplyModeEnum, UnblockReasonEnum } from './connection.enums';
+import { PauseModeEnum, ReplyModeEnum, UnblockReasonEnum } from './connection.enums';
 import ConnectionMessages from './connection.messages';
 import type { ClientKillFilters } from './connection.types';
 
@@ -56,7 +56,7 @@ export const PingDTO = z.array(ValueSchema).transform((args, ctx) => (args.lengt
 
 export const EchoDTO = z.tuple([ValueSchema]).transform(([message]) => ({ message }));
 
-export const SelectDTO = z.tuple([IntegerSchema]).transform(([index]) => ({ index }));
+export const SelectDTO = z.tuple([IntSchema]).transform(([index]) => ({ index }));
 
 // ============================================================================
 // Auth DTOs: AUTH, HELLO
@@ -93,24 +93,17 @@ export const HelloDTO = z.array(z.string()).transform((args, ctx) => {
 });
 
 // ============================================================================
-// Client DTOs: CLIENT SETNAME, SETINFO, REPLY, NO-TOUCH, NO-EVICT, PAUSE, TRACKING, CACHING
+// Client DTOs: CLIENT SETNAME, REPLY, NO-EVICT, PAUSE, TRACKING, CACHING
 // ============================================================================
 
 export const ClientSetNameDTO = z.tuple([SubcommandSchema, ClientNameSchema]).transform(([, name]) => ({ name }));
-
-export const ClientSetInfoDTO = z.tuple([SubcommandSchema, z.string(), z.string()]).transform(([, option, value], ctx) => {
-  const attr = ClientAttributeEnum.safeParse(option.toLowerCase());
-  if (!attr.success) return reject(ctx, formatMessage(ConnectionMessages.SETINFO_UNRECOGNIZED, { option }));
-  if (!validAttr(value)) return reject(ctx, formatMessage(ConnectionMessages.SETINFO_INVALID, { option }));
-  return { attr: attr.data, value };
-});
 
 export const ClientReplyDTO = z.tuple([SubcommandSchema, z.string()]).transform(([, mode], ctx) => {
   const parsed = ReplyModeEnum.safeParse(mode.toLowerCase());
   return parsed.success ? { mode: parsed.data } : reject(ctx, RespMessages.SYNTAX);
 });
 
-/** CLIENT NO-TOUCH / NO-EVICT (ON|OFF). */
+/** CLIENT NO-EVICT (ON|OFF). */
 export const ClientOnOffDTO = z.tuple([SubcommandSchema, z.string()]).transform(([, value], ctx) => {
   const v = value.toLowerCase();
   if (v !== 'on' && v !== 'off') return reject(ctx, RespMessages.SYNTAX);
@@ -172,15 +165,16 @@ export const ClientListDTO = z.array(z.string()).transform((args, ctx) => {
  */
 export const ClientKillDTO = z.array(z.string()).transform((args) => {
   if (args.length === 2) return { address: args[1], filters: null, error: null };
-  const filters: ClientKillFilters = { id: null, type: null, addr: null, laddr: null, users: [], maxAge: null, skipMe: true };
+  const filters: ClientKillFilters = { id: null, type: null, addr: null, laddr: null, users: [], skipMe: true };
   const fail = (error: string) => ({ address: null, filters, error });
   for (let i = 1; i < args.length; i += 2) {
     const option = args[i].toLowerCase();
     const value = args[i + 1];
     if (value === undefined) return fail(RespMessages.SYNTAX);
     if (option === 'id') {
-      if (!/^-?\d+$/.test(value) || Number(value) < 1) return fail(ConnectionMessages.CLIENT_ID_POSITIVE);
-      filters.id = Number(value);
+      const id = Int64Schema.safeParse(value);
+      if (!id.success || id.data < 1n) return fail(ConnectionMessages.CLIENT_ID_POSITIVE);
+      filters.id = Number(id.data);
     } else if (option === 'type') {
       const type = CLIENT_TYPES[value.toLowerCase()];
       if (!type) return fail(formatMessage(ConnectionMessages.CLIENT_TYPE_UNKNOWN, { type: value }));
@@ -192,10 +186,6 @@ export const ClientKillDTO = z.array(z.string()).transform((args) => {
       const v = value.toLowerCase();
       if (v !== 'yes' && v !== 'no') return fail(RespMessages.SYNTAX);
       filters.skipMe = v === 'yes';
-    } else if (option === 'maxage') {
-      const maxAge = IntegerSchema.safeParse(value);
-      if (!maxAge.success) return fail(firstIssue(maxAge.error));
-      filters.maxAge = maxAge.data;
     } else return fail(RespMessages.SYNTAX);
   }
   return { address: null, filters, error: null };
@@ -224,7 +214,6 @@ export type SelectInput = z.infer<typeof SelectDTO>;
 export type AuthInput = z.infer<typeof AuthDTO>;
 export type HelloInput = z.infer<typeof HelloDTO>;
 export type ClientSetNameInput = z.infer<typeof ClientSetNameDTO>;
-export type ClientSetInfoInput = z.infer<typeof ClientSetInfoDTO>;
 export type ClientReplyInput = z.infer<typeof ClientReplyDTO>;
 export type ClientOnOffInput = z.infer<typeof ClientOnOffDTO>;
 export type ClientPauseInput = z.infer<typeof ClientPauseDTO>;

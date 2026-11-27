@@ -1,8 +1,9 @@
 import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
-import { OK, RespMap, Status } from '@/libs/resp';
+import { OK, RespMap } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
+import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 
 import type { XInfoInput, XInfoStreamInput, XSetIdInput } from './streams.dto';
@@ -31,7 +32,6 @@ export default class StreamsInfoService {
         return RespMap.from([
           'name', c.name,
           'seen-time', c.seenTime,
-          'active-time', c.activeTime,
           'pel-count', c.pending.size,
           'pending', limit(cpel).map((p) => [idToString(p.id), p.deliveryTime, p.deliveryCount]),
         ]);
@@ -53,7 +53,7 @@ export default class StreamsInfoService {
   // ──────────────────────────────────────────────
 
   static infoHelp(): Reply {
-    return StreamsMessages.XINFO_HELP.map((line) => new Status(line));
+    return CommandService.helpReply('xinfo');
   }
 
   /** XINFO's read step: the stream at the key, before any subcommand option is parsed ("no such key" first). */
@@ -106,7 +106,7 @@ export default class StreamsInfoService {
     if (!g) throw new AppError(formatMessage(StreamsMessages.NOGROUP_FOR_KEY, { key, group }));
     const now = Date.now();
     return [...g.consumers.values()].sort(byName).map((c) =>
-      RespMap.from(['name', c.name, 'pending', c.pending.size, 'idle', now - c.seenTime, 'inactive', c.activeTime < 0 ? -1 : now - c.activeTime]),
+      RespMap.from(['name', c.name, 'pending', c.pending.size, 'idle', now - c.seenTime]),
     );
   }
 

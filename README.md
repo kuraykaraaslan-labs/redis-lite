@@ -6,7 +6,7 @@
 
 **A Redis-compatible server written in TypeScript. Run your Redis-backed Node.js app without installing Redis.**
 
-redis-lite speaks the Redis protocol (RESP2 and RESP3) and aims to behave **exactly like Redis 8.8**: the same replies, the same error texts, the same object encodings and the same binary formats. Point `REDIS_URL` at it and your code keeps working, including **BullMQ**, Lua scripts, Redis Functions, streams with consumer groups, geo, bitmaps and HyperLogLog. It supports **242 commands** and needs no Docker, no native build and no code changes.
+redis-lite speaks the Redis protocol (RESP2 and RESP3) and aims to behave **exactly like Redis 7.0.15**: the same replies, the same error texts, the same object encodings and the same binary formats. Point `REDIS_URL` at it and your code keeps working, including **BullMQ**, Lua scripts, Redis Functions, streams with consumer groups, geo, bitmaps and HyperLogLog. It supports **all 240 commands of Redis 7.0.15** and needs no Docker, no native build and no code changes.
 
 ```bash
 npx @kuraykaraaslan/redis-lite
@@ -138,7 +138,7 @@ await queue.add('welcome', { to: 'someone@example.com' }, { attempts: 3, backoff
 
 ## Compatibility
 
-redis-lite reports itself as **Redis 8.8.4** (`INFO`, `HELLO`, `LOLWUT`, Lua's `redis.REDIS_VERSION`) with `maxmemory-policy noeviction` by default, so version and eviction-policy checks pass.
+redis-lite reports itself as **Redis 7.0.15** (`INFO`, `HELLO`, `LOLWUT`, Lua's `redis.REDIS_VERSION`) with `maxmemory-policy noeviction` by default, so version and eviction-policy checks pass.
 
 Tested end to end with real clients:
 
@@ -147,19 +147,19 @@ Tested end to end with real clients:
 | **ioredis** | 5.8 | commands, pipelines, `multi`, `watch`, `eval`, `defineCommand`, pub/sub, sharded pub/sub, `monitor`, blocking commands, binary values |
 | **BullMQ** | 5.66 and 6.7 | queues, workers, delayed jobs, retries and backoff, priorities, `QueueEvents`, `FlowProducer`, job schedulers (repeat), rate limiter, pause/resume, `getWorkers`, `obliterate`, progress and logs |
 
-The test suite has **over 1,000 tests**, most of them written from the Redis documentation and Redis's known behaviour rather than from redis-lite's own output.
+The test suite has **over 8,700 tests**; more than 7,000 of them compare redis-lite byte for byte with a real Redis 7.0.15 (see [docs/DIFFERENTIAL.md](docs/DIFFERENTIAL.md)).
 
 ### What behaves like Redis
 
 - **Protocol:** RESP2 and RESP3 (`HELLO 3`) with Redis's per-command reply types (maps, sets, doubles, push messages, verbatim strings), pipelining, inline commands with Redis's quoting rules, Redis's protocol error texts and limits.
-- **Object encodings:** `int`/`embstr`/`raw`, `listpack`/`listpackex`/`hashtable`, `intset`/`listpack`/`hashtable`, `listpack`/`skiplist`, `listpack`/`quicklist`, with Redis's conversion thresholds (configurable with `CONFIG SET`) and one-way conversion rules. `OBJECT ENCODING` reports them.
+- **Object encodings:** `int`/`embstr`/`raw`, `listpack`/`hashtable`, `intset`/`hashtable`, `listpack`/`skiplist`, `quicklist` (with listpack nodes), with Redis's conversion thresholds (configurable with `CONFIG SET`) and one-way conversion rules. `OBJECT ENCODING` reports them.
 - **SCAN family:** real cursors; compact encodings return everything in one call, large ones are paginated by `COUNT`, as in Redis.
 - **64-bit integers** everywhere Redis uses them (`INCR`, `HINCRBY`, `BITFIELD`, expire times), stream IDs over the full unsigned 64-bit range.
 - **Streams** stored as Redis stores them: nodes of `stream-node-max-entries` / `stream-node-max-bytes`, so `MAXLEN ~` / `MINID ~` trim whole nodes exactly like Redis. Consumer groups with Redis's lag and entries-read accounting.
 - **HyperLogLog** with Redis's algorithm and byte format (MurmurHash64A, sparse/dense representation, Ertl estimator), `PFDEBUG`, `PFSELFTEST`.
 - **`DUMP` / `RESTORE` and `FUNCTION DUMP` / `RESTORE`** in the real RDB format (CRC64, LZF, listpack/intset/quicklist encodings).
 - **`WATCH`** fires only on real modifications, like Redis's `signalModifiedKey`.
-- **LRU/LFU** access tracking: `OBJECT IDLETIME`, `OBJECT FREQ` (Redis's logarithmic counter and decay), `CLIENT NO-TOUCH`.
+- **LRU/LFU** access tracking: `OBJECT IDLETIME`, `OBJECT FREQ` (Redis's logarithmic counter and decay).
 - **Observability:** `INFO` with Redis's sections including `commandstats` and `errorstats`, a real `SLOWLOG`, `COMMAND INFO` / `DOCS` / `GETKEYS` driven by full command metadata (key specs, ACL categories, tips).
 - **`CONFIG`:** Redis's config table with types, bounds, memory units, aliases and error texts; settings take effect.
 - **Persistence:** RDB snapshots (`SAVE`, `BGSAVE [SCHEDULE]`, save points, `LASTSAVE`, load at startup, `DEBUG RELOAD`), the multi-part AOF of Redis 7+ (manifest, base + incr files, `appendfsync`, `BGREWRITEAOF`, automatic rewrites, `DEBUG LOADAOF`, `aof-load-truncated`), `SHUTDOWN [NOSAVE|SAVE] [NOW] [FORCE] [ABORT]`, `MISCONF` write denial after a failed save, `INFO persistence`. Commands are propagated the way Redis propagates them (relative expires made absolute, scripts and `MULTI` as one `MULTI … EXEC` unit, blocking pops as their non-blocking forms, expired keys as `DEL`).
@@ -171,21 +171,20 @@ The test suite has **over 1,000 tests**, most of them written from the Redis doc
 
 | Group | Commands |
 |---|---|
-| Connection | `PING` `ECHO` `SELECT` `AUTH` `HELLO` `RESET` `QUIT` `READONLY` `READWRITE` `CLIENT` (`SETNAME` `GETNAME` `ID` `LIST` `INFO` `SETINFO` `KILL` `UNBLOCK` `TRACKING` `CACHING` `GETREDIR` `TRACKINGINFO` `NO-EVICT` `NO-TOUCH` `REPLY` `PAUSE` `UNPAUSE` `HELP`) |
-| Server | `INFO` `CONFIG` (`GET` `SET` `RESETSTAT` `REWRITE`) `TIME` `DBSIZE` `FLUSHDB` `FLUSHALL` `COMMAND` (`COUNT` `LIST` `INFO` `DOCS` `GETKEYS` `GETKEYSANDFLAGS`) `ACL` `MONITOR` `SLOWLOG` `LATENCY` `MEMORY` `WAIT` `WAITAOF` `ROLE` `SAVE` `BGSAVE` `BGREWRITEAOF` `LASTSAVE` `SHUTDOWN` `DEBUG` `LOLWUT` |
-| Keys | `DEL` `UNLINK` `EXISTS` `TYPE` `TOUCH` `RENAME` `RENAMENX` `COPY` `MOVE` `SWAPDB` `KEYS` `SCAN` `RANDOMKEY` `SORT` `SORT_RO` `DUMP` `RESTORE` `OBJECT` `EXPIRE` `PEXPIRE` `EXPIREAT` `PEXPIREAT` `TTL` `PTTL` `EXPIRETIME` `PEXPIRETIME` `PERSIST` |
+| Connection | `PING` `ECHO` `SELECT` `AUTH` `HELLO` `RESET` `QUIT` `READONLY` `READWRITE` `CLIENT` (`SETNAME` `GETNAME` `ID` `LIST` `INFO` `KILL` `UNBLOCK` `TRACKING` `CACHING` `GETREDIR` `TRACKINGINFO` `NO-EVICT` `REPLY` `PAUSE` `UNPAUSE` `HELP`) |
+| Server | `INFO` `CONFIG` (`GET` `SET` `RESETSTAT` `REWRITE`) `TIME` `DBSIZE` `FLUSHDB` `FLUSHALL` `COMMAND` (`COUNT` `LIST` `INFO` `DOCS` `GETKEYS` `GETKEYSANDFLAGS`) `ACL` `MONITOR` `SLOWLOG` `LATENCY` `MEMORY` `WAIT` `ROLE` `SAVE` `BGSAVE` `BGREWRITEAOF` `LASTSAVE` `SHUTDOWN` `DEBUG` `LOLWUT` |
+| Keys | `DEL` `UNLINK` `EXISTS` `TYPE` `TOUCH` `RENAME` `RENAMENX` `COPY` `MOVE` `SWAPDB` `KEYS` `SCAN` `RANDOMKEY` `SORT` `SORT_RO` `DUMP` `RESTORE` `RESTORE-ASKING` `MIGRATE` `OBJECT` `EXPIRE` `PEXPIRE` `EXPIREAT` `PEXPIREAT` `TTL` `PTTL` `EXPIRETIME` `PEXPIRETIME` `PERSIST` |
 | Strings | `GET` `SET` (all options) `SETEX` `PSETEX` `SETNX` `GETSET` `GETDEL` `GETEX` `MGET` `MSET` `MSETNX` `INCR` `INCRBY` `DECR` `DECRBY` `INCRBYFLOAT` `APPEND` `STRLEN` `GETRANGE` `SETRANGE` `SUBSTR` `LCS` |
-| Bitmaps | `SETBIT` `GETBIT` `BITCOUNT` `BITPOS` `BITOP` (incl. `DIFF` `DIFF1` `ANDOR` `ONE`) `BITFIELD` `BITFIELD_RO` |
+| Bitmaps | `SETBIT` `GETBIT` `BITCOUNT` `BITPOS` `BITOP` `BITFIELD` `BITFIELD_RO` |
 | Hashes | `HSET` `HMSET` `HSETNX` `HGET` `HMGET` `HGETALL` `HDEL` `HEXISTS` `HLEN` `HKEYS` `HVALS` `HSTRLEN` `HINCRBY` `HINCRBYFLOAT` `HSCAN` `HRANDFIELD` |
-| Hash field TTL | `HEXPIRE` `HPEXPIRE` `HEXPIREAT` `HPEXPIREAT` `HTTL` `HPTTL` `HEXPIRETIME` `HPEXPIRETIME` `HPERSIST` `HGETDEL` `HGETEX` `HSETEX` |
 | Lists | `LPUSH` `RPUSH` `LPUSHX` `RPUSHX` `LPOP` `RPOP` `LMPOP` `LLEN` `LRANGE` `LINDEX` `LSET` `LREM` `LTRIM` `LINSERT` `LPOS` `LMOVE` `RPOPLPUSH` `BLPOP` `BRPOP` `BLMPOP` `BLMOVE` `BRPOPLPUSH` |
 | Sets | `SADD` `SREM` `SMEMBERS` `SISMEMBER` `SMISMEMBER` `SCARD` `SPOP` `SRANDMEMBER` `SMOVE` `SUNION` `SINTER` `SDIFF` `SINTERCARD` `SUNIONSTORE` `SINTERSTORE` `SDIFFSTORE` `SSCAN` |
-| Sorted sets | `ZADD` `ZINCRBY` `ZREM` `ZCARD` `ZSCORE` `ZMSCORE` `ZCOUNT` `ZLEXCOUNT` `ZRANGE` `ZREVRANGE` `ZRANGEBYSCORE` `ZREVRANGEBYSCORE` `ZRANGEBYLEX` `ZREVRANGEBYLEX` `ZRANGESTORE` `ZRANK` `ZREVRANK` `ZREMRANGEBYSCORE` `ZREMRANGEBYRANK` `ZREMRANGEBYLEX` `ZPOPMIN` `ZPOPMAX` `ZMPOP` `BZPOPMIN` `BZPOPMAX` `BZMPOP` `ZUNION` `ZINTER` `ZDIFF` `ZUNIONSTORE` `ZINTERSTORE` `ZDIFFSTORE` `ZINTERCARD` `ZSCAN` (incl. `NOSCORES`) `ZRANDMEMBER` |
+| Sorted sets | `ZADD` `ZINCRBY` `ZREM` `ZCARD` `ZSCORE` `ZMSCORE` `ZCOUNT` `ZLEXCOUNT` `ZRANGE` `ZREVRANGE` `ZRANGEBYSCORE` `ZREVRANGEBYSCORE` `ZRANGEBYLEX` `ZREVRANGEBYLEX` `ZRANGESTORE` `ZRANK` `ZREVRANK` `ZREMRANGEBYSCORE` `ZREMRANGEBYRANK` `ZREMRANGEBYLEX` `ZPOPMIN` `ZPOPMAX` `ZMPOP` `BZPOPMIN` `BZPOPMAX` `BZMPOP` `ZUNION` `ZINTER` `ZDIFF` `ZUNIONSTORE` `ZINTERSTORE` `ZDIFFSTORE` `ZINTERCARD` `ZSCAN` `ZRANDMEMBER` |
 | Geo | `GEOADD` `GEOPOS` `GEODIST` `GEOHASH` `GEOSEARCH` `GEOSEARCHSTORE` `GEORADIUS` `GEORADIUS_RO` `GEORADIUSBYMEMBER` `GEORADIUSBYMEMBER_RO` |
 | Streams | `XADD` `XLEN` `XRANGE` `XREVRANGE` `XDEL` `XTRIM` `XREAD` `XGROUP` `XREADGROUP` `XACK` `XPENDING` `XCLAIM` `XAUTOCLAIM` `XINFO` (incl. `STREAM … FULL`) `XSETID` |
 | HyperLogLog | `PFADD` `PFCOUNT` `PFMERGE` `PFDEBUG` `PFSELFTEST` |
 | Pub/Sub | `SUBSCRIBE` `UNSUBSCRIBE` `PSUBSCRIBE` `PUNSUBSCRIBE` `PUBLISH` `SSUBSCRIBE` `SUNSUBSCRIBE` `SPUBLISH` `PUBSUB` |
-| Replication | `REPLICAOF` `SLAVEOF` `ROLE` `WAIT` `WAITAOF` `FAILOVER` `PSYNC` `SYNC` `REPLCONF` |
+| Replication | `REPLICAOF` `SLAVEOF` `ROLE` `WAIT` `FAILOVER` `PSYNC` `SYNC` `REPLCONF` |
 | Transactions | `MULTI` `EXEC` `DISCARD` `WATCH` `UNWATCH` |
 | Scripting | `EVAL` `EVALSHA` `EVAL_RO` `EVALSHA_RO` `SCRIPT` (`LOAD` `EXISTS` `FLUSH` `KILL`) |
 | Functions | `FUNCTION` (`LOAD` `LIST` `DELETE` `FLUSH` `STATS` `DUMP` `RESTORE` `KILL`) `FCALL` `FCALL_RO` |
@@ -206,7 +205,7 @@ Scripts and functions run on Lua 5.4 (compiled to WASM), with a compatibility la
 
 ## Status
 
-redis-lite is under active development towards full Redis 8.8 parity. See [docs/PHASES.md](docs/PHASES.md) for the roadmap.
+redis-lite targets byte-for-byte parity with Redis 7.0.15. See [docs/PHASES.md](docs/PHASES.md) for the roadmap.
 
 **Wired into the server and tested:**
 
@@ -221,14 +220,13 @@ redis-lite is under active development towards full Redis 8.8 parity. See [docs/
 | Keyspace notifications (`notify-keyspace-events`) | Done |
 | Client-side caching (`CLIENT TRACKING`) | Done |
 | CLI config file (`redis.conf`) | Done |
-| Replication: `REPLICAOF` / `replicaof` directive / `--replicaof`, full sync (disk or diskless EOF payload), partial resync from the backlog, PSYNC2 after promotion, chained replicas, read-only replicas, `replica-serve-stale-data`, `WAIT` / `WAITAOF` with real acknowledgements, `min-replicas-to-write`, `FAILOVER`, `ROLE` and `INFO replication` | Done |
-| Time series (`TS.*`) | Done |
+| Replication: `REPLICAOF` / `replicaof` directive / `--replicaof`, full sync (disk or diskless EOF payload), partial resync from the backlog, PSYNC2 after promotion, chained replicas, read-only replicas, `replica-serve-stale-data`, `WAIT` with real acknowledgements, `min-replicas-to-write`, `FAILOVER`, `ROLE` and `INFO replication` | Done |
 
-**Not available yet:** sentinel, cluster, and the other modules bundled with Redis 8 (JSON, Search, probabilistic, vector sets).
+**Not available yet:** sentinel and cluster. Loadable modules (`MODULE LOAD`) are not supported.
 
 ## Differences from Redis
 
-What still differs from Redis 8.8 today:
+What still differs from Redis 7.0.15 today:
 
 | Topic | Behaviour |
 |---|---|
@@ -239,12 +237,12 @@ What still differs from Redis 8.8 today:
 | `rdb_changes_since_last_save` | Counts modified keys per command, not every element changed (Redis counts e.g. each `SADD` member). |
 | Eviction | Used memory is Redis's accounting model, not the allocator's real numbers. The tenacity-to-time mapping and the sampling pool are redis-lite's own approximation of the documented behaviour. Scripts and functions without the `allow-oom` flag are not refused up front when out of memory; their write calls get the `OOM` error instead. Client eviction (`maxmemory-clients`) is not implemented. |
 | Client-side caching | When `tracking-table-max-keys` is exceeded the oldest tracked keys are dropped (Redis picks random ones). |
-| `LATENCY` | Does not record events yet. |
-| Lua number formatting | `tostring()` uses Lua 5.1's `%.14g`, but `..` concatenation still uses Lua 5.4 rules (`10/2 .. ''` gives `"5.0"`, Redis gives `"5"`). |
-| Replication | Interoperability with a real Redis master or replica follows the documented protocol but has only been tested redis-lite to redis-lite. A full sync takes the snapshot synchronously (no fork, no per-replica output buffer); `repl-diskless-load` only decides whether the received RDB is also written to `dbfilename` (it is always parsed before the dataset is replaced, like `swapdb`), and `replica-lazy-flush` has no visible effect. A replica's offset advances at transaction boundaries. Hash field TTLs still expire lazily on a replica (whole keys never do). The RDB-channel replication of Redis 8 and `client-output-buffer-limit` for replicas are not implemented. |
-| Not supported | Sentinel, cluster, Redis 8 modules other than time series (JSON, Search, probabilistic, vector sets). |
+| Lua number formatting | `tostring()` uses Lua 5.1's `%.14g`, but scripts run on Lua 5.4, which has no negative zero: `tostring(-0)` gives `"0"` where Redis gives `"-0"`. |
+| Replication | Interoperability with a real Redis master or replica follows the documented protocol but has only been tested redis-lite to redis-lite. A full sync takes the snapshot synchronously (no fork, no per-replica output buffer); `repl-diskless-load` only decides whether the received RDB is also written to `dbfilename` (it is always parsed before the dataset is replaced, like `swapdb`), and `replica-lazy-flush` has no visible effect. A replica's offset advances at transaction boundaries. `client-output-buffer-limit` for replicas is not enforced. |
+| Lua error tables | A script that raises an error table without a string `err` field crashes Redis 7.0.15; redis-lite closes only that client's connection. |
+| Not supported | Sentinel, cluster, loadable modules. |
 
-**Verification:** expected behaviour comes from the Redis documentation and Redis's known behaviour. A byte-for-byte differential test suite against a real Redis 8.8 server is planned; until it runs, some binary details (exact RDB version number, HLL bytes, memory numbers) are unverified.
+**Verification:** a differential test suite sends the same commands to redis-lite and to a real Redis 7.0.15 over RESP2 and RESP3 and compares the reply bytes, including the whole command table (`COMMAND INFO` / `COMMAND DOCS` of every command), the `CONFIG GET *` table, the `INFO` field set, `DUMP` payloads and HLL bytes (see [docs/DIFFERENTIAL.md](docs/DIFFERENTIAL.md)). Memory figures follow Redis's accounting model and are compared by shape, not by value.
 
 ## When not to use it
 

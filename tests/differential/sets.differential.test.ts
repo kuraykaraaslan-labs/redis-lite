@@ -1,11 +1,11 @@
-import { differential, s, v } from './differential.harness';
+import { differential, s } from './differential.harness';
 import { shape, sorted } from './differential.normalizers';
+import { INT_PROBES_NO_NEGATIVE_COUNT, intProbes } from './differential.probes';
 
 /**
  * Sets. Intsets reply in ascending numeric order on every version (compared as is). Small string sets are hashtable
  * encoded on the 7.0 oracle (listpack only since 7.2), so their member order is hash-table order: sorted.
  */
-const LISTPACK = v('small non-integer sets are listpack-encoded since 7.2; 7.0 uses hashtable');
 /** 600 integers: past set-max-intset-entries (512). */
 const BIGINT = ['SADD big', ...Array.from({ length: 600 }, (_, i) => String(i))].join(' ');
 
@@ -29,12 +29,19 @@ differential('sets', [
   s('non-canonical integers are strings', ['SADD s 1 01 +1 " 1" 1.0', 'SCARD s', { cmd: 'SMEMBERS s', norm: sorted }]),
 
   // encodings
-  s('intset converts on a string member', ['SADD s 1 2 3', 'SADD s x', 'OBJECT ENCODING s'], LISTPACK),
+  s('intset converts on a string member', ['SADD s 1 2 3', 'SADD s x', 'OBJECT ENCODING s']),
   s('intset converts past set-max-intset-entries', [BIGINT, 'OBJECT ENCODING big', 'SCARD big', 'SISMEMBER big 599']),
-  s('small string set encoding', ['SADD s a b', 'OBJECT ENCODING s'], LISTPACK),
+  s('small string set encoding', ['SADD s a b', 'OBJECT ENCODING s']),
   s('string set with a long member', ['SADD s 1', `SADD s ${'x'.repeat(100)}`, 'OBJECT ENCODING s', 'SCARD s']),
-  s('CONFIG set-max-intset-entries lowers the limit', ['CONFIG SET set-max-intset-entries 2', 'SADD s 1 2', 'OBJECT ENCODING s', 'SADD s 3', 'OBJECT ENCODING s', { cmd: 'SMEMBERS s', norm: sorted }], LISTPACK),
-  s('removing the string member keeps the encoding', ['SADD s 1 2 x', 'SREM s x', 'OBJECT ENCODING s'], LISTPACK),
+  s('CONFIG set-max-intset-entries lowers the limit', ['CONFIG SET set-max-intset-entries 2', 'SADD s 1 2', 'OBJECT ENCODING s', 'SADD s 3', 'OBJECT ENCODING s', { cmd: 'SMEMBERS s', norm: sorted }]),
+  s('removing the string member keeps the encoding', ['SADD s 1 2 x', 'SREM s x', 'OBJECT ENCODING s']),
+  s('set encodings of stored results', [
+    'SADD a 1 2 3 x', 'SADD b 1 2 3 4', 'SINTERSTORE i a b', 'OBJECT ENCODING i', 'SUNIONSTORE u a b', 'OBJECT ENCODING u',
+    'SDIFFSTORE d b a', 'OBJECT ENCODING d', 'SMOVE a n 1', 'OBJECT ENCODING n', 'SMOVE a m x', 'OBJECT ENCODING m',
+  ]),
+  s('set encodings after SPOP and COPY', ['SADD s 1 2 3 x', { cmd: 'SPOP s 3', norm: () => 'random members' }, 'OBJECT ENCODING s', 'SADD t 1 2 3', 'COPY t c', 'OBJECT ENCODING c']),
+  s('set-max-listpack parameters do not exist in 7.0', ['CONFIG GET set-max-listpack*', 'CONFIG SET set-max-listpack-entries 1', 'CONFIG SET set-max-listpack-value 1']),
+  s('MEMORY USAGE of set encodings', ['SADD s 1 2 3', 'MEMORY USAGE s', 'SADD w 1 70000 5000000000', 'MEMORY USAGE w', 'SADD h a b c', 'MEMORY USAGE h']),
 
   // SMOVE
   s('SMOVE between sets', ['SADD a x y', 'SADD b z', 'SMOVE a b x', 'SMEMBERS a', { cmd: 'SMEMBERS b', norm: sorted }, 'SMOVE a b nope']),
@@ -85,4 +92,10 @@ differential('sets', [
   s('SSCAN string set full iteration', ['SADD s alpha beta gamma delta', { scan: 'SSCAN s 0' }, { scan: 'SSCAN s 0 MATCH *a' }]),
   s('SSCAN errors and missing key', ['SSCAN nokey 0', 'SADD s a', 'SSCAN s x', 'SSCAN s 0 COUNT 0', 'SSCAN s 0 MATCH', 'SSCAN s']),
   s('SSCAN NOVALUES is a syntax error', ['SADD s a', 'SSCAN s 0 NOVALUES', 'ZADD z 1 a', 'ZSCAN z 0 NOVALUES']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('SRANDMEMBER count', ['SADD s a b c', { cmd: 'SRANDMEMBER s $N', norm: sorted }], {}, INT_PROBES_NO_NEGATIVE_COUNT),
+  ...intProbes('SPOP count', ['SADD s a b c', { cmd: 'SPOP s $N', norm: sorted }, 'SCARD s']),
+  ...intProbes('SSCAN COUNT', ['SADD s a', 'SSCAN s 0 COUNT $N']),
+  ...intProbes('SINTERCARD', ['SADD s a', 'SINTERCARD $N s', 'SINTERCARD 1 s LIMIT $N']),
 ]);

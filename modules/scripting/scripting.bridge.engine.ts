@@ -8,13 +8,10 @@ import { COMMANDS } from '@/modules/command/command.registry';
 import type { RedisLiteServer } from '@/modules/server/server.service';
 
 import LuaReplyConverter from './scripting.convert.engine';
-import { LuaType } from './scripting.enums';
+import { IGNORE_ERROR_STATS, LuaType } from './scripting.enums';
 import ScriptingMessages from './scripting.messages';
 import type LuaStack from './scripting.stack.engine';
 import type { LuaState, ScriptState } from './scripting.types';
-
-/** Scratch space to read the sign bit of a NaN. */
-const NAN_VIEW = new DataView(new ArrayBuffer(8));
 
 /**
  * The host functions of the Lua state, registered as globals before the prelude runs (it captures them in locals and
@@ -36,33 +33,6 @@ export default class LuaRedisBridge {
   // Private Helpers
   // ──────────────────────────────────────────────
 
-  /**
-   * A Lua float passed to redis.call: the shortest round-trip digits, laid out like printf "%.17g" (fixed notation for
-   * exponents -4..16, else d.ddde+XX).
-   */
-  private static formatLuaFloat(n: number): string {
-    if (n === Infinity) return 'inf';
-    if (n === -Infinity) return '-inf';
-    if (Number.isNaN(n)) {
-      // printf shows the sign of a NaN (0/0 is -nan on x86)
-      NAN_VIEW.setFloat64(0, n);
-      return (NAN_VIEW.getUint8(0) & 0x80) !== 0 ? '-nan' : 'nan';
-    }
-    if (n === 0) return Object.is(n, -0) ? '-0' : '0';
-    const [mantissa, exponentText] = n.toExponential().split('e');
-    const exponent = Number(exponentText);
-    if (exponent < -4 || exponent >= 17) {
-      return `${mantissa}e${exponent < 0 ? '-' : '+'}${String(Math.abs(exponent)).padStart(2, '0')}`;
-    }
-    const negative = mantissa.startsWith('-');
-    const digits = mantissa.replace('-', '').replace('.', '');
-    let text: string;
-    if (exponent < 0) text = `0.${'0'.repeat(-exponent - 1)}${digits}`;
-    else if (digits.length <= exponent + 1) text = digits + '0'.repeat(exponent + 1 - digits.length);
-    else text = `${digits.slice(0, exponent + 1)}.${digits.slice(exponent + 1)}`;
-    return negative ? `-${text}` : text;
-  }
-
   /** An exception caught in a host function, as the error the script sees. */
   private static exceptionError(error: unknown): RespError {
     return new RespError(`ERR ${(error as Error).message}`);
@@ -78,11 +48,7 @@ export default class LuaRedisBridge {
       const t = lw.lua_type(Ls, i);
       if (t === LuaType.STRING) argv.push(this.stack.readBytes(Ls, i));
       else if (t === LuaType.NUMBER) {
-        argv.push(
-          lw.lua_isinteger(Ls, i)
-            ? String(lw.lua_tointegerx(Ls, i, null))
-            : LuaRedisBridge.formatLuaFloat(lw.lua_tonumberx(Ls, i, null)),
-        );
+        argv.push(LuaReplyConverter.formatNumber(lw.lua_tonumberx(Ls, i, null)));
       } else return new RespError(ScriptingMessages.CALL_BAD_ARGUMENT);
     }
     return argv;
@@ -95,31 +61,45 @@ export default class LuaRedisBridge {
     return spec.arity > 0 ? argv.length === spec.arity : argv.length >= -spec.arity;
   }
 
-  /** Runs the command of a redis.call / redis.pcall: its reply, or the error the script gets. */
-  private runCommand(Ls: LuaState): Reply {
+  /**
+   * Runs the command of a redis.call / redis.pcall: its reply, or the error the script gets. `fromCommand`: the error
+   * came from the command (refused or failed), not from the call's arguments; it is counted in INFO errorstats now.
+   */
+  private runCommand(Ls: LuaState): { reply: Reply; fromCommand: boolean } {
     try {
       const argv = this.readCallArgs(Ls);
-      if (argv instanceof RespError) return argv;
+      if (argv instanceof RespError) return { reply: argv, fromCommand: false };
       const client = this.script.client;
-      if (!client) return new RespError(ScriptingMessages.CALL_OUTSIDE_SCRIPT);
-      if (LuaRedisBridge.isWriteCommand(argv)) {
-        if (this.script.readOnly) return new RespError(ScriptingMessages.READ_ONLY_SCRIPT);
-        this.script.wrote = true;
+      if (!client) return { reply: new RespError(ScriptingMessages.CALL_OUTSIDE_SCRIPT), fromCommand: false };
+      const write = LuaRedisBridge.isWriteCommand(argv);
+      let reply: Reply;
+      if (write && this.script.readOnly) reply = new RespError(ScriptingMessages.READ_ONLY_SCRIPT);
+      else {
+        if (write) this.script.wrote = true;
+        const result = this.server.execute(client, argv, { inScript: true, noBlock: true });
+        reply = result instanceof Block || result === NO_REPLY ? NULL_ARRAY : result;
       }
-      const reply = this.server.execute(client, argv, { inScript: true, noBlock: true });
-      return reply instanceof Block || reply === NO_REPLY ? NULL_ARRAY : reply;
+      if (reply instanceof RespError) this.server.countError(reply.message);
+      return { reply, fromCommand: true };
     } catch (error) {
-      return LuaRedisBridge.exceptionError(error);
+      return { reply: LuaRedisBridge.exceptionError(error), fromCommand: false };
     }
   }
 
-  /** `redis.call` (raise) / `redis.pcall`: one result, the reply converted; errors as {err=…} tables. */
+  /**
+   * `redis.call` (raise) / `redis.pcall`: one result, the reply converted; errors as {err=…} tables, the ones of a
+   * command marked `ignore_error_stats_update` (already counted: the script's error reply is not counted again).
+   */
   private redisCall(Ls: LuaState, raise: boolean): number {
-    const reply = this.runCommand(Ls);
+    const { reply, fromCommand } = this.runCommand(Ls);
     const { lw } = this.stack;
     lw.lua_settop(Ls, 0);
     if (reply instanceof RespError) {
       this.converter.pushReply(Ls, reply);
+      if (fromCommand) {
+        lw.lua_pushboolean(Ls, 1);
+        lw.lua_setfield(Ls, -2, IGNORE_ERROR_STATS);
+      }
       return raise ? lw.lua_error(Ls) : 1;
     }
     if (this.script.resp === 3) this.converter.pushReply3(Ls, reply);

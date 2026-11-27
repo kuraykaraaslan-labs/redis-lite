@@ -23,8 +23,6 @@ export interface ReplicaInfo {
   capaPsync2: boolean;
   /** Offset of the last REPLCONF ACK. */
   ackOffset: number;
-  /** FACK of the last REPLCONF ACK: the replica's offset its AOF has fsynced (WAITAOF); -1 until one arrives. */
-  aofAckOffset: number;
   /** When the last REPLCONF ACK arrived (unix ms; lag = now - ackTime). */
   ackTime: number;
   /** Attached with PSYNC (a full sync starts with `+FULLRESYNC`) rather than the old SYNC. */

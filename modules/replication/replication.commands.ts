@@ -1,5 +1,5 @@
 /**
- * Routing of the replication commands: name, arity, flags, then DTO → service. ROLE, WAIT and WAITAOF are routed by
+ * Routing of the replication commands: name, arity, flags, then DTO → service. ROLE and WAIT are routed by
  * the server module (their DTOs are pinned there) and reach the same runtime.
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.

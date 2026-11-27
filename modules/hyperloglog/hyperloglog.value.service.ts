@@ -3,6 +3,8 @@ import { OK } from '@/libs/resp';
 import type { Status } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import MemoryService from '@/modules/memory/memory.service';
+import type { StringValue } from '@/modules/memory/memory.types';
 
 import type { PfAddInput, PfCountInput, PfMergeInput } from './hyperloglog.dto';
 import { HLL_DENSE, HLL_REGISTERS } from './hyperloglog.encoding';
@@ -34,11 +36,12 @@ export default class HyperLogLogValueService {
     if (raw === undefined) return undefined;
     const hll = Hll.fromString(raw);
     if (!hll) throw new AppError(HyperLogLogMessages.WRONGTYPE);
+    hll.sds = MemoryService.stringSds(ctx.db.raw(key) as StringValue);
     return hll;
   }
 
   private static write(ctx: CommandContext, key: string, hll: Hll): void {
-    ctx.db.set(key, { type: 'string', value: hll.toString(), raw: true }, true);
+    ctx.db.set(key, { type: 'string', value: hll.toString(), raw: true, sds: hll.sds }, true);
   }
 
   // ──────────────────────────────────────────────

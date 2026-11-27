@@ -3,6 +3,7 @@ import { constants } from 'node:buffer';
 import { AppError } from '@/libs/app-error';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import MemoryService from '@/modules/memory/memory.service';
 
 import BitmapsMessages from './bitmaps.messages';
 
@@ -36,10 +37,15 @@ export default class BitmapStore {
     return v === undefined ? null : Buffer.from(v, 'latin1');
   }
 
-  /** Stores the bytes as a raw-encoded string, keeping the key's TTL. */
-  static write(ctx: CommandContext, key: string, bytes: Uint8Array): void {
+  /**
+   * Stores the bytes as a raw-encoded string, keeping the key's TTL. `inPlace`: the existing value was modified (SETBIT,
+   * BITFIELD: its allocation grows greedily); otherwise the value is new (BITOP).
+   */
+  static write(ctx: CommandContext, key: string, bytes: Uint8Array, inPlace = true): void {
     const value = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString('latin1');
-    ctx.db.set(key, { type: 'string', value, raw: true }, true);
+    const prev = inPlace ? ctx.db.raw(key) : undefined;
+    const sds = MemoryService.modifiedString(prev?.type === 'string' ? prev : undefined, value.length);
+    ctx.db.set(key, { type: 'string', value, raw: true, sds }, true);
   }
 
   /** Bit offsets are limited so the string stays under proto-max-bulk-len, as in Redis. */

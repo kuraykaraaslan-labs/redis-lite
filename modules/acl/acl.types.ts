@@ -92,9 +92,6 @@ export interface AclLogEntry {
   username: string;
   ageSeconds: number;
   clientInfo: string;
-  entryId: number;
-  timestampCreated: number;
-  timestampLastUpdated: number;
 }
 
 /** One ACL LOG entry, as stored. */
@@ -105,8 +102,6 @@ export interface StoredLogEntry {
   object: string;
   username: string;
   clientInfo: string;
-  entryId: number;
-  timestampCreated: number;
   /** Last update (ctime in Redis). */
   ctime: number;
 }
@@ -114,8 +109,6 @@ export interface StoredLogEntry {
 /** The ACL LOG of one server: newest entry first. */
 export interface AclLogState {
   entries: StoredLogEntry[];
-  /** Id of the next new entry. */
-  nextId: number;
 }
 
 // ============================================================================

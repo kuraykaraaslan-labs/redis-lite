@@ -158,7 +158,8 @@ describe('PFMERGE / PFDEBUG', () => {
     await expect(redis.call('pfdebug', 'decode', 'g')).rejects.toThrow('ERR HLL encoding is not sparse');
     await expect(redis.call('pfdebug', 'getreg', 'missing')).rejects.toThrow('ERR The specified key does not exist');
     await expect(redis.call('pfdebug', 'foo', 'g')).rejects.toThrow("ERR Unknown PFDEBUG subcommand 'foo'");
-    await expect(redis.call('pfdebug', 'getreg', 'g', 'x')).rejects.toThrow("ERR Wrong number of arguments for the 'getreg' subcommand");
+    // Redis 7.0: PFDEBUG has an exact arity of 3
+    await expect(redis.call('pfdebug', 'getreg', 'g', 'x')).rejects.toThrow("ERR wrong number of arguments for 'pfdebug' command");
   });
 
   it('PFSELFTEST', async () => {

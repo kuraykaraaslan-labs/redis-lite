@@ -12,7 +12,7 @@ import type { HashValue } from './hashes.types';
 /** Walking a hash: HSCAN, HRANDFIELD. */
 export default class HashesIterationService {
   /** HSCAN: a compact (listpack) hash is returned whole in one call, whatever COUNT says, as in Redis. */
-  static hScan(ctx: CommandContext, { key, cursor, match, noValues, count }: HScanInput): Reply {
+  static hScan(ctx: CommandContext, { key, cursor, match, count }: HScanInput): Reply {
     const h = HashStore.read(ctx, key);
     if (!h) return ['0', []];
     const value = ctx.db.peek(key);
@@ -20,9 +20,7 @@ export default class HashesIterationService {
     const { next, page } = compact ? { next: 0, page: [...h.keys()] } : DatabaseService.scanPage(h.keys(), cursor, count);
     const out: string[] = [];
     for (const f of page) {
-      if (!matchGlob(match, f)) continue;
-      if (noValues) out.push(f);
-      else out.push(f, h.get(f) ?? '');
+      if (matchGlob(match, f)) out.push(f, h.get(f) ?? '');
     }
     return [String(next), out];
   }

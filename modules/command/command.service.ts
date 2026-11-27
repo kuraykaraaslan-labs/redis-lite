@@ -11,7 +11,6 @@ export { Block, NO_REPLY, bySubcommand, keysAt, validated, withDTO } from './com
 /** The command module's public API: one flat facade over the sub-services (other modules import only this class). */
 export default class CommandService {
   // Lookup — the metadata table, (sub)command lookup, arity
-  static parseArgs = CommandLookupService.parseArgs.bind(CommandLookupService);
   static allCommandMeta = CommandLookupService.allCommandMeta.bind(CommandLookupService);
   static allCommandsDeep = CommandLookupService.allCommandsDeep.bind(CommandLookupService);
   static getCommandMeta = CommandLookupService.getCommandMeta.bind(CommandLookupService);

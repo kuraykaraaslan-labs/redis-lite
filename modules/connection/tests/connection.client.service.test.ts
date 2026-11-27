@@ -80,7 +80,7 @@ describe('CLIENT', () => {
     expect.soft(body).toMatch(/ flags=N /);
     expect.soft(body).toMatch(/ cmd=client\|info /);
     expect.soft(body).toMatch(/ user=default /);
-    expect.soft(body).toMatch(/ resp=2 /);
+    expect.soft(body).toMatch(/ resp=2\n$/);
     expect.soft(body).toMatch(/ multi=-1 /);
     expect.soft(reply.endsWith('\n\r\n')).toBe(true);
   });
@@ -90,7 +90,7 @@ describe('CLIENT', () => {
     await r.send('HELLO', '3');
     const reply = await r.send('CLIENT', 'INFO');
     expect.soft(reply).toMatch(/^=\d+\r\ntxt:id=\d+ /);
-    expect.soft(reply).toMatch(/ resp=3 /);
+    expect.soft(reply).toMatch(/ resp=3\n\r\n$/);
   });
 
   it('LIST lists every connection, with TYPE and ID filters', async () => {
@@ -121,19 +121,10 @@ describe('CLIENT', () => {
     expect.soft(await r.send('CLIENT', 'LIST')).toMatch(/^=\d+\r\ntxt:id=\d+ /);
   });
 
-  it('SETINFO lib-name / lib-ver show up in CLIENT INFO', async () => {
+  it('SETINFO and NO-TOUCH do not exist (Redis 7.2 additions)', async () => {
     const r = await t.raw();
-    expect.soft(await r.send('CLIENT', 'SETINFO', 'LIB-NAME', 'mylib')).toBe('+OK\r\n');
-    expect.soft(await r.send('CLIENT', 'SETINFO', 'lib-ver', '1.2.3')).toBe('+OK\r\n');
-    const info = await r.send('CLIENT', 'INFO');
-    expect.soft(info).toMatch(/ lib-name=mylib /);
-    expect.soft(info).toMatch(/ lib-ver=1\.2\.3/);
-    expect.soft(await r.send('CLIENT', 'SETINFO', 'foo', 'x')).toBe("-ERR Unrecognized option 'foo'\r\n");
-    // unverified: Redis echoes the attribute as typed in this message
-    expect.soft(await r.send('CLIENT', 'SETINFO', 'lib-name', 'a b')).toBe(
-      '-ERR lib-name cannot contain spaces, newlines or special characters.\r\n',
-    );
-    expect.soft(await r.send('CLIENT', 'SETINFO', 'lib-name')).toBe("-ERR wrong number of arguments for 'client|setinfo' command\r\n");
+    expect.soft(await r.send('CLIENT', 'SETINFO', 'lib-name', 'x')).toBe("-ERR unknown subcommand 'SETINFO'. Try CLIENT HELP.\r\n");
+    expect.soft(await r.send('CLIENT', 'NO-TOUCH', 'on')).toBe("-ERR unknown subcommand 'NO-TOUCH'. Try CLIENT HELP.\r\n");
   });
 
   it('KILL ID kills another client and returns the count', async () => {
@@ -198,21 +189,12 @@ describe('CLIENT', () => {
     expect.soft(await errOf(t.call('CLIENT', 'UNBLOCK', 'abc'))).toBe('ERR value is not an integer or out of range');
   });
 
-  it('NO-TOUCH and NO-EVICT accept ON/OFF', async () => {
+  it('NO-EVICT accepts ON/OFF', async () => {
     const r = await t.raw();
-    expect.soft(await r.send('CLIENT', 'NO-TOUCH', 'ON')).toBe('+OK\r\n');
-    expect.soft(await r.send('CLIENT', 'NO-TOUCH', 'off')).toBe('+OK\r\n');
-    expect.soft(await r.send('CLIENT', 'NO-TOUCH', 'maybe')).toBe('-ERR syntax error\r\n');
     expect.soft(await r.send('CLIENT', 'NO-EVICT', 'on')).toBe('+OK\r\n');
     expect.soft(await r.send('CLIENT', 'NO-EVICT', 'OFF')).toBe('+OK\r\n');
     expect.soft(await r.send('CLIENT', 'NO-EVICT', 'maybe')).toBe('-ERR syntax error\r\n');
-    expect.soft(await r.send('CLIENT', 'NO-TOUCH')).toBe("-ERR wrong number of arguments for 'client|no-touch' command\r\n");
-  });
-
-  it('NO-TOUCH shows the T flag in CLIENT INFO', async () => {
-    const r = await t.raw();
-    await r.send('CLIENT', 'NO-TOUCH', 'ON');
-    expect.soft(await r.send('CLIENT', 'INFO')).toMatch(/ flags=T /);
+    expect.soft(await r.send('CLIENT', 'NO-EVICT')).toBe("-ERR wrong number of arguments for 'client|no-evict' command\r\n");
   });
 
   it('GETREDIR is -1 without tracking', async () => {

@@ -7,8 +7,7 @@ export const CommandMessages = {
   SUBCOMMAND_SYNTAX: "ERR unknown subcommand or wrong number of arguments for '{subcommand}'. Try {command} HELP.",
   HELP_HEADER: '{command} <subcommand> [<arg> [value] [opt] ...]. Subcommands are:',
   HELP_FOOTER_NAME: 'HELP',
-  HELP_FOOTER_TEXT: '    Print this help.',
-  BAD_ARGUMENT_SPEC: 'bad argument spec: {spec}',
+  HELP_FOOTER_TEXT: '    Prints this help.',
 } as const;
 
 export default CommandMessages;

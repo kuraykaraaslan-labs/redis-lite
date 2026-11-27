@@ -24,11 +24,10 @@ export const LoadSourceEnum = z.enum(['aof', 'rdb', 'none']);
 // ============================================================================
 
 /**
- * RDB version written by this implementation (DUMP footer and the `REDIS00NN` file magic).
- * Redis 7.4 and 8.0 write RDB version 12 (introduced with hash field expiration types 24/25).
- * Kept as a single constant: if Redis 8.8 turns out to write 13, change it here.
+ * RDB version written by this implementation (DUMP footer and the `REDIS00NN` file magic): Redis 7.0 writes 10 and
+ * refuses anything newer (DUMP payloads and RDB files alike).
  */
-export const RDB_VERSION = 12;
+export const RDB_VERSION = 10;
 
 export const RDB_TYPE = {
   STRING: 0,
@@ -50,12 +49,6 @@ export const RDB_TYPE = {
   ZSET_LISTPACK: 17,
   LIST_QUICKLIST_2: 18,
   STREAM_LISTPACKS_2: 19,
-  SET_LISTPACK: 20,
-  STREAM_LISTPACKS_3: 21,
-  HASH_METADATA_PRE_GA: 22,
-  HASH_LISTPACK_EX_PRE_GA: 23,
-  HASH_METADATA: 24,
-  HASH_LISTPACK_EX: 25,
 } as const;
 
 export const RDB_OPCODE = {

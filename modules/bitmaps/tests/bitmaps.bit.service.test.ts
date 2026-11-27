@@ -64,6 +64,8 @@ describe('BITCOUNT', () => {
     expect(await t.call('BITCOUNT', 'bc:n', -8, -1, 'BIT')).toBe(4);
     expect(await t.call('BITCOUNT', 'bc:missing')).toBe(0);
     expect(await t.call('BITCOUNT', 'bc:missing', 0, 10)).toBe(0);
+    // a missing key answers 0 before the range is parsed
+    expect(await t.call('BITCOUNT', 'bc:missing', 'a', 'b', 'FOO')).toBe(0);
   });
 
   it('errors', async () => {

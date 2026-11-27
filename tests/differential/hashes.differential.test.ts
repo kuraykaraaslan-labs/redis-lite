@@ -1,5 +1,6 @@
 import { differential, s, v } from './differential.harness';
 import { shape, sorted, sortedFieldValues } from './differential.normalizers';
+import { INT_PROBES_NO_NEGATIVE_COUNT, intProbes } from './differential.probes';
 
 /** A hash with 600 fields: past the default listpack limit (512), so it is hashtable-encoded. */
 const BIG = ['HSET big', ...Array.from({ length: 600 }, (_, i) => `f${i} v${i}`)].join(' ');
@@ -94,4 +95,9 @@ differential('hashes', [
   s('HSCAN cursor out of range', ['HSET h a 1', 'HSCAN h 18446744073709551615', 'HSCAN h 18446744073709551616']),
   s('HSCAN negative cursor wraps like strtoul', ['HSET h a 1', 'HSCAN h -1', 'HSCAN h " 0"', 'HSCAN h 0x1']),
   s('HSCAN TYPE option is not accepted', ['HSET h a 1', 'HSCAN h 0 TYPE string']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('HRANDFIELD count', ['HSET h a 1 b 2', { cmd: 'HRANDFIELD h $N', norm: sorted }, { cmd: 'HRANDFIELD h $N WITHVALUES', norm: shape }], {}, INT_PROBES_NO_NEGATIVE_COUNT),
+  ...intProbes('HSCAN COUNT', ['HSET h a 1', 'HSCAN h 0 COUNT $N']),
+  ...intProbes('HINCRBY', ['HSET h a 1', 'HINCRBY h a $N', 'HGET h a', 'HINCRBY h b $N', 'HINCRBY h b $N', 'HGET h b']),
 ]);

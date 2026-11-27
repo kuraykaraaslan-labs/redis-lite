@@ -26,6 +26,7 @@ differential('hyperloglog', [
   s('PFDEBUG TODENSE', ['PFADD h a b c', 'PFDEBUG TODENSE h', 'PFDEBUG TODENSE h', 'PFDEBUG ENCODING h', 'PFCOUNT h', 'STRLEN h']),
   s('PFDEBUG DECODE', ['PFADD h a b c', 'PFDEBUG DECODE h', 'PFDEBUG TODENSE h', 'PFDEBUG DECODE h', 'PFADD e', 'PFDEBUG DECODE e']),
   s('PFDEBUG errors', ['PFDEBUG GETREG missing', 'PFDEBUG FOO h', 'PFADD h a', 'PFDEBUG FOO h', 'PFDEBUG', 'PFDEBUG GETREG', 'SET s x', 'PFDEBUG GETREG s', 'RPUSH l a', 'PFDEBUG ENCODING l']),
+  s('PFDEBUG with an extra argument', ['PFADD h a', 'PFDEBUG GETREG h x', 'PFDEBUG ENCODING h x']),
   s('PFDEBUG GETREG dense', [`PFADD h ${elements('r', 2000)}`, 'PFDEBUG ENCODING h', 'PFDEBUG GETREG h']),
   // PFSELFTEST runs the full self test on both servers: allow for a loaded machine.
   s('PFSELFTEST', [{ cmd: 'PFSELFTEST', timeout: 150_000 }, 'PFSELFTEST x'], { testTimeout: 330_000 }),

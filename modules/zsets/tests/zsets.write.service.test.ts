@@ -146,13 +146,13 @@ describe('ZADD', () => {
 });
 
 describe('score formatting', () => {
-  it('RESP2 uses the shortest representation, integers without .0', async () => {
+  it('RESP2 uses %.17g (Redis 7.0), integers without .0', async () => {
     await t.call('ZADD', 'sf', 1.5, 'a', 10, 'b', '3.0', 'c', '1e300', 'd', 0.1, 'e', -2.25, 'f', 123456789, 'g', '-0.5', 'h');
     expect(await t.call('ZSCORE', 'sf', 'a')).toBe('1.5');
     expect(await t.call('ZSCORE', 'sf', 'b')).toBe('10');
     expect(await t.call('ZSCORE', 'sf', 'c')).toBe('3');
-    expect(await t.call('ZSCORE', 'sf', 'd')).toBe('1e+300');
-    expect(await t.call('ZSCORE', 'sf', 'e')).toBe('0.1');
+    expect(await t.call('ZSCORE', 'sf', 'd')).toBe('1.0000000000000001e+300');
+    expect(await t.call('ZSCORE', 'sf', 'e')).toBe('0.10000000000000001');
     expect(await t.call('ZSCORE', 'sf', 'f')).toBe('-2.25');
     expect(await t.call('ZSCORE', 'sf', 'g')).toBe('123456789');
     expect(await t.call('ZSCORE', 'sf', 'h')).toBe('-0.5');
@@ -166,7 +166,7 @@ describe('score formatting', () => {
     expect.soft(await r.send('ZSCORE', 'sf3', 'b')).toBe(',10\r\n');
     expect.soft(await r.send('ZSCORE', 'sf3', 'c')).toBe(',inf\r\n');
     expect.soft(await r.send('ZSCORE', 'sf3', 'd')).toBe(',-inf\r\n');
-    expect.soft(await r.send('ZSCORE', 'sf3', 'e')).toBe(',1e+300\r\n');
+    expect.soft(await r.send('ZSCORE', 'sf3', 'e')).toBe(',1.0000000000000001e+300\r\n');
     expect.soft(await r.send('ZSCORE', 'sf3', 'nope')).toBe('_\r\n');
     expect.soft(await r.send('ZINCRBY', 'sf3', 1, 'a')).toBe(',2.5\r\n');
     expect.soft(await r.send('ZADD', 'sf3', 'INCR', 1, 'b')).toBe(',11\r\n');

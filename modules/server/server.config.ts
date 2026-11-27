@@ -1,14 +1,12 @@
 import { formatMessage } from '@/libs/message-format';
 import { toFloat } from '@/libs/number';
 
-import TimeseriesService from '@/modules/timeseries/timeseries.service';
-import TimeseriesMessages from '@/modules/timeseries/timeseries.messages';
 
 import ServerMessages from './server.messages';
 
 /**
  * Live server configuration (CONFIG GET / SET). Values are kept as Redis prints them in CONFIG GET (memory values in bytes,
- * booleans as yes/no, enums lowercase). Types, bounds, defaults and error texts follow Redis 8 (src/config.c).
+ * booleans as yes/no, enums lowercase). Types, bounds, defaults and error texts follow Redis 7.0 (as observed through CONFIG GET / SET).
  */
 
 const INT_MAX = 2147483647n;
@@ -22,12 +20,14 @@ type ConfigType =
   | { kind: 'int'; min: bigint; max: bigint; clamp?: [bigint, bigint] }
   | { kind: 'memory'; min: bigint; max: bigint }
   | { kind: 'string' }
-  | { kind: 'special'; normalize: (value: string) => string | { error: string } };
+  | { kind: 'special'; normalize: (value: string, current: string) => string | { error: string } };
 
 interface ConfigDef {
   type: ConfigType;
   default: string;
   immutable?: boolean;
+  /** Settable only when enable-protected-configs allows it (dir, dbfilename). */
+  protected?: boolean;
   aliases?: string[];
 }
 
@@ -38,6 +38,10 @@ const str = (def: string, immutable = false): ConfigDef => ({ type: { kind: 'str
 /** An integer accepted in `min`..`max` and then stored clamped to `clamp` (hz: 0..INT_MAX accepted, kept in 1..500). */
 const clamped = (def: number, min: bigint, max: bigint, clamp: [bigint, bigint]): ConfigDef => ({ type: { kind: 'int', min, max, clamp }, default: String(def) });
 const oneOf = (def: string, values: string[], immutable = false): ConfigDef => ({ type: { kind: 'enum', values }, default: def, immutable });
+const special = (def: string, normalize: (value: string, current: string) => string | { error: string }): ConfigDef => ({ type: { kind: 'special', normalize }, default: def });
+
+const UINT_MAX = 4294967295n;
+const SHUTDOWN_FLAGS = ['default', 'save', 'nosave', 'now', 'force'];
 
 const MAXMEMORY_POLICIES = ['volatile-lru', 'volatile-lfu', 'volatile-random', 'volatile-ttl', 'allkeys-lru', 'allkeys-lfu', 'allkeys-random', 'noeviction'];
 
@@ -79,7 +83,8 @@ function normalizePercentiles(value: string): string | { error: string } {
   const out: string[] = [];
   for (const p of parts) {
     const n = toFloat(p);
-    if (n === null || n < 0 || n > 100) return { error: ServerMessages.CONFIG_PERCENTILES };
+    if (n === null) return { error: ServerMessages.CONFIG_PERCENTILES };
+    if (n < 0 || n > 100) return { error: ServerMessages.CONFIG_PERCENTILES_RANGE };
     out.push(String(n));
   }
   return out.join(' ');
@@ -92,15 +97,58 @@ function normalizeSave(value: string): string | { error: string } {
   return parts.map((p) => String(Number(p))).join(' ');
 }
 
-/** ts-ignore-max-val-diff: a non-negative double. */
-function normalizeNonNegativeDouble(value: string): string | { error: string } {
-  const n = toFloat(value);
-  return n === null || n < 0 || n === Infinity ? { error: TimeseriesMessages.BAD_IGNORE_MAX_VAL_DIFF } : value;
+/** client-output-buffer-limit: `<class> <hard> <soft> <seconds>` groups merged into the current limits (all three classes). */
+function normalizeOutputBufferLimit(value: string, current: string): string | { error: string } {
+  const parts = value.split(' ').filter(Boolean);
+  if (parts.length % 4) return { error: ServerMessages.CONFIG_OBUF_ARGS };
+  const limits = new Map<string, string[]>();
+  const now = current.split(' ');
+  for (let i = 0; i + 3 < now.length; i += 4) limits.set(now[i], now.slice(i + 1, i + 4));
+  for (let i = 0; i < parts.length; i += 4) {
+    const cls = parts[i].toLowerCase();
+    const name = cls === 'replica' ? 'slave' : cls;
+    if (!['normal', 'slave', 'pubsub'].includes(name)) return { error: ServerMessages.CONFIG_OBUF_CLASS };
+    const hard = parseMemory(parts[i + 1]);
+    const soft = parseMemory(parts[i + 2]);
+    const seconds = /^(0|[1-9]\d*)$/.test(parts[i + 3]) ? BigInt(parts[i + 3]) : null;
+    if (hard === null || soft === null || seconds === null || hard > LONG_MAX || soft > LONG_MAX || seconds > LONG_MAX) {
+      return { error: ServerMessages.CONFIG_OBUF_VALUES };
+    }
+    limits.set(name, [hard.toString(), soft.toString(), seconds.toString()]);
+  }
+  return ['normal', 'slave', 'pubsub'].map((c) => `${c} ${(limits.get(c) ?? ['0', '0', '0']).join(' ')}`).join(' ');
 }
 
-/** ts-compaction-policy: `aggregator:bucket:retention[:align]` rules separated by `;`, or "". */
-function normalizeCompactionPolicy(value: string): string | { error: string } {
-  return TimeseriesService.parseCompactionPolicy(value) === null ? { error: TimeseriesMessages.BAD_COMPACTION_POLICY } : value;
+/** oom-score-adj-values: three integers in -2000..2000. */
+function normalizeOomScoreAdjValues(value: string): string | { error: string } {
+  const parts = value.split(' ');
+  if (parts.length !== 3) return { error: ServerMessages.CONFIG_OOM_ARGS };
+  if (parts.some((p) => !/^[-+]?\d+$/.test(p) || Math.abs(Number(p)) > 2000)) return { error: ServerMessages.CONFIG_OOM_RANGE };
+  return parts.map((p) => String(Number(p))).join(' ');
+}
+
+/** shutdown-on-sigint / sigterm: space-separated flags (`default` alone, or any of save / nosave / now / force). */
+function normalizeShutdownFlags(value: string): string | { error: string } {
+  const parts = value.toLowerCase().split(' ').filter(Boolean);
+  const bad = { error: formatMessage(ServerMessages.CONFIG_ENUM, { values: SHUTDOWN_FLAGS.join(', ') }) };
+  if (!parts.length || parts.some((p) => !SHUTDOWN_FLAGS.includes(p))) return bad;
+  const set = new Set(parts);
+  if (set.has('save') && set.has('nosave')) return { error: ServerMessages.CONFIG_SHUTDOWN_SAVE_NOSAVE };
+  if (set.has('default') && set.size > 1) set.delete('default');
+  return SHUTDOWN_FLAGS.filter((f) => set.has(f)).join(' ');
+}
+
+/** proc-title-template: text with `{variable}` placeholders from a fixed set (never empty). */
+function normalizeProcTitle(value: string): string | { error: string } {
+  const vars = ['title', 'listen-addr', 'server-mode', 'port', 'tls-port', 'unixsocket', 'config-file'];
+  const stripped = value.replace(/\{([^{}]*)\}/g, (m, v: string) => (vars.includes(v) ? '' : '\u0000'));
+  if (value === '' || /[{}\u0000]/.test(stripped)) return { error: ServerMessages.CONFIG_PROC_TITLE };
+  return value;
+}
+
+/** cluster-announce-hostname: letters, digits, hyphens and dots (or empty). */
+function normalizeHostname(value: string): string | { error: string } {
+  return /^[A-Za-z0-9.-]*$/.test(value) ? value : { error: ServerMessages.CONFIG_HOSTNAME };
 }
 
 /** replicaof: `<masterip> <masterport>` (or empty). */
@@ -111,7 +159,6 @@ function normalizeReplicaOf(value: string): string | { error: string } {
   return `${parts[0]} ${parts[1]}`;
 }
 
-const TS_DUPLICATE_POLICIES = ['block', 'first', 'last', 'min', 'max', 'sum'];
 
 export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'active-defrag-cycle-max': int(25, 1n, 99n),
@@ -136,19 +183,19 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   appenddirname: str('appendonlydir', true),
   appendfsync: oneOf('everysec', ['everysec', 'always', 'no']),
   appendonly: bool('no'),
-  bind: str('* -::*', true),
+  bind: str('* -::*'),
   'auto-aof-rewrite-min-size': mem(67108864),
   'auto-aof-rewrite-percentage': int(100, 0n, INT_MAX),
   'busy-reply-threshold': { ...int(5000, 0n, LONG_MAX), aliases: ['lua-time-limit'] },
   'client-query-buffer-limit': mem(1073741824, 1024n * 1024n),
-  'client-output-buffer-limit': str('normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60'),
+  'client-output-buffer-limit': special('normal 0 0 0 slave 268435456 67108864 60 pubsub 33554432 8388608 60', normalizeOutputBufferLimit),
   'cluster-enabled': bool('no', true),
   'crash-log-enabled': bool('yes'),
   'crash-memcheck-enabled': bool('yes'),
   daemonize: bool('no', true),
   databases: int(16, 1n, INT_MAX, true),
-  dbfilename: str('dump.rdb'),
-  dir: str(process.cwd()),
+  dbfilename: { ...str('dump.rdb'), protected: true },
+  dir: { ...str(process.cwd()), protected: true },
   'dynamic-hz': bool('yes'),
   // DEBUG is always available in redis-lite, as with `enable-debug-command yes`
   'enable-debug-command': oneOf('yes', ['no', 'yes', 'local'], true),
@@ -172,13 +219,13 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'list-compress-depth': int(0, 0n, INT_MAX),
   'list-max-listpack-size': { ...int(-2, INT_MIN, INT_MAX), aliases: ['list-max-ziplist-size'] },
   logfile: str('', true),
-  loglevel: oneOf('notice', ['debug', 'verbose', 'notice', 'warning', 'nothing']),
-  maxclients: int(10000, 1n, LONG_MAX),
+  loglevel: oneOf('notice', ['debug', 'verbose', 'notice', 'warning']),
+  maxclients: int(10000, 1n, UINT_MAX),
   maxmemory: mem(0),
   'maxmemory-clients': { type: { kind: 'special', normalize: normalizeMemoryOrPercent }, default: '0' },
   'maxmemory-eviction-tenacity': int(10, 0n, 100n),
   'maxmemory-policy': oneOf('noeviction', MAXMEMORY_POLICIES),
-  'maxmemory-samples': int(5, 1n, 64n),
+  'maxmemory-samples': int(5, 1n, INT_MAX),
   masterauth: str(''),
   masteruser: str(''),
   'min-replicas-max-lag': { ...int(10, 0n, INT_MAX), aliases: ['min-slaves-max-lag'] },
@@ -193,7 +240,7 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'rdb-del-sync-files': bool('no'),
   'rdb-save-incremental-fsync': bool('yes'),
   'repl-backlog-size': mem(1048576, 1n, LONG_MAX),
-  'repl-backlog-ttl': int(3600, 0n, INT_MAX),
+  'repl-backlog-ttl': int(3600, 0n, LONG_MAX),
   'repl-disable-tcp-nodelay': bool('no'),
   'repl-diskless-load': oneOf('disabled', ['disabled', 'on-empty-db', 'swapdb']),
   'repl-diskless-sync': bool('yes'),
@@ -216,8 +263,6 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   'sanitize-dump-payload': oneOf('no', ['no', 'yes', 'clients']),
   save: { type: { kind: 'special', normalize: normalizeSave }, default: '3600 1 300 100 60 10000' },
   'set-max-intset-entries': int(512, 0n, LONG_MAX),
-  'set-max-listpack-entries': int(128, 0n, LONG_MAX),
-  'set-max-listpack-value': mem(64),
   'shutdown-timeout': int(10, 0n, INT_MAX),
   'slowlog-log-slower-than': int(10000, -1n, LONG_MAX),
   'slowlog-max-len': int(128, 0n, LONG_MAX),
@@ -229,17 +274,70 @@ export const CONFIG_DEFS: Record<string, ConfigDef> = {
   timeout: int(0, 0n, INT_MAX),
   'tracking-table-max-keys': int(1000000, 0n, LONG_MAX),
   // time series module (Redis 8 module configs)
-  'ts-chunk-size-bytes': int(4096, 48n, 1048576n),
-  'ts-compaction-policy': { type: { kind: 'special', normalize: normalizeCompactionPolicy }, default: '' },
-  'ts-duplicate-policy': oneOf('block', TS_DUPLICATE_POLICIES),
-  'ts-encoding': oneOf('compressed', ['compressed', 'uncompressed']),
-  'ts-ignore-max-time-diff': int(0, 0n, LONG_MAX),
-  'ts-ignore-max-val-diff': { type: { kind: 'special', normalize: normalizeNonNegativeDouble }, default: '0' },
-  'ts-num-threads': int(3, 1n, 16n, true),
-  'ts-retention-policy': int(0, 0n, LONG_MAX),
   unixsocket: str('', true),
   'zset-max-listpack-entries': { ...int(128, 0n, LONG_MAX), aliases: ['zset-max-ziplist-entries'] },
   'zset-max-listpack-value': { ...mem(64), aliases: ['zset-max-ziplist-value'] },
+  // Redis 7.0 parameters redis-lite keeps (CONFIG GET / SET round trips) without acting on them
+  aof_rewrite_cpulist: str('', true),
+  bgsave_cpulist: str('', true),
+  'bind-source-addr': str(''),
+  bio_cpulist: str('', true),
+  'cluster-allow-pubsubshard-when-down': bool('yes'),
+  'cluster-allow-reads-when-down': bool('no'),
+  'cluster-allow-replica-migration': bool('yes'),
+  'cluster-announce-bus-port': int(0, 0n, 65535n),
+  'cluster-announce-hostname': special('', normalizeHostname),
+  'cluster-announce-ip': str(''),
+  'cluster-announce-port': int(0, 0n, 65535n),
+  'cluster-announce-tls-port': int(0, 0n, 65535n),
+  'cluster-config-file': str('nodes.conf', true),
+  'cluster-link-sendbuf-limit': mem(0),
+  'cluster-migration-barrier': int(1, 0n, INT_MAX),
+  'cluster-node-timeout': int(15000, 0n, LONG_MAX),
+  'cluster-port': int(0, 0n, 65535n, true),
+  'cluster-preferred-endpoint-type': oneOf('ip', ['ip', 'hostname', 'unknown-endpoint']),
+  'cluster-replica-no-failover': { ...bool('no'), aliases: ['cluster-slave-no-failover'] },
+  'cluster-replica-validity-factor': { ...int(10, 0n, INT_MAX), aliases: ['cluster-slave-validity-factor'] },
+  'cluster-require-full-coverage': bool('yes'),
+  'disable-thp': bool('yes', true),
+  'ignore-warnings': str(''),
+  'io-threads-do-reads': bool('no', true),
+  'jemalloc-bg-thread': bool('yes'),
+  'oom-score-adj': oneOf('no', ['no', 'yes', 'relative', 'absolute']),
+  'oom-score-adj-values': special('0 200 800', normalizeOomScoreAdjValues),
+  pidfile: str('', true),
+  'proc-title-template': special('{title} {listen-addr} {server-mode}', normalizeProcTitle),
+  'propagation-error-behavior': oneOf('ignore', ['ignore', 'panic', 'panic-on-replicas']),
+  server_cpulist: str('', true),
+  'set-proc-title': bool('yes', true),
+  'shutdown-on-sigint': special('default', normalizeShutdownFlags),
+  'shutdown-on-sigterm': special('default', normalizeShutdownFlags),
+  'socket-mark-id': int(0, 0n, UINT_MAX, true),
+  supervised: oneOf('no', ['upstart', 'systemd', 'auto', 'no'], true),
+  'syslog-enabled': bool('no', true),
+  'syslog-facility': oneOf('local0', ['user', 'local0', 'local1', 'local2', 'local3', 'local4', 'local5', 'local6', 'local7'], true),
+  'syslog-ident': str('redis', true),
+  'tls-auth-clients': oneOf('yes', ['no', 'yes', 'optional']),
+  'tls-ca-cert-dir': str(''),
+  'tls-ca-cert-file': str(''),
+  'tls-cert-file': str(''),
+  'tls-ciphers': str(''),
+  'tls-ciphersuites': str(''),
+  'tls-client-cert-file': str(''),
+  'tls-client-key-file': str(''),
+  'tls-client-key-file-pass': str(''),
+  'tls-cluster': bool('no'),
+  'tls-dh-params-file': str(''),
+  'tls-key-file': str(''),
+  'tls-key-file-pass': str(''),
+  'tls-port': int(0, 0n, 65535n),
+  'tls-prefer-server-ciphers': bool('no'),
+  'tls-protocols': str(''),
+  'tls-replication': bool('no'),
+  'tls-session-cache-size': int(20480, 0n, INT_MAX),
+  'tls-session-cache-timeout': int(300, 0n, INT_MAX),
+  'tls-session-caching': bool('yes'),
+  unixsocketperm: int(0, 0n, 777n, true),
 };
 
 /** Alias → real name (old ziplist / slave names Redis still accepts). */
@@ -305,6 +403,10 @@ export class ServerConfig {
     return this.values.has(ServerConfig.canonical(name));
   }
 
+  isProtected(name: string): boolean {
+    return Boolean(CONFIG_DEFS[ServerConfig.canonical(name)]?.protected);
+  }
+
   isImmutable(name: string): boolean {
     return Boolean(CONFIG_DEFS[ServerConfig.canonical(name)]?.immutable);
   }
@@ -340,7 +442,7 @@ export class ServerConfig {
       case 'string':
         return { value };
       case 'special': {
-        const r = t.normalize(value);
+        const r = t.normalize(value, this.get(name) ?? def.default);
         return typeof r === 'string' ? { value: r } : r;
       }
     }

@@ -104,7 +104,7 @@ export class ServerBlocking {
     this.unblock(waiter);
     this.server.aclLogDenial(client, denial, 'toplevel');
     this.server.observer.commandStat(meta.fullname).rejected++;
-    this.server.observer.replyError(client, AclService.noPermError(denial, client.user.name));
+    this.server.observer.replyError(client, AclService.noPermError(denial));
     return true;
   }
 

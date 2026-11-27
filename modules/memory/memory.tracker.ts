@@ -8,7 +8,6 @@
  * (a write touched it, it was added, removed, expired or got / lost a TTL). Each database keeps a running total, so
  * used_memory costs O(databases) plus the keys that changed since the last look, never a rescan of the dataset.
  */
-import HashesService from '@/modules/hashes/hashes.service';
 import type { Database } from '@/modules/database/database.service';
 import DatabaseService from '@/modules/database/database.service';
 import type { ServerConfig } from '@/modules/server/server.service';
@@ -70,14 +69,14 @@ export class MemoryTracker {
   private sizeOf(db: Database, key: string): number | undefined {
     const value = db.raw(key);
     if (!value) return undefined;
-    const fieldTtls = value.type === 'hash' ? HashesService.hashFieldExpires(value.value) : undefined;
-    return MemoryService.objectSize(key, value, DatabaseService.objectEncoding(value, this.config, fieldTtls !== undefined), {
+    return MemoryService.objectSize(key, value, DatabaseService.objectEncoding(value, this.config), {
       samples: 0,
       hasExpire: db.hasExpireRaw(key),
-      fieldTtls,
       listMaxListpackSize: this.config.num('list-max-listpack-size'),
       streamNodeMaxEntries: this.config.num('stream-node-max-entries'),
       streamNodeMaxBytes: this.config.num('stream-node-max-bytes'),
+      allocated: true,
+      sharedIntegers: this.config.num('maxmemory') === 0,
     });
   }
 
@@ -108,11 +107,10 @@ export class MemoryTracker {
   }
 
   /** The databases as the memory model wants them, with up-to-date totals. */
-  snapshots(allocated: (dbIndex: number, keys: number) => boolean): DbSnapshot[] {
+  snapshots(): DbSnapshot[] {
     return this.databases.map((db, id) => {
       this.refresh(id);
-      const keys = db.storedKeys;
-      return { id, totals: { keys, expires: db.expiresCount, dataset: this.dbs[id].total }, allocated: allocated(id, keys) };
+      return { id, totals: { keys: db.storedKeys, expires: db.expiresCount, dataset: this.dbs[id].total } };
     });
   }
 }

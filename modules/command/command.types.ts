@@ -68,17 +68,44 @@ export interface KeySpec {
   notes?: string;
 }
 
+/** One COMMAND DOCS argument, fields in reply order. */
 export interface ArgDoc {
   name: string;
   type: string;
   keySpecIndex?: number;
   token?: string;
   since?: string;
-  display?: string;
-  optional: boolean;
-  multiple: boolean;
-  multipleToken: boolean;
+  deprecatedSince?: string;
+  /** optional / multiple / multiple_token, as Redis lists them. */
+  flags?: string[];
   args?: ArgDoc[];
+}
+
+/** One row of the metadata table (`command.meta_table`): a command or subcommand as COMMAND INFO / DOCS report it. */
+export interface MetaRow {
+  /** Lowercase name (the subcommand alone for a subcommand). */
+  name: string;
+  arity: number;
+  /** Visible flags, in COMMAND INFO order. */
+  flags: string[];
+  /** Flags COMMAND INFO does not show (may_replicate, protected). */
+  hidden?: string[];
+  /** Legacy first key, last key, step. */
+  keys: [first: number, last: number, step: number];
+  /** ACL categories without '@', in COMMAND INFO order. */
+  acl: string[];
+  tips?: string[];
+  keySpecs?: KeySpec[];
+  summary: string;
+  since: string;
+  group: string;
+  complexity?: string;
+  docFlags?: string[];
+  deprecatedSince?: string;
+  replacedBy?: string;
+  history?: Array<[version: string, change: string]>;
+  args?: ArgDoc[];
+  subs?: MetaRow[];
 }
 
 export interface CommandMeta {
@@ -102,7 +129,7 @@ export interface CommandMeta {
   group: string;
   since: string;
   summary: string;
-  complexity: string;
+  complexity?: string;
   docFlags: string[];
   deprecatedSince?: string;
   replacedBy?: string;

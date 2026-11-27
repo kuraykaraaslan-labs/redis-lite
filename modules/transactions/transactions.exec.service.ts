@@ -54,6 +54,7 @@ export default class TransactionsExecService {
     if (dirty) return NULL_ARRAY;
     const replies: Reply[] = [];
     client.inExec = true;
+    client.execQueued = queued.length;
     try {
       for (const argv of queued) {
         // ACL permissions are checked again at EXEC time in case they changed after the commands were queued

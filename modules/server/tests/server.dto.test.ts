@@ -12,7 +12,6 @@ import {
   MemoryUsageDTO,
   ShutdownDTO,
   SlowlogGetDTO,
-  WaitAofDTO,
   WaitDTO,
 } from '../server.dto';
 
@@ -54,11 +53,9 @@ describe('CONFIG / ACL / SLOWLOG / MEMORY', () => {
 });
 
 describe('admin DTOs', () => {
-  it('WAIT and WAITAOF check the timeout first', () => {
+  it('WAIT checks the timeout first', () => {
     expect(parse(WaitDTO, ['x', '-1'])).toBe('ERR timeout is negative');
     expect(parse(WaitDTO, ['x', '0'])).toBe('ERR value is not an integer or out of range');
-    expect(parse(WaitAofDTO, ['-1', 'x', 'y'])).toBe('ERR timeout is not an integer or out of range');
-    expect(parse(WaitAofDTO, ['-1', 'x', '0'])).toBe('ERR value is out of range, must be positive');
   });
 
   it('SHUTDOWN refuses conflicting options', () => {
@@ -72,8 +69,11 @@ describe('admin DTOs', () => {
     expect(parse(DebugPopulateDTO, ['populate', '3'])).toEqual({ count: 3, prefix: 'key', size: 0 });
   });
 
-  it('LOLWUT parses the art options of version 5 only', () => {
-    expect(parse(LolwutDTO, ['version', '6', 'x'])).toEqual({ version: 6, cols: 0, perRow: 0, perCol: 0 });
+  it('LOLWUT parses the art options of versions 5 and 6 only', () => {
+    expect(parse(LolwutDTO, ['version', '7', 'x'])).toEqual({ version: 7, cols: 0, perRow: 0, perCol: 0 });
+    expect(parse(LolwutDTO, ['version', '6', 'x'])).toBe('ERR value is not an integer or out of range');
+    expect(parse(LolwutDTO, ['version', '6', '0', '5000'])).toEqual({ version: 6, cols: 1, perRow: 1000, perCol: 0 });
+    expect(parse(LolwutDTO, ['version', '6'])).toEqual({ version: 6, cols: 80, perRow: 20, perCol: 0 });
     expect(parse(LolwutDTO, ['version', '5', 'x'])).toBe('ERR value is not an integer or out of range');
     expect(parse(LolwutDTO, ['version', '5', '5000', '0'])).toEqual({ version: 5, cols: 1000, perRow: 1, perCol: 12 });
   });

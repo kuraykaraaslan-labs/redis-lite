@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
-import { isInteger } from '@/libs/number';
+import { INT64_MIN } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
 import { Int64Schema, IntegerSchema, KeySchema, ValueSchema, firstIssue, reject } from '@/libs/schemas';
 import { BlockSecondsTimeoutSchema } from '@/libs/schemas/block-timeout';
@@ -67,8 +67,9 @@ function PopDTO(command: string, left: boolean) {
   return z.tuple([KeySchema], z.string()).transform(([key, ...rest], ctx) => {
     if (rest.length > 1) return reject(ctx, arity);
     if (rest.length === 0) return { key, left, count: null };
-    if (!isInteger(rest[0]) || Number(rest[0]) < 0) return reject(ctx, RespMessages.COUNT_POSITIVE);
-    return { key, left, count: Number(rest[0]) };
+    const count = Int64Schema.safeParse(rest[0]);
+    if (!count.success || count.data < 0n) return reject(ctx, RespMessages.COUNT_POSITIVE);
+    return { key, left, count: Number(count.data) };
   });
 }
 
@@ -102,7 +103,11 @@ export const LInsertDTO = z
     return position.success ? { key, position: position.data, pivot, element } : reject(ctx, RespMessages.SYNTAX);
   });
 
-/** LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]; each option is checked where it stands. */
+/**
+ * LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]; each option is checked where it stands. Values are
+ * int64 (beyond 2^53 only their magnitude matters: no list is that long). RANK -9223372036854775808 cannot be negated:
+ * Redis 7.0 then scans from the tail without skipping and without a COUNT limit; it is passed on as -Infinity.
+ */
 export const LPosDTO = z.tuple([KeySchema, ValueSchema], z.string()).transform(([key, element, ...options], ctx) => {
   let rank = 1;
   let count: number | null = null;
@@ -110,12 +115,13 @@ export const LPosDTO = z.tuple([KeySchema, ValueSchema], z.string()).transform((
   for (let i = 0; i < options.length; i += 2) {
     const option = LPosOptionEnum.safeParse(options[i].toLowerCase());
     if (i + 1 >= options.length || !option.success) return reject(ctx, RespMessages.SYNTAX);
-    const parsed = IntegerSchema.safeParse(options[i + 1]);
-    if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
-    const n = parsed.data;
+    const parsed = Int64Schema.safeParse(options[i + 1]);
+    // COUNT and MAXLEN refuse anything that is not a non-negative int64 with their own text
+    const n = parsed.success ? Number(parsed.data) : -1;
     if (option.data === 'rank') {
+      if (!parsed.success) return reject(ctx, firstIssue(parsed.error));
       if (n === 0) return reject(ctx, ListsMessages.RANK_ZERO);
-      rank = n;
+      rank = parsed.data === INT64_MIN ? -Infinity : n;
     } else if (option.data === 'count') {
       if (n < 0) return reject(ctx, ListsMessages.COUNT_NEGATIVE);
       count = n;

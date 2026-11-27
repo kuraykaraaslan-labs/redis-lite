@@ -1,6 +1,6 @@
 /**
  * Top layer of the replication runtime (`server.replication`): startup and shutdown, the once-a-second cron, the
- * command entry points (REPLICAOF, WAIT / WAITAOF, FAILOVER), ROLE and INFO replication, and config hooks.
+ * command entry points (REPLICAOF, WAIT, FAILOVER), ROLE and INFO replication, and config hooks.
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  *
@@ -140,20 +140,12 @@ export class Replication extends ReplicationReplica {
   /** WAIT numreplicas timeout. */
   wait(client: Client, numreplicas: number, timeoutMs: number, noBlock: boolean): HandlerResult {
     if (this.role === 'slave') throw new AppError(ReplicationMessages.WAIT_ON_REPLICA);
-    return this.waitAcks(client, numreplicas, timeoutMs, noBlock, null);
-  }
-
-  /** WAITAOF numlocal numreplicas timeout: the local AOF counts as fsynced while it is on. */
-  waitAof(client: Client, numlocal: number, numreplicas: number, timeoutMs: number, noBlock: boolean): HandlerResult {
-    if (this.role === 'slave') throw new AppError(ReplicationMessages.WAITAOF_ON_REPLICA);
-    if (numlocal && this.cfg('appendonly') !== 'yes') throw new AppError(ReplicationMessages.WAITAOF_APPENDONLY);
-    const local = numlocal && this.server.persistence.aofEnabled ? 1 : 0;
-    return this.waitAcks(client, numreplicas, timeoutMs, noBlock, { numlocal: numlocal ? 1 : 0, local });
+    return this.waitAcks(client, numreplicas, timeoutMs, noBlock);
   }
 
   /** REPLCONF ACK also moves a failover forward. */
-  override replicaAck(client: Client, offset: number, fack: number | null): void {
-    super.replicaAck(client, offset, fack);
+  override replicaAck(client: Client, offset: number): void {
+    super.replicaAck(client, offset);
     this.failoverStep(Date.now());
   }
 

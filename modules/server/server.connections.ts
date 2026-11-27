@@ -3,12 +3,16 @@ import type { Socket } from 'node:net';
 import { formatMessage } from '@/libs/message-format';
 import { RespError, RespParser } from '@/libs/resp';
 
+import MemoryService from '@/modules/memory/memory.service';
 import TrackingService from '@/modules/tracking/tracking.service';
 
 import { Client } from './server.client';
 import type { RedisLiteServer } from './server.core';
 import ServerMessages from './server.messages';
 import type { PauseMode } from './server.types';
+
+/** PROTO_IOBUF_LEN: the query buffer has room for at least this much before each read. */
+const READ_LEN = 16 * 1024;
 
 /** Connections and their I/O: accepting sockets, parsing requests, running a client's queued commands, closing. */
 export class ServerConnections {
@@ -40,6 +44,8 @@ export class ServerConnections {
     socket.on('data', (chunk: Buffer) => {
       client.netIn += chunk.length;
       if (client.protocolError) return;
+      // readQueryFromClient makes room for a 16 KB read (non-greedy) when the buffer has less
+      if (client.queryBuf.cap < READ_LEN) client.queryBuf = MemoryService.sdsFresh(READ_LEN);
       const { commands, error } = parser.parse(chunk);
       for (let i = 0; i < commands.length; i++) client.pending.push(commands[i]);
       if (error !== null) client.protocolError = error;

@@ -1,8 +1,8 @@
+import { formatG17 } from '@/libs/number';
+
 import { idToString } from '@/modules/streams/streams.structure';
 
-import PersistenceBytesCodec from './persistence.bytes.codec';
 import PersistenceMessages from './persistence.messages';
-import PersistenceObjectEncoderCodec from './persistence.object_encoder.codec';
 import type { AofParseStep, RdbKeyEntry, Snapshot } from './persistence.types';
 
 /** AOF text: RESP multibulk records, their parser, and the command-form base file of an AOF rewrite. */
@@ -40,12 +40,9 @@ export default class PersistenceAofService {
       case 'zset':
         A.pushBatched(out, ['ZADD', key], v.value.entries.flatMap((z) => [A.formatG17(z.score), z.member]), 2);
         break;
-      case 'hash': {
+      case 'hash':
         A.pushBatched(out, ['HMSET', key], [...v.value].flat(), 2);
-        // UNCERTAIN: Redis 7.4's rewriteHashObject field-TTL form; one HPEXPIREAT per field is equivalent.
-        for (const [f, at] of e.fieldExpires ?? []) out.push(encode(['HPEXPIREAT', key, String(at), 'FIELDS', '1', f]));
         break;
-      }
       case 'stream': {
         const s = v.value;
         const lastId = idToString(s.lastId);
@@ -66,14 +63,6 @@ export default class PersistenceAofService {
             }
           }
         }
-        break;
-      }
-      case 'timeseries': {
-        // A module value: no command rebuilds it exactly (rules, open compaction buckets), so the base file restores
-        // redis-lite's own DUMP payload of it.
-        const { type, body } = PersistenceObjectEncoderCodec.encodeObject(v);
-        const payload = PersistenceBytesCodec.sealPayload(Buffer.concat([Buffer.from([type]), body]));
-        out.push(encode(['RESTORE', key, '0', payload.toString('latin1'), 'REPLACE']));
         break;
       }
     }
@@ -122,19 +111,7 @@ export default class PersistenceAofService {
 
   /** C printf("%.17g"): the score format Redis uses when rewriting ZADD into an AOF. */
   static formatG17(n: number): string {
-    if (Number.isNaN(n)) return 'nan';
-    if (n === Infinity) return 'inf';
-    if (n === -Infinity) return '-inf';
-    if (n === 0) return Object.is(n, -0) ? '-0' : '0';
-    const exp = Number(n.toExponential(16).split('e')[1]);
-    if (exp < -4 || exp >= 17) {
-      const [mant, e] = n.toExponential(16).split('e');
-      const m = mant.includes('.') ? mant.replace(/0+$/, '').replace(/\.$/, '') : mant;
-      const ev = Number(e);
-      return `${m}e${ev < 0 ? '-' : '+'}${String(Math.abs(ev)).padStart(2, '0')}`;
-    }
-    const fixed = n.toFixed(Math.max(0, 16 - exp));
-    return fixed.includes('.') ? fixed.replace(/0+$/, '').replace(/\.$/, '') : fixed;
+    return formatG17(n);
   }
 
   /** A base AOF in command form (aof-use-rdb-preamble no): FUNCTION LOADs, then per database SELECT + its keys. */

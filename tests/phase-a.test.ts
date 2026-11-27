@@ -44,17 +44,14 @@ describe('object encodings follow Redis conversion rules', () => {
     await redis.hset('h1', 'a', 'x'.repeat(65));
     expect(await enc('h1')).toBe('hashtable');
     await redis.hdel('h1', 'a');
-    await redis.hset('h2', 'a', '1');
-    await call('HEXPIRE', 'h2', 100, 'FIELDS', 1, 'a');
-    expect(await enc('h2')).toBe('listpackex');
   });
 
-  it('sets go intset → listpack → hashtable', async () => {
+  it('sets go intset → hashtable (Redis 7.0 has no listpack sets)', async () => {
     await redis.sadd('st', '1', '2', '3');
     expect(await enc('st')).toBe('intset');
     await redis.sadd('st', 'a');
-    expect(await enc('st')).toBe('listpack');
-    await redis.sadd('st', ...Array.from({ length: 130 }, (_, i) => `m${i}`));
+    expect(await enc('st')).toBe('hashtable');
+    await redis.srem('st', 'a');
     expect(await enc('st')).toBe('hashtable');
   });
 
@@ -63,12 +60,13 @@ describe('object encodings follow Redis conversion rules', () => {
     expect(await enc('zs')).toBe('listpack');
     await redis.zadd('zs', ...Array.from({ length: 130 }, (_, i) => [i, `m${i}`]).flat());
     expect(await enc('zs')).toBe('skiplist');
+    // every list is a quicklist in Redis 7.0
     await redis.rpush('ls', 'a', 'b');
-    expect(await enc('ls')).toBe('listpack');
+    expect(await enc('ls')).toBe('quicklist');
     await redis.rpush('ls', ...Array.from({ length: 200 }, () => 'x'.repeat(60)));
     expect(await enc('ls')).toBe('quicklist');
     await redis.ltrim('ls', 0, 1);
-    expect(await enc('ls')).toBe('listpack');
+    expect(await enc('ls')).toBe('quicklist');
   });
 
   it('CONFIG SET thresholds take effect', async () => {
@@ -125,7 +123,7 @@ describe('WATCH only fires on real modifications', () => {
 });
 
 describe('LRU / LFU', () => {
-  it('OBJECT IDLETIME, FREQ, NO-TOUCH', async () => {
+  it('OBJECT IDLETIME, FREQ', async () => {
     await redis.set('lru', 'v');
     expect(await call('OBJECT', 'IDLETIME', 'lru')).toBe(0);
     await expect(call('OBJECT', 'FREQ', 'lru')).rejects.toThrow(/LFU maxmemory policy is not selected/);

@@ -36,6 +36,7 @@ export default class NotificationsEventsService {
         return [E.ev('g', 'copy_to', x.args[1], i >= 0 ? Number(x.args[i + 1]) : undefined)];
       },
       restore: (x) => (E.ok(x.reply) ? [E.ev('g', 'restore', x.args[0])] : []),
+      'restore-asking': (x) => (E.ok(x.reply) ? [E.ev('g', 'restore', x.args[0])] : []),
       expire: (x) => E.expireEvents(x),
       pexpire: (x) => E.expireEvents(x),
       expireat: (x) => E.expireEvents(x),
@@ -108,25 +109,6 @@ export default class NotificationsEventsService {
       hdel: E.same('h', 'hdel'),
       hincrby: (x) => (E.ok(x.reply) ? [E.ev('h', 'hincrby', x.args[0])] : []),
       hincrbyfloat: (x) => (E.ok(x.reply) ? [E.ev('h', 'hincrbyfloat', x.args[0])] : []),
-      hgetdel: (x) => (Array.isArray(x.reply) && x.reply.some((r) => r !== null) ? E.withDel([E.ev('h', 'hdel', x.args[0])], x, x.args[0]) : []),
-      hexpire: (x) => E.fieldTtlEvents(x),
-      hpexpire: (x) => E.fieldTtlEvents(x),
-      hexpireat: (x) => E.fieldTtlEvents(x),
-      hpexpireat: (x) => E.fieldTtlEvents(x),
-      hpersist: (x) => (Array.isArray(x.reply) && x.reply.includes(1) ? [E.ev('h', 'hpersist', x.args[0])] : []),
-      hsetex: (x) => {
-        if (x.reply !== 1) return [];
-        const out = [E.ev('h', 'hset', x.args[0])];
-        if (x.args.some((a) => /^(ex|px|exat|pxat)$/i.test(a))) out.push(E.ev('h', 'hexpire', x.args[0]));
-        return out;
-      },
-      hgetex: (x) => {
-        if (!Array.isArray(x.reply) || !x.reply.some((r) => r !== null)) return [];
-        const opt = x.args.find((a) => /^(ex|px|exat|pxat|persist)$/i.test(a));
-        if (!opt) return [];
-        if (!x.existsAfter(x.args[0])) return E.withDel([E.ev('h', 'hdel', x.args[0])], x, x.args[0]);
-        return [E.ev('h', opt.toLowerCase() === 'persist' ? 'hpersist' : 'hexpire', x.args[0])];
-      },
 
       // ---- sets ----
       sadd: E.same('s', 'sadd'),
@@ -238,14 +220,6 @@ export default class NotificationsEventsService {
     if (x.reply !== 1) return [];
     // A time in the past deletes the key: Redis then emits `del` instead of `expire`.
     return [NotificationsEventsService.ev('g', x.existsAfter(x.args[0]) ? 'expire' : 'del', x.args[0])];
-  }
-
-  private static fieldTtlEvents(x: Execution): KeyEvent[] {
-    if (!Array.isArray(x.reply)) return [];
-    const out: KeyEvent[] = [];
-    if (x.reply.includes(1)) out.push(NotificationsEventsService.ev('h', 'hexpire', x.args[0]));
-    if (x.reply.includes(2)) out.push(NotificationsEventsService.ev('h', 'hdel', x.args[0]));
-    return NotificationsEventsService.withDel(out, x, x.args[0]);
   }
 
   private static popEvents(x: Execution, cls: string, event: string): KeyEvent[] {

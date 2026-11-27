@@ -1,4 +1,6 @@
 import { differential, s, v } from './differential.harness';
+import { shape, sorted } from './differential.normalizers';
+import { INT_PROBES_NO_NEGATIVE_COUNT, intProbes } from './differential.probes';
 
 /** Sorted sets, part 1: ZADD flags, scores and their formatting, ranges, ranks, removal. Small zsets are listpack. */
 const BIG = ['ZADD big', ...Array.from({ length: 200 }, (_, i) => `${i} m${i}`)].join(' ');
@@ -26,7 +28,16 @@ differential('zsets', [
 
   // score formatting
   s('ZSCORE integral and fractional', ['ZADD z 1 a 1.5 b -2.25 c 0 d 100 e', 'ZSCORE z a', 'ZSCORE z b', 'ZSCORE z c', 'ZSCORE z d', 'ZSCORE z e', 'ZSCORE z x', 'ZSCORE nokey a']),
-  s('ZSCORE shortest round trip', ['ZADD z 0.1 a 1.1 b 3.0000000000000004 c 0.30000000000000004 d', 'ZSCORE z a', 'ZSCORE z b', 'ZSCORE z c', 'ZSCORE z d'], v('7.2 switched double replies to the shortest round-trip form (fpconv); 7.0 prints %.17g (1.1000000000000001)', 'high')),
+  s('ZSCORE shortest round trip', ['ZADD z 0.1 a 1.1 b 3.0000000000000004 c 0.30000000000000004 d', 'ZSCORE z a', 'ZSCORE z b', 'ZSCORE z c', 'ZSCORE z d']),
+  s('double replies are %.17g', [
+    'ZADD z 0.1 a 5e-324 b 1e-5 c 0.0001 d 1e15 e 1e16 f 1e17 g 123.456 h 1.7976931348623157e308 i -0.3 j 2.5e-310 k',
+    'ZSCORE z a', 'ZSCORE z b', 'ZSCORE z c', 'ZSCORE z d', 'ZSCORE z e', 'ZSCORE z f', 'ZSCORE z g', 'ZSCORE z h', 'ZSCORE z i', 'ZSCORE z j', 'ZSCORE z k',
+    'ZRANGE z 0 -1 WITHSCORES', 'ZINCRBY z 0.2 a', 'ZADD z INCR 0.1 h', 'ZMSCORE z a b c', 'ZPOPMIN z 2', 'ZRANGEBYSCORE z 0 1 WITHSCORES LIMIT 0 3',
+  ]),
+  s('ZSCAN prints scores as the encoding stores them', [
+    'ZADD z 1e17 a 1e18 b 9.2e18 c 1e19 d -1e17 e 9007199254740993 f 4611686018427387904 g 4611686018427387905 h 0.5 i 0.1 j -0.0 k', 'ZSCAN z 0',
+    'CONFIG SET zset-max-listpack-entries 0', 'ZADD s 1e17 a 1e18 b 0.1 c 1e15 d', { scan: 'ZSCAN s 0' },
+  ]),
   s('ZSCORE exponent formatting', ['ZADD z 1e20 a 9.5367431640625e-07 b 1152921504606846976 c -1e20 d', 'ZSCORE z a', 'ZSCORE z b', 'ZSCORE z c', 'ZSCORE z d', 'ZRANGE z 0 -1 WITHSCORES']),
   s('negative zero score', ['ZADD z -0 a', 'ZSCORE z a', 'ZINCRBY z -0 b', 'ZADD big 1 x 2 y 3 q -0 c', 'CONFIG SET zset-max-listpack-entries 0', 'ZADD sk -0 a', 'OBJECT ENCODING sk', 'ZSCORE sk a']),
   s('ZINCRBY results', ['ZINCRBY z 1 a', 'ZINCRBY z 0.5 a', 'ZINCRBY z -10 a', 'ZINCRBY z 1e20 b', 'ZINCRBY z abc a', 'ZINCRBY z 1', 'ZINCRBY z inf c', 'ZINCRBY z nan c']),
@@ -75,4 +86,19 @@ differential('zsets', [
   s('CONFIG zset-max-listpack-entries', ['CONFIG SET zset-max-listpack-entries 1', 'ZADD z 1 a', 'OBJECT ENCODING z', 'ZADD z 2 b', 'OBJECT ENCODING z', 'ZRANGE z 0 -1 WITHSCORES']),
   s('default zset listpack limits', ['CONFIG GET zset-max-listpack-entries', 'CONFIG GET zset-max-listpack-value']),
   s('skiplist ranges and removal', [BIG, 'ZRANGE big (10 15 BYSCORE', 'ZREMRANGEBYSCORE big 0 99', 'ZRANGE big 0 2', 'ZRANGE big -2 -1 REV WITHSCORES', 'ZCOUNT big -inf +inf']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('ZRANGE start stop', ['ZADD z 1 a 2 b 3 c', 'ZRANGE z $N 1', 'ZRANGE z 0 $N', 'ZREVRANGE z $N 1', 'ZREVRANGE z 0 $N']),
+  ...intProbes('ZRANGE LIMIT', ['ZADD z 1 a 2 b 3 c', 'ZRANGE z -inf +inf BYSCORE LIMIT $N 1', 'ZRANGE z -inf +inf BYSCORE LIMIT 0 $N', 'ZRANGE z - + BYLEX LIMIT 1 $N']),
+  ...intProbes('ZRANGEBYSCORE LIMIT', ['ZADD z 1 a 2 b 3 c', 'ZRANGEBYSCORE z -inf +inf LIMIT $N 1', 'ZRANGEBYSCORE z -inf +inf LIMIT 0 $N', 'ZREVRANGEBYSCORE z +inf -inf LIMIT 1 $N']),
+  ...intProbes('ZRANGEBYLEX LIMIT', ['ZADD z 0 a 0 b 0 c', 'ZRANGEBYLEX z - + LIMIT $N 1', 'ZRANGEBYLEX z - + LIMIT 0 $N', 'ZREVRANGEBYLEX z + - LIMIT 1 $N']),
+  ...intProbes('ZREMRANGEBYRANK', ['ZADD z 1 a 2 b 3 c', 'ZREMRANGEBYRANK z $N -1', 'ZREMRANGEBYRANK z 5 $N', 'ZRANGE z 0 -1']),
+  ...intProbes('ZRANGESTORE', ['ZADD z 1 a 2 b 3 c', 'ZRANGESTORE d z $N -1', 'ZRANGESTORE d z 0 $N', 'ZRANGE d 0 -1']),
+  ...intProbes('ZRANDMEMBER count', ['ZADD z 1 a 2 b 3 c', { cmd: 'ZRANDMEMBER z $N', norm: sorted }, { cmd: 'ZRANDMEMBER z $N WITHSCORES', norm: shape }], {}, INT_PROBES_NO_NEGATIVE_COUNT),
+  ...intProbes('ZPOPMIN count', ['ZADD z 1 a 2 b 3 c', 'ZPOPMIN z $N', 'ZADD z 1 a', 'ZPOPMAX z $N']),
+  ...intProbes('ZMPOP', ['ZADD z 1 a 2 b 3 c', 'ZMPOP $N z MIN', 'ZMPOP 1 z MIN COUNT $N', 'ZADD z 1 a', 'BZMPOP 0 1 z MIN COUNT $N', 'BZMPOP 0 $N z MIN']),
+  ...intProbes('blocking zset timeouts', ['ZADD z 1 a 2 b 3 c', 'BZPOPMIN z $N', 'BZPOPMAX z $N', 'BZMPOP $N 1 z MIN']),
+  ...intProbes('zset numkeys', ['ZADD z 1 a', 'ZUNIONSTORE d $N z', 'ZUNION $N z', 'ZINTER $N z', 'ZDIFF $N z', 'ZINTERCARD $N z', 'ZINTERSTORE d $N z', 'ZDIFFSTORE d $N z']),
+  ...intProbes('ZINTERCARD LIMIT', ['ZADD z 1 a', 'ZINTERCARD 1 z LIMIT $N']),
+  ...intProbes('ZSCAN COUNT', ['ZADD z 1 a', 'ZSCAN z 0 COUNT $N']),
 ]);

@@ -5,6 +5,8 @@ import type { Protocol } from '@/libs/resp';
 import { encode, RespPush } from '@/libs/resp';
 
 import type { AclUser } from '@/modules/acl/acl.structure';
+import MemoryService from '@/modules/memory/memory.service';
+import type { SdsAlloc } from '@/modules/memory/memory.types';
 import type { ReplicaInfo } from '@/modules/replication/replication.types';
 
 import { WatchedKeys } from './server.watch';
@@ -24,8 +26,6 @@ export interface Waiter {
 /** One connection's state. */
 export class Client {
   name = '';
-  libName = '';
-  libVer = '';
   dbIndex = 0;
   /** Protocol negotiated with HELLO (2 by default). */
   resp: Protocol = 2;
@@ -35,6 +35,8 @@ export class Client {
   user: AclUser | null;
   /** Running the queued commands of EXEC (Redis keeps CLIENT_MULTI set then: ACL LOG context `multi`). */
   inExec = false;
+  /** Number of commands of the transaction EXEC is running (CLIENT LIST `multi=` while inExec). */
+  execQueued = 0;
   readonly createdAt = Date.now();
   lastActiveAt = Date.now();
   /** Full name (`client|info`) of the last command run, for CLIENT LIST `cmd=`. */
@@ -47,6 +49,16 @@ export class Client {
 
   /** MULTI state: null when not in a transaction. */
   multi: string[][] | null = null;
+  /** The command being run (its arguments stay in the query buffer and argv until it returns: CLIENT LIST qbuf / argv-mem). */
+  currentArgv: string[] | null = null;
+  /** The query buffer's allocation (CLIENT LIST qbuf-free, tot-mem): empty until the first read. */
+  queryBuf: SdsAlloc = MemoryService.sdsFresh(0);
+  /** The static reply buffer (rbs), its peak (rbp) and when serverCron last reset the peak. */
+  static readonly REPLY_BUFFER = 16 * 1024;
+  private static readonly CRON_PERIOD_MS = 100;
+  private static readonly PEAK_RESET_MS = 5000;
+  private peak = Client.REPLY_BUFFER;
+  private peakResetAt = 0;
   multiError = false;
   /** WATCHed keys and whether one of them changed since (registered in the server's ServerWatches). */
   readonly watched = new WatchedKeys();
@@ -54,8 +66,6 @@ export class Client {
   readonly channels = new Set<string>();
   readonly patterns = new Set<string>();
   readonly shardChannels = new Set<string>();
-  /** CLIENT NO-TOUCH ON: reads do not update LRU/LFU (TOUCH still does). */
-  noTouch = false;
   /** In MONITOR mode: receives every command the server runs. */
   monitor = false;
   /** CLIENT TRACKING ON and its REDIRECT target (0 = none). */
@@ -89,7 +99,7 @@ export class Client {
   replica: ReplicaInfo | null = null;
   /** Replication, replica side: this is the connection the master's stream runs on (CLIENT LIST flag M). */
   isMaster = false;
-  /** master_repl_offset after this client's last propagated write (what WAIT / WAITAOF wait for). */
+  /** master_repl_offset after this client's last propagated write (what WAIT waits for). */
   woff = 0;
 
   /** Its next command is a write waiting for writes to resume (FAILOVER pauses them). */
@@ -117,6 +127,12 @@ export class Client {
     return this.socket ? `${this.socket.remoteAddress ?? '?'}:${this.socket.remotePort ?? 0}` : 'internal';
   }
 
+  /** A loopback (or internal) connection: what enable-protected-configs / enable-debug-command `local` allow. */
+  isLocal(): boolean {
+    const ip = this.socket?.remoteAddress;
+    return !this.socket || ip === undefined || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  }
+
   /**
    * Sends a reply. CLIENT REPLY OFF / SKIP suppress everything except out-of-band pushes, unless `force`. Replication
    * connections (the master's, an attached replica's) get no replies at all.
@@ -128,6 +144,23 @@ export class Client {
     if (!force && (this.replyOff || this.skipCurrent) && !(reply instanceof RespPush)) return;
     const data = encode(reply, this.resp);
     this.netOut += data.length;
+    this.noteReply(Math.min(data.length, Client.REPLY_BUFFER));
     this.socket.write(data);
+  }
+
+  /**
+   * CLIENT LIST rbp: the reply buffer's peak since the last reset. It starts at the buffer size; serverCron resets it
+   * to the bytes pending (none, between commands) on its first visit and every 5 seconds after.
+   */
+  replyPeak(now = Date.now()): number {
+    if (now - this.createdAt >= Client.CRON_PERIOD_MS && now - this.peakResetAt >= Client.PEAK_RESET_MS) {
+      this.peak = 0;
+      this.peakResetAt = now;
+    }
+    return this.peak;
+  }
+
+  private noteReply(bytes: number): void {
+    this.peak = Math.max(this.replyPeak(), bytes);
   }
 }

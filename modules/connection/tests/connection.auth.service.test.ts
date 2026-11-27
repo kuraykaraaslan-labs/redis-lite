@@ -36,7 +36,7 @@ describe('HELLO', () => {
     const r = await t.raw();
     const hello = await r.send('HELLO', '3');
     expect.soft(hello.startsWith('%7\r\n$6\r\nserver\r\n$5\r\nredis\r\n$7\r\nversion\r\n')).toBe(true);
-    expect.soft(hello).toMatch(/\$7\r\nversion\r\n\$\d+\r\n8\.\d+\.\d+\r\n/);
+    expect.soft(hello).toContain('$7\r\nversion\r\n$6\r\n7.0.15\r\n');
     expect.soft(hello).toContain('$5\r\nproto\r\n:3\r\n');
     expect.soft(hello).toMatch(/\$2\r\nid\r\n:\d+\r\n/);
     expect.soft(hello).toContain('$4\r\nmode\r\n$10\r\nstandalone\r\n');
@@ -162,7 +162,7 @@ describe('server with a password', () => {
     const list = (await ta.call('ACL', 'LIST')) as string[];
     expect.soft(list).toHaveLength(1);
     // sha256('secret')
-    expect.soft(list[0]).toBe('user default on sanitize-payload #2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b ~* &* +@all');
+    expect.soft(list[0]).toBe('user default on #2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b ~* &* +@all');
   });
 
   it('CONFIG GET requirepass', async () => {

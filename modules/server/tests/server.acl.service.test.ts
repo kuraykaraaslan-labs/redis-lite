@@ -14,7 +14,7 @@ describe('ACL', () => {
   it('WHOAMI / USERS / LIST', async () => {
     expect.soft(await t.call('ACL', 'WHOAMI')).toBe('default');
     expect.soft(await t.call('ACL', 'USERS')).toEqual(['default']);
-    expect.soft(await t.call('ACL', 'LIST')).toEqual(['user default on nopass sanitize-payload ~* &* +@all']);
+    expect.soft(await t.call('ACL', 'LIST')).toEqual(['user default on nopass ~* &* +@all']);
   });
 
   it('CAT lists categories and the commands in a category', async () => {
@@ -33,7 +33,7 @@ describe('ACL', () => {
 
   it('GETUSER default', async () => {
     const u = pairs(await t.call('ACL', 'GETUSER', 'default'));
-    expect.soft(u.flags).toEqual(['on', 'nopass', 'sanitize-payload']);
+    expect.soft(u.flags).toEqual(['on', 'nopass']);
     expect.soft(u.passwords).toEqual([]);
     expect.soft(u.commands).toBe('+@all');
     expect.soft(u.keys).toBe('~*');

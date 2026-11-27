@@ -17,6 +17,8 @@ export const RespMessages = {
   TIMEOUT_NEGATIVE: 'ERR timeout is negative',
   TIMEOUT_NOT_FLOAT: 'ERR timeout is not a float or out of range',
   COUNT_POSITIVE: 'ERR value is out of range, must be positive',
+  /** An int argument (an int64 first) outside the C int range. */
+  INT_RANGE: 'ERR value is out of range, value must between -2147483648 and 2147483647',
 
   // Protocol errors of the request parser: sent as `-ERR <text>`, then the connection is closed
   PROTOCOL_ERROR: 'Protocol error',

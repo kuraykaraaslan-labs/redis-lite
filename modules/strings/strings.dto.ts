@@ -109,7 +109,7 @@ export const SetDTO = z.tuple([KeySchema, ValueSchema], z.string()).transform(([
   const scanned = scanOptions(options, SET_RULES);
   if (!scanned) return reject(ctx, RespMessages.SYNTAX);
   const { flags, expire } = scanned;
-  let expireAt: number | undefined;
+  let expireAt: number | bigint | undefined;
   if (expire) {
     const at = SET_EXPIRE[expire.option].safeParse(expire.raw);
     if (!at.success) return reject(ctx, firstIssue(at.error));
@@ -128,7 +128,7 @@ export const GetExDTO = z.tuple([KeySchema], z.string()).transform(([key, ...opt
   const scanned = scanOptions(options, GETEX_RULES);
   if (!scanned) return reject(ctx, RespMessages.SYNTAX);
   const { flags, expire } = scanned;
-  const expireAt: Parsed<number> | undefined = expire && parseArg(GETEX_EXPIRE[expire.option], expire.raw);
+  const expireAt: Parsed<number | bigint> | undefined = expire && parseArg(GETEX_EXPIRE[expire.option], expire.raw);
   return { key, persist: flags.has('PERSIST'), expireAt };
 });
 

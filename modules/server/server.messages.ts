@@ -10,10 +10,12 @@ export const ServerMessages = {
   NOAUTH: 'NOAUTH Authentication required.',
   NO_MULTI: 'ERR Command not allowed inside a transaction',
   NOT_ALLOWED_FROM_SCRIPT: 'ERR This Redis command is not allowed from script',
+  SCRIPT_UNKNOWN_COMMAND: 'ERR Unknown Redis command called from script',
+  SCRIPT_WRONG_ARITY: 'ERR Wrong number of args calling Redis command from script',
   UNBLOCKED: 'UNBLOCKED client unblocked via CLIENT UNBLOCK',
   SUBSCRIBE_CONTEXT: "ERR Can't execute '{command}': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context",
   EXECABORT_BECAUSE: 'EXECABORT Transaction discarded because of: {reason}',
-  ACL_SCRIPT_FAILURE: 'ERR ACL failure in script: {reason}',
+  ACL_SCRIPT_FAILURE: 'ERR {reason}',
   /** An unexpected exception or a protocol error, answered as a plain ERR. */
   GENERIC_ERROR: 'ERR {message}',
 
@@ -44,6 +46,15 @@ export const ServerMessages = {
   CONFIG_MEMORY: 'argument must be a memory value',
   CONFIG_MEMORY_OR_PERCENT: 'argument must be a memory or percent value',
   CONFIG_PERCENTILES: 'Invalid latency-tracking-info-percentiles parameters',
+  CONFIG_PERCENTILES_RANGE: 'latency-tracking-info-percentiles parameters should sit between [0.0,100.0]',
+  CONFIG_OBUF_ARGS: 'Wrong number of arguments in buffer limit configuration.',
+  CONFIG_OBUF_CLASS: 'Invalid client class specified in buffer limit configuration.',
+  CONFIG_OBUF_VALUES: 'Error in hard, soft or soft_seconds setting in buffer limit configuration.',
+  CONFIG_OOM_ARGS: 'wrong number of arguments',
+  CONFIG_OOM_RANGE: 'Invalid oom-score-adj-values, elements must be between -2000 and 2000.',
+  CONFIG_PROC_TITLE: 'template format is invalid or contains unknown variables',
+  CONFIG_SHUTDOWN_SAVE_NOSAVE: "shutdown options SAVE and NOSAVE can't be used simultaneously",
+  CONFIG_HOSTNAME: 'Hostnames may only contain alphanumeric characters, hyphens or dots',
   CONFIG_PERCENT_RANGE: 'percentage argument must be less or equal to 100',
   CONFIG_KEYSPACE_EVENTS: "Invalid event class character. Use 'Ag$lshzxeKEtmdn'.",
   CONFIG_SAVE: 'Invalid save parameters',
@@ -59,6 +70,7 @@ export const ServerMessages = {
   CONFIG_SET_UNKNOWN: "ERR Unknown option or number of arguments for CONFIG SET - '{name}'",
   CONFIG_SET_FAILED: "ERR CONFIG SET failed (possibly related to argument '{name}') - {reason}",
   CONFIG_IMMUTABLE: "can't set immutable config",
+  CONFIG_PROTECTED: "can't set protected config",
   CONFIG_DUPLICATE: 'duplicate parameter',
   NO_CONFIG_FILE: 'ERR The server is running without a config file',
 
@@ -92,7 +104,16 @@ export const ServerMessages = {
   LATENCY_DOCTOR_DISABLED:
     'I\'m sorry, Dave, I can\'t do that. Latency monitoring is disabled in this Redis instance. You may use "CONFIG SET latency-monitor-threshold <milliseconds>." in order to enable it. If we weren\'t in a deep space mission I\'d suggest to take a look at https://redis.io/topics/latency-monitor.\n',
   LATENCY_DOCTOR_OK:
-    'Dave, no latency spike was observed during the lifetime of this Redis instance, not in the slightest bit. I honestly think you ought to sleep tonight.\n',
+    'Dave, no latency spike was observed during the lifetime of this Redis instance, not in the slightest bit. I honestly think you ought to sit down calmly, take a stress pill, and think things over.\n',
+  LATENCY_DOCTOR_SPIKES: "Dave, I have observed latency spikes in this Redis instance. You don't mind talking about it, do you Dave?\n\n",
+  LATENCY_DOCTOR_EVENT: '{n}. {event}: {count} latency spikes (average {avg}ms, mean deviation {mad}ms, period {period} sec). Worst all time event {max}ms.\n',
+  LATENCY_DOCTOR_ADVICE: '\nI have a few advices for you:\n\n',
+  LATENCY_ADVICE_SLOWLOG_THRESHOLD:
+    "- Your current Slow Log configuration only logs events that are slower than your configured latency monitor threshold. Please use 'CONFIG SET slowlog-log-slower-than {usec}'.\n",
+  LATENCY_ADVICE_SLOWLOG:
+    '- Check your Slow Log to understand what are the commands you are running which are too slow to execute. Please check https://redis.io/commands/slowlog for more information.\n',
+  LATENCY_ADVICE_BIG_OBJECTS:
+    '- Deleting, expiring or evicting (because of maxmemory policy) large objects is a blocking operation. If you have very large objects that are often deleted, expired, or evicted, try to fragment those objects into multiple smaller objects.\n',
 
   // ============================================================================
   // MEMORY
@@ -111,7 +132,7 @@ export const ServerMessages = {
     " * Many scripts: There seem to be many cached scripts in this instance (more than 1000). This may be because scripts are generated and `EVAL`ed, instead of being parameterized (with KEYS and ARGV), `SCRIPT LOAD`ed and `EVALSHA`ed. Unless `SCRIPT FLUSH` is called periodically, the scripts' caches may end up consuming most of your memory.\n\n",
 
   // ============================================================================
-  // Admin: MONITOR, SHUTDOWN, WAIT, WAITAOF, LOLWUT
+  // Admin: MONITOR, SHUTDOWN, WAIT, LOLWUT
   // ============================================================================
   MONITOR_CONTEXT: 'ERR MONITOR is not allowed in this context',
   NO_SHUTDOWN_IN_PROGRESS: 'ERR No shutdown in progress.',
@@ -126,6 +147,10 @@ export const ServerMessages = {
   // DEBUG
   // ============================================================================
   NO_SUCH_KEY: 'ERR no such key',
+  DEBUG_DB_RANGE: 'ERR Out of range database',
+  DEBUG_NOT_HASHTABLE: 'ERR The value stored at the specified key is not represented using an hash table',
+  DEBUG_HTSTATS_MAIN: '[Dictionary HT]\n',
+  DEBUG_HTSTATS_EXPIRES: '[Expires HT]\n',
   DEBUG_RELOAD_OPTIONS: 'ERR DEBUG RELOAD only supports the MERGE, NOFLUSH and NOSAVE options.',
   DEBUG_PACKED_THRESHOLD: 'ERR argument must be a memory value bigger than 1 and smaller than 4gb',
   DEBUG_NOT_LISTPACK: 'ERR Not a listpack encoded object.',

@@ -1,6 +1,7 @@
 import { differential, s, v } from './differential.harness';
 import type { Step } from './differential.harness';
 import { streamIds } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 /** `n` XADD steps with explicit ids `<base + i>-0`. */
 function fill(key: string, n: number, base = 1): Step[] {
@@ -66,6 +67,8 @@ differential('streams', [
   // XREAD
   s('XREAD from ids', [...fill('a', 3), ...fill('b', 2), 'XREAD STREAMS a b 1-0 0', 'XREAD COUNT 1 STREAMS a b 0 0', 'XREAD STREAMS a b 3-0 2-0']),
   s('XREAD dollar non blocking is empty', ['XADD a 1-0 f v', 'XREAD STREAMS a $', 'XREAD STREAMS missing 0']),
+  s('XREADGROUP unbalanced streams text', ['XREADGROUP GROUP g c STREAMS a b 0', 'xread STREAMS a b 0', 'xreadgroup GROUP g c STREAMS a b 0']),
+  s('XREAD BLOCK from a script', ['XADD s 1-0 f v', 'SET str v', 'EVAL "return redis.call(\'XREAD\', \'BLOCK\', 0, \'STREAMS\', \'s\', \'0\')" 0', 'EVAL "return redis.call(\'XREAD\', \'BLOCK\', \'x\', \'STREAMS\', \'str\', \'$\')" 0', 'EVAL "return redis.call(\'XREAD\', \'COUNT\', \'x\', \'BLOCK\', 0, \'STREAMS\', \'s\', \'0\')" 0', 'EVAL "return redis.call(\'XREAD\', \'BLOCK\', 0, \'GROUP\', \'STREAMS\', \'s\', \'0\')" 0', 'EVAL "return redis.call(\'XREAD\', \'STREAMS\', \'s\', \'0\')" 0', 'EVAL "return redis.call(\'XREADGROUP\', \'GROUP\', \'g\', \'c\', \'BLOCK\', 0, \'STREAMS\', \'s\', \'>\')" 0', 'XGROUP CREATE s g 0', 'EVAL "return redis.call(\'XREADGROUP\', \'GROUP\', \'g\', \'c\', \'BLOCK\', 0, \'STREAMS\', \'s\', \'>\')" 0', 'EVAL "return redis.call(\'XREADGROUP\', \'GROUP\', \'g\', \'c\', \'STREAMS\', \'s\', \'>\')" 0']),
   s('XREAD unbalanced streams text', ['XREAD STREAMS a b 0'], v("error text names the command as 'xread' (quoted, lower case) instead of XREAD after 7.0", 'low')),
   s('XREAD errors', ['XREAD', 'XREAD STREAMS', 'XREAD STREAMS a', 'XREAD COUNT x STREAMS a 0', 'XREAD BLOCK -1 STREAMS a 0', 'XREAD BLOCK x STREAMS a 0', 'XREAD FOO STREAMS a 0', 'XREAD STREAMS a bad', 'XREAD STREAMS a >']),
   s('XREAD COUNT zero and negative', [...fill('a', 3), 'XREAD COUNT 0 STREAMS a 0', 'XREAD COUNT -1 STREAMS a 0']),
@@ -98,4 +101,12 @@ differential('streams', [
   s('XINFO HELP', ['XINFO HELP'], v('the HELP footer reads "Print this help." in newer Redis (7.0: "Prints this help.")', 'medium')),
   s('XINFO GROUPS on stream without groups', ['XADD s 1-0 f v', 'XINFO GROUPS s', 'XINFO GROUPS missing']),
   s('XINFO STREAM empty after MAXLEN 0', ['XADD s 1-0 f v', 'XADD s 2-0 f v', 'XTRIM s MAXLEN 0', 'XINFO STREAM s', 'XINFO STREAM s FULL']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('XADD MAXLEN', ['XADD x 1-1 f v', 'XADD x MAXLEN $N 2-1 f v', 'XADD x MAXLEN ~ 1 LIMIT $N 3-1 f v', 'XLEN x']),
+  ...intProbes('XTRIM', ['XADD x 1-1 f v', 'XTRIM x MAXLEN $N', 'XTRIM x MINID ~ 0 LIMIT $N', 'XLEN x']),
+  ...intProbes('XRANGE COUNT', ['XADD x 1-1 f v', 'XRANGE x - + COUNT $N', 'XREVRANGE x + - COUNT $N']),
+  ...intProbes('XREAD COUNT BLOCK', ['XADD x 1-1 f v', 'XREAD COUNT $N STREAMS x 0', 'XREAD BLOCK $N STREAMS x 0']),
+  ...intProbes('XSETID and ENTRIESREAD', ['XADD x 1-1 f v', 'XSETID x 1-1 ENTRIESADDED $N', 'XGROUP CREATE x g 0 ENTRIESREAD $N', 'XGROUP CREATE x g2 0', 'XGROUP SETID x g2 0 ENTRIESREAD $N']),
+  ...intProbes('XINFO FULL COUNT', ['XADD x 1-1 f v', 'XINFO STREAM x FULL COUNT $N']),
 ]);

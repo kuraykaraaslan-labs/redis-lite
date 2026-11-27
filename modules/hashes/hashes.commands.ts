@@ -4,32 +4,20 @@ import type { CommandSpec } from '@/modules/command/command.types';
 import {
   HDelDTO,
   HExistsDTO,
-  HExpireAtDTO,
-  HExpireCmdDTO,
-  HExpireTimeDTO,
   HGetAllDTO,
-  HGetDelDTO,
   HGetDTO,
-  HGetExDTO,
   HIncrByDTO,
   HIncrByFloatDTO,
   HKeysDTO,
   HLenDTO,
   HMGetDTO,
   HMSetDTO,
-  HPersistDTO,
-  HPExpireAtDTO,
-  HPExpireDTO,
-  HPExpireTimeDTO,
-  HPTtlDTO,
   HRandFieldDTO,
   HScanCursorDTO,
   HScanDTO,
   HSetCmdDTO,
-  HSetExDTO,
   HSetNxDTO,
   HStrLenDTO,
-  HTtlCmdDTO,
   HValsDTO,
 } from './hashes.dto';
 import HashesService from './hashes.service';
@@ -43,26 +31,6 @@ import HashesService from './hashes.service';
 const WRITE = { write: true } as const;
 
 export const hashCommands: CommandSpec[] = [
-  // ============================================================================
-  // Field TTLs
-  // ============================================================================
-  { name: 'hexpire', arity: -6, flags: WRITE, keys: keysAt(0), handler: withDTO(HExpireCmdDTO, HashesService.hExpire) },
-  { name: 'hpexpire', arity: -6, flags: WRITE, keys: keysAt(0), handler: withDTO(HPExpireDTO, HashesService.hExpire) },
-  { name: 'hexpireat', arity: -6, flags: WRITE, keys: keysAt(0), handler: withDTO(HExpireAtDTO, HashesService.hExpire) },
-  { name: 'hpexpireat', arity: -6, flags: WRITE, keys: keysAt(0), handler: withDTO(HPExpireAtDTO, HashesService.hExpire) },
-  { name: 'httl', arity: -5, handler: withDTO(HTtlCmdDTO, HashesService.hTtl) },
-  { name: 'hpttl', arity: -5, handler: withDTO(HPTtlDTO, HashesService.hTtl) },
-  { name: 'hexpiretime', arity: -5, handler: withDTO(HExpireTimeDTO, HashesService.hTtl) },
-  { name: 'hpexpiretime', arity: -5, handler: withDTO(HPExpireTimeDTO, HashesService.hTtl) },
-  { name: 'hpersist', arity: -5, flags: WRITE, keys: keysAt(0), handler: withDTO(HPersistDTO, HashesService.hPersist) },
-
-  // ============================================================================
-  // Get-and-set
-  // ============================================================================
-  { name: 'hgetdel', arity: -5, flags: WRITE, keys: keysAt(0), handler: withDTO(HGetDelDTO, HashesService.hGetDel) },
-  { name: 'hgetex', arity: -5, flags: WRITE, keys: keysAt(0), handler: withDTO(HGetExDTO, HashesService.hGetEx) },
-  { name: 'hsetex', arity: -6, flags: WRITE, keys: keysAt(0), handler: withDTO(HSetExDTO, HashesService.hSetEx) },
-
   // ============================================================================
   // Fields
   // ============================================================================

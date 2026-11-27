@@ -11,7 +11,7 @@ import { errorOf, FOO_HASH, makeAcl } from './acl.fixtures';
 describe('default user', () => {
   it('is on nopass with every permission', () => {
     const acl = makeAcl();
-    expect(acl.describe('default')).toBe('user default on nopass sanitize-payload ~* &* +@all');
+    expect(acl.describe('default')).toBe('user default on nopass ~* &* +@all');
     expect(acl.authenticate('default', 'anything')).toBe(true);
     expect(acl.defaultLoginAllowed()).toBe(true);
     expect(acl.users()).toEqual(['default']);
@@ -19,12 +19,12 @@ describe('default user', () => {
 
   it('takes requirepass', () => {
     const acl = makeAcl({ requirepass: 'foo' });
-    expect(acl.describe('default')).toBe(`user default on sanitize-payload #${FOO_HASH} ~* &* +@all`);
+    expect(acl.describe('default')).toBe(`user default on #${FOO_HASH} ~* &* +@all`);
     expect(acl.authenticate('default', 'foo')).toBe(true);
     expect(acl.authenticate('default', 'bar')).toBe(false);
     expect(acl.defaultLoginAllowed()).toBe(false);
     acl.setRequirePass('');
-    expect(acl.describe('default')).toBe('user default on nopass sanitize-payload ~* &* +@all');
+    expect(acl.describe('default')).toBe('user default on nopass ~* &* +@all');
   });
 
   it('cannot be deleted', () => {
@@ -40,27 +40,34 @@ describe('ACL SETUSER rule language and describe()', () => {
   it('creates a new user with the Redis defaults', () => {
     const acl = makeAcl();
     acl.setUser('alice', []);
-    expect(acl.describe('alice')).toBe('user alice off sanitize-payload resetchannels -@all');
+    expect(acl.describe('alice')).toBe('user alice off resetchannels -@all');
   });
 
   it('normalises the documented example', () => {
     const acl = makeAcl();
     acl.setUser('alice', ['on', '>foo', '~cached:*', '+get']);
-    expect(acl.describe('alice')).toBe(`user alice on sanitize-payload #${FOO_HASH} ~cached:* resetchannels -@all +get`);
+    expect(acl.describe('alice')).toBe(`user alice on #${FOO_HASH} ~cached:* resetchannels -@all +get`);
   });
 
-  it('keeps command rule order and drops superseded rules', () => {
+  it('describes command rules from the command bitmap (Redis 7.0), not as typed', () => {
     const acl = makeAcl();
+    // keyspace (del, copy, flushall) and list (lpush) are exactly what -@write took away once +set is back
     acl.setUser('u', ['+@all', '-@write', '+SET', '-get', '+get']);
-    expect(acl.getUser('u')?.commands).toBe('+@all -@write +set +get');
+    expect(acl.getUser('u')?.commands).toBe('+@all -@keyspace -@list');
     acl.setUser('u', ['+config|get', '+client|getname', '+config']);
-    expect(acl.getUser('u')?.commands).toBe('+@all -@write +set +get +client|getname +config');
+    expect(acl.getUser('u')?.commands).toBe('+@all -@keyspace -@list');
     acl.setUser('u', ['-config|set']);
-    expect(acl.getUser('u')?.commands).toBe('+@all -@write +set +get +client|getname +config -config|set');
+    expect(acl.getUser('u')?.commands).toBe('+@all -@keyspace -@list -config|set');
     acl.setUser('u', ['nocommands']);
     expect(acl.getUser('u')?.commands).toBe('-@all');
+    // dangerous and admin both fit; dangerous fixes more commands
     acl.setUser('u', ['allcommands', '-@DANGEROUS']);
     expect(acl.getUser('u')?.commands).toBe('+@all -@dangerous');
+    // a category is used only when it fixes more commands than it breaks
+    acl.setUser('u', ['nocommands', '+@read', '-hget']);
+    expect(acl.getUser('u')?.commands).toBe('-@all +get');
+    acl.setUser('u', ['nocommands', '+client', '-client|kill']);
+    expect(acl.getUser('u')?.commands).toBe('-@all +client -client|kill');
   });
 
   it('key patterns with read/write permissions', () => {
@@ -78,10 +85,10 @@ describe('ACL SETUSER rule language and describe()', () => {
   it('channels', () => {
     const acl = makeAcl();
     acl.setUser('u', ['&news.*', '&news.*', '&chat']);
-    expect(acl.describe('u')).toBe('user u off sanitize-payload resetchannels &news.* &chat -@all');
+    expect(acl.describe('u')).toBe('user u off resetchannels &news.* &chat -@all');
     expect(acl.getUser('u')?.channels).toBe('&news.* &chat');
     acl.setUser('u', ['allchannels']);
-    expect(acl.describe('u')).toBe('user u off sanitize-payload &* -@all');
+    expect(acl.describe('u')).toBe('user u off &* -@all');
     acl.setUser('u', ['resetchannels']);
     expect(acl.getUser('u')?.channels).toBe('');
   });
@@ -111,10 +118,10 @@ describe('ACL SETUSER rule language and describe()', () => {
     const acl = makeAcl();
     acl.setUser('u', ['on', 'nopass', '+get', '~a:*', '(+set', '~b:*', '&c)', '(%R~x +@read)']);
     expect(acl.describe('u')).toBe(
-      'user u on nopass sanitize-payload ~a:* resetchannels -@all +get (~b:* resetchannels &c -@all +set) (%R~x resetchannels -@all +@read)',
+      'user u on nopass ~a:* resetchannels -@all +get (~b:* resetchannels &c -@all +set) (%R~x resetchannels -@all +@read)',
     );
     expect(acl.getUser('u')).toEqual({
-      flags: ['on', 'nopass', 'sanitize-payload'],
+      flags: ['on', 'nopass'],
       passwords: [],
       commands: '-@all +get',
       keys: '~a:*',
@@ -135,7 +142,7 @@ describe('ACL SETUSER rule language and describe()', () => {
     expect(acl.check('u', 'select', null, ['0'])).toBeNull();
     expect(acl.check('u', 'select', null, ['1'])).toEqual({ reason: 'command', object: 'select' });
     acl.setUser('u', ['-select']);
-    expect(acl.getUser('u')?.commands).toBe('-@all -select');
+    expect(acl.getUser('u')?.commands).toBe('-@all');
     expect(acl.check('u', 'select', null, ['0'])).not.toBeNull();
   });
 
@@ -185,7 +192,7 @@ describe('ACL SETUSER errors', () => {
     const a = makeAcl();
     a.setUser('x', ['on', '+get']);
     expect(() => a.setUser('x', ['off', '+set', '+nosuch'])).toThrow(AppError);
-    expect(a.describe('x')).toBe('user x on sanitize-payload resetchannels -@all +get');
+    expect(a.describe('x')).toBe('user x on resetchannels -@all +get');
     expect(() => a.setUser('y', ['+nosuch'])).toThrow(AppError);
     expect(a.user('y')).toBeUndefined();
   });
@@ -223,8 +230,8 @@ describe('ACL file', () => {
     acl.setUser('bob', ['on', '>foo', '~b:*', '+get', '(+set ~x)']);
     const text = acl.toFile();
     expect(text).toBe(
-      `user bob on sanitize-payload #${FOO_HASH} ~b:* resetchannels -@all +get (~x resetchannels -@all +set)\n` +
-        'user default on nopass sanitize-payload ~* &* +@all\n',
+      `user bob on #${FOO_HASH} ~b:* resetchannels -@all +get (~x resetchannels -@all +set)\n` +
+        'user default on nopass ~* &* +@all\n',
     );
     const other = makeAcl();
     other.setUser('gone', []);
@@ -236,7 +243,7 @@ describe('ACL file', () => {
     const acl = makeAcl({ requirepass: 'foo' });
     acl.setUser('a', ['on']);
     expect(acl.loadFile('user a on\n\n  \r\n')).toEqual(['default']);
-    expect(acl.describe('default')).toBe('user default on nopass sanitize-payload ~* &* +@all');
+    expect(acl.describe('default')).toBe('user default on nopass ~* &* +@all');
   });
 
   it('validates everything and keeps the old users on error', () => {
@@ -269,7 +276,7 @@ describe('helpers', () => {
   it('CAT', () => {
     const acl = makeAcl();
     expect(acl.categories()).toEqual([...AclCategoryEnum.options]);
-    expect(acl.categories()).toHaveLength(22);
+    expect(acl.categories()).toHaveLength(21);
     expect(acl.commandsInCategory('ADMIN')).toEqual(['config|get', 'config|set', 'client|kill']);
     expect(errorOf(() => acl.commandsInCategory('nope'))).toBe("ERR Unknown category 'nope'");
   });

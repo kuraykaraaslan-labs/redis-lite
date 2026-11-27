@@ -28,16 +28,16 @@ differential('keys object', [
   s('OBJECT ENCODING hash listpack to hashtable by value size', ['HSET h f ' + 'v'.repeat(64), 'OBJECT ENCODING h', 'HSET h g ' + LONG, 'OBJECT ENCODING h', 'HSET k ' + LONG + ' v', 'OBJECT ENCODING k']),
 
   // lists
-  s('OBJECT ENCODING list small', ['RPUSH l a b c', 'OBJECT ENCODING l'], v('small lists are listpack-encoded since 7.2 (quicklist in 7.0)')),
-  s('OBJECT ENCODING list of short items', [many('RPUSH l', 200, (i) => `e${i}`), 'OBJECT ENCODING l'], v('lists under list-max-listpack-size are listpack since 7.2 (quicklist in 7.0)')),
+  s('OBJECT ENCODING list small', ['RPUSH l a b c', 'OBJECT ENCODING l']),
+  s('OBJECT ENCODING list of short items', [many('RPUSH l', 200, (i) => `e${i}`), 'OBJECT ENCODING l']),
   s('OBJECT ENCODING list with a big item', ['RPUSH m ' + 'y'.repeat(9000), 'OBJECT ENCODING m', many('RPUSH n', 2000, (i) => `item${i}`), 'OBJECT ENCODING n']),
 
   // sets
   s('OBJECT ENCODING set intset', ['SADD s 1 2 3', 'OBJECT ENCODING s', 'SADD n -5 9223372036854775807', 'OBJECT ENCODING n']),
   s('OBJECT ENCODING set intset to hashtable by count', [many('SADD s', 512, (i) => String(i)), 'OBJECT ENCODING s', 'SADD s 512', 'OBJECT ENCODING s']),
-  s('OBJECT ENCODING set with strings', ['SADD s a b', 'OBJECT ENCODING s', 'SADD t 1 2', 'SADD t x', 'OBJECT ENCODING t'], v('small non-integer sets are listpack-encoded since 7.2 (hashtable in 7.0)')),
+  s('OBJECT ENCODING set with strings', ['SADD s a b', 'OBJECT ENCODING s', 'SADD t 1 2', 'SADD t x', 'OBJECT ENCODING t']),
   s('OBJECT ENCODING set big strings', [many('SADD s', 129, (i) => `m${i}`), 'OBJECT ENCODING s', 'SADD t ' + LONG, 'OBJECT ENCODING t']),
-  s('OBJECT ENCODING set out of int64 range', ['SADD s 9223372036854775808', 'OBJECT ENCODING s'], v('non-integer small sets are listpack since 7.2')),
+  s('OBJECT ENCODING set out of int64 range', ['SADD s 9223372036854775808', 'OBJECT ENCODING s']),
 
   // sorted sets
   s('OBJECT ENCODING zset listpack to skiplist', [
@@ -53,7 +53,7 @@ differential('keys object', [
     'CONFIG SET hash-max-listpack-entries 2', 'HSET h a 1 b 2', 'OBJECT ENCODING h', 'HSET h c 3', 'OBJECT ENCODING h',
     'CONFIG SET zset-max-listpack-entries 1', 'ZADD z 1 a', 'OBJECT ENCODING z', 'ZADD z 2 b', 'OBJECT ENCODING z',
   ]),
-  s('OBJECT ENCODING set-max-intset-entries', ['CONFIG SET set-max-intset-entries 2', 'SADD s 1 2', 'OBJECT ENCODING s', 'SADD s 3', 'OBJECT ENCODING s'], v('an intset over set-max-intset-entries becomes listpack since 7.2 (hashtable in 7.0)')),
+  s('OBJECT ENCODING set-max-intset-entries', ['CONFIG SET set-max-intset-entries 2', 'SADD s 1 2', 'OBJECT ENCODING s', 'SADD s 3', 'OBJECT ENCODING s']),
   s('OBJECT ENCODING zset-max-listpack-value', ['CONFIG SET zset-max-listpack-value 3', 'ZADD z 1 abc', 'OBJECT ENCODING z', 'ZADD z 2 abcd', 'OBJECT ENCODING z']),
   s('OBJECT ENCODING after conversion stays', [many('HSET h', 600, (i) => `f${i} v`), 'OBJECT ENCODING h', 'HDEL h ' + Array.from({ length: 599 }, (_, i) => `f${i}`).join(' '), 'OBJECT ENCODING h', 'HLEN h']),
 

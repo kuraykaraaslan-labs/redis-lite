@@ -6,7 +6,7 @@ import type { RedisValue } from '@/modules/database/database.types';
 import MemoryService from '../memory.service';
 import type { KeyRecord, MemoryStatValue } from '../memory.types';
 
-const { SIZES, computeMemory, datasetBytes, dbOverhead, infoMemory, memoryStats, memoryUsage } = MemoryService;
+const { SIZES, computeMemory, datasetBytes, dbOverhead, infoMemory, memoryStats, memoryUsage, objectSize } = MemoryService;
 
 const str = (value: string, raw = false): RedisValue => ({ type: 'string', value, raw });
 
@@ -21,18 +21,18 @@ describe('MEMORY STATS / INFO memory', () => {
     const o = dbOverhead({ id: 0, keys: records });
     expect(o.keys).toBe(3);
     expect(o.expires).toBe(1);
-    expect(o.main).toBe(SIZES.kvstore + 3 * 16 + 4 * 8 + SIZES.dict + SIZES.kvstoreDictMeta + 3 * SIZES.robj);
-    expect(o.expiresOverhead).toBe(SIZES.kvstore + 16 + 4 * 8 + SIZES.dict + SIZES.kvstoreDictMeta);
+    // Redis 7.0: entries × (sizeof(dictEntry) + sizeof(robj)) + slots × 8; the expires dict has no robj
+    expect(o.main).toBe(3 * SIZES.dictEntry + 4 * 8 + 3 * SIZES.robj);
+    expect(o.expiresOverhead).toBe(SIZES.dictEntry + 4 * 8);
     expect(o.dataset).toBe(datasetBytes([{ id: 0, keys: records }]));
-    const sumUsage = records.reduce(
-      (n, r) => n + memoryUsage(r.key, r.value, r.encoding, { samples: 0, hasExpire: r.hasExpire }) - SIZES.dictEntryNoValue,
-      0,
-    );
-    expect(o.dataset).toBe(sumUsage);
+    // the dataset is what the allocator holds for the keys: the shared integer '1' allocates no object
+    const sum = records.reduce((n, r) => n + objectSize(r.key, r.value, r.encoding, { samples: 0, hasExpire: r.hasExpire, allocated: true, sharedIntegers: true }), 0);
+    expect(o.dataset).toBe(sum);
+    expect(memoryUsage('a', records[0].value, 'int', { samples: 0, hasExpire: false })).toBe(SIZES.dictEntry + 8 + SIZES.robj);
   });
 
   it('is internally consistent', () => {
-    const r = computeMemory({ databases: [{ id: 0, keys: records }, { id: 1, keys: [] }], clientsNormal: 3072, peak: 0 });
+    const r = computeMemory({ databases: [{ id: 0, keys: records }, { id: 1, keys: [] }], clientsNormal: 37632, peak: 0 });
     expect(r.overheadTotal + r.dataset).toBe(r.usedMemory);
     expect(r.keysCount).toBe(3);
     expect(r.dbs.map((d) => d.id)).toEqual([0]);
@@ -43,6 +43,7 @@ describe('MEMORY STATS / INFO memory', () => {
     expect(stats.get('db.0')).toEqual([
       ['overhead.hashtable.main', r.dbs[0].main],
       ['overhead.hashtable.expires', r.dbs[0].expiresOverhead],
+      ['overhead.hashtable.slot-to-keys', 0],
     ]);
     expect(stats.get('peak.percentage')).toEqual({ double: Math.fround(100) });
     const keysOrder = memoryStats(r).map(([k]) => k);

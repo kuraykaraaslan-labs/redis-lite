@@ -4,7 +4,7 @@ import { RespError, Status } from '@/libs/resp';
 import type { Client } from './server.client';
 import type { RedisLiteServer } from './server.core';
 import ServerMessages from './server.messages';
-import type { CommandStat } from './server.types';
+import type { CommandStat, LatencyEvent } from './server.types';
 
 // ============================================================================
 // Argument Rendering (SLOWLOG, MONITOR)
@@ -65,6 +65,8 @@ function redact(argv: string[]): string[] {
 /** What the server reports about itself: INFO stats / commandstats / errorstats counters, SLOWLOG, the MONITOR feed. */
 export class ServerObserver {
   private slowlogNextId = 0;
+  /** Latency monitor events by name (`command`, `fast-command`), in the order they first happened. */
+  readonly latencyEvents = new Map<string, LatencyEvent>();
 
   constructor(private readonly server: RedisLiteServer) {}
 
@@ -125,6 +127,24 @@ export class ServerObserver {
       name: client.name,
     });
     if (slowlog.length > maxLen) slowlog.length = maxLen;
+  }
+
+  /**
+   * Latency monitor: a command that took at least latency-monitor-threshold ms (0 = monitoring off) is a sample of the
+   * `command` event (`fast-command` for a fast command). One sample per second is kept (the largest), at most 160.
+   */
+  latencySample(event: string, usec: number): void {
+    const threshold = this.server.config.num('latency-monitor-threshold');
+    const ms = Math.floor(usec / 1000);
+    if (threshold <= 0 || ms < threshold) return;
+    const now = Math.floor(Date.now() / 1000);
+    let e = this.latencyEvents.get(event);
+    if (!e) this.latencyEvents.set(event, (e = { samples: [], max: 0 }));
+    const last = e.samples[e.samples.length - 1];
+    if (last && last[0] === now) last[1] = Math.max(last[1], ms);
+    else e.samples.push([now, ms]);
+    if (e.samples.length > 160) e.samples.shift();
+    e.max = Math.max(e.max, ms);
   }
 
   /** MONITOR: one line per command to every monitor but the caller. */

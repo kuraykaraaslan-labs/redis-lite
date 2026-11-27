@@ -52,7 +52,8 @@ describe('PFDEBUG', () => {
     expect.soft(await err(t.call('PFDEBUG', 'DECODE', 'hd:e'))).toBe('ERR HLL encoding is not sparse');
     expect.soft(await err(t.call('PFDEBUG', 'GETREG', 'hd:missing'))).toBe('ERR The specified key does not exist');
     expect.soft(await err(t.call('PFDEBUG', 'FOO', 'hd:e'))).toBe("ERR Unknown PFDEBUG subcommand 'FOO'");
-    expect.soft(await err(t.call('PFDEBUG', 'GETREG', 'hd:e', 'x'))).toBe("ERR Wrong number of arguments for the 'GETREG' subcommand");
+    // Redis 7.0: PFDEBUG has an exact arity of 3
+    expect.soft(await err(t.call('PFDEBUG', 'GETREG', 'hd:e', 'x'))).toBe(arity('pfdebug'));
     expect.soft(await err(t.call('PFDEBUG', 'GETREG'))).toBe(arity('pfdebug'));
     await t.call('SET', 'hd:bad', 'nope');
     expect.soft(await err(t.call('PFDEBUG', 'ENCODING', 'hd:bad'))).toBe(HLL_WRONGTYPE);

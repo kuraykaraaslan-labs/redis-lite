@@ -10,14 +10,13 @@ import type { Reply } from '@/libs/resp';
 import { RedisLite } from '@/index';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
 import { RedisLiteServer } from '@/modules/server/server.core';
-import HashesService from '@/modules/hashes/hashes.service';
 import DatabaseService from '@/modules/database/database.service';
 import { eventually, tempDir, useServer, waitFor } from '@/tests/helpers';
 
 import MemoryService from '../memory.service';
-import type { KeyRecord } from '../memory.types';
+import type { KeyRecord, MemoryReport } from '../memory.types';
 
-const { clientMemory, computeMemory } = MemoryService;
+const { computeMemory } = MemoryService;
 
 /**
  * maxmemory and the eviction policies, as documented on redis.io ("Key eviction") and in redis.conf: the policies,
@@ -276,26 +275,28 @@ describe('incremental used-memory accounting', () => {
     server.lua = await LuaEngine.create(server);
     const client = server.createInternalClient();
     const run = (...argv: string[]): Reply => server.execute(client, argv, { inScript: false, noBlock: true }) as Reply;
-    const allocated = new Set<number>();
-    const full = (): number => {
+    // the same overheads as the server's report (clients, scripts) and its keyspace dict sizes; the dataset recomputed
+    const full = (r: MemoryReport): number => {
       const databases = server.databases.map((db, id) => {
-        if (db.keys().length) allocated.add(id);
         const keys: KeyRecord[] = [];
         for (const key of db.keys()) {
           const value = db.peek(key);
           if (!value) continue;
-          const fieldTtls = value.type === 'hash' ? HashesService.hashFieldExpires(value.value) : undefined;
-          keys.push({ key, value, encoding: DatabaseService.objectEncoding(value, server.config, fieldTtls !== undefined), hasExpire: db.getExpire(key) !== undefined, fieldTtls });
+          keys.push({ key, value, encoding: DatabaseService.objectEncoding(value, server.config), hasExpire: db.getExpire(key) !== undefined });
         }
-        return { id, keys, allocated: allocated.has(id) };
+        const t = server.memoryModel.keyspaceTables(id);
+        return { id, keys, mainSlots: t.main.size0 + t.main.size1, expiresSlots: t.expires.size0 + t.expires.size1 };
       });
-      return computeMemory({ databases, clientsNormal: server.clients.size * clientMemory(), sizes: {
+      return computeMemory({ databases, clientsNormal: r.clientsNormal, luaCaches: r.luaCaches, functionsCaches: r.functionsCaches, sizes: {
         listMaxListpackSize: server.config.num('list-max-listpack-size'),
         streamNodeMaxEntries: server.config.num('stream-node-max-entries'),
         streamNodeMaxBytes: server.config.num('stream-node-max-bytes'),
       } }).usedMemory;
     };
-    const check = () => expect(server.memoryReport().usedMemory).toBe(full());
+    const check = (): void => {
+      const r = server.memoryReport();
+      expect(r.usedMemory).toBe(full(r));
+    };
 
     run('SET', 's', 'hello');
     run('APPEND', 's', ' world');
@@ -304,7 +305,6 @@ describe('incremental used-memory accounting', () => {
     run('LPOP', 'l', '50');
     check();
     run('HSET', 'h', ...Array.from({ length: 300 }, (_, i) => [`f${i}`, `v${i}`]).flat());
-    run('HPEXPIRE', 'h', '100000', 'FIELDS', '1', 'f1');
     check();
     run('SADD', 'set', '1', '2', '3');
     run('SADD', 'set', 'not-an-int');

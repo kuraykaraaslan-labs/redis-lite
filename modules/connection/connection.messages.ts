@@ -30,8 +30,6 @@ export const ConnectionMessages = {
   HELLO_SYNTAX: "ERR Syntax error in HELLO option '{option}'",
   CLIENT_TYPE_UNKNOWN: "ERR Unknown client type '{type}'",
   NO_SUCH_USER: "ERR No such user '{user}'",
-  SETINFO_UNRECOGNIZED: "ERR Unrecognized option '{option}'",
-  SETINFO_INVALID: 'ERR {option} cannot contain spaces, newlines or special characters.',
 } as const;
 
 export default ConnectionMessages;

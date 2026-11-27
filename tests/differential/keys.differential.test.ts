@@ -1,5 +1,6 @@
 import { differential, s } from './differential.harness';
 import { shape, sorted } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 differential('keys', [
   // DEL / UNLINK / EXISTS / TOUCH
@@ -73,4 +74,11 @@ differential('keys', [
 
   // unknown / arity errors around the keyspace
   s('unknown command text', ['NOSUCHCMD a b', 'nosuchcmd', 'GETT k "a b"']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('MOVE', ['SET k v', 'MOVE k $N', 'EXISTS k']),
+  ...intProbes('COPY DB', ['SET k v', 'COPY k k2 DB $N', 'EXISTS k2']),
+  ...intProbes('SWAPDB', ['SWAPDB 0 $N', 'SWAPDB $N 0']),
+  ...intProbes('SCAN COUNT', ['SET k v', 'SCAN 0 COUNT $N']),
+  ...intProbes('RESTORE ttl before the payload check', ['RESTORE k $N x']),
 ]);

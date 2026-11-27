@@ -46,8 +46,6 @@ export default class AclLogService {
       object: input.object,
       username: input.username,
       clientInfo: input.clientInfo,
-      entryId: state.nextId++,
-      timestampCreated: now,
       ctime: now,
     });
     while (list.length > maxLen) list.pop();
@@ -63,13 +61,10 @@ export default class AclLogService {
       username: e.username,
       ageSeconds: (now - e.ctime) / 1000,
       clientInfo: e.clientInfo,
-      entryId: e.entryId,
-      timestampCreated: e.timestampCreated,
-      timestampLastUpdated: e.ctime,
     }));
   }
 
-  /** ACL LOG [count] reply: array of 10-field maps. */
+  /** ACL LOG [count] reply: array of 7-field maps. */
   static reply(entries: AclLogEntry[]): Reply {
     return entries.map(
       (e) =>
@@ -81,9 +76,6 @@ export default class AclLogService {
           ['username', e.username],
           ['age-seconds', new RespDouble(e.ageSeconds)],
           ['client-info', e.clientInfo],
-          ['entry-id', e.entryId],
-          ['timestamp-created', e.timestampCreated],
-          ['timestamp-last-updated', e.timestampLastUpdated],
         ]),
     );
   }

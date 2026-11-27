@@ -1,18 +1,15 @@
+import DatabaseService from '@/modules/database/database.service';
 import { compareIds } from '@/modules/streams/streams.structure';
 import type { Stream } from '@/modules/streams/streams.structure';
-import type { ZSet } from '@/modules/zsets/zsets.structure';
 import type { RedisValue } from '@/modules/database/database.types';
+import type { ListDeque } from '@/modules/lists/lists.deque.structure';
 import type { PendingEntry, StreamEntry, StreamId } from '@/modules/streams/streams.types';
 
 import PersistenceBytesCodec, { RdbWriter } from './persistence.bytes.codec';
 import { QUICKLIST_CONTAINER, RDB_TYPE } from './persistence.enums';
 import PersistenceListpackCodec from './persistence.listpack.codec';
-import PersistenceModuleTypeCodec from './persistence.module_type.codec';
 import PersistenceRdbIoCodec from './persistence.rdb_io.codec';
-import type { EncodedObject, FieldExpires, ListpackEntry, RdbOptions } from './persistence.types';
-
-/** A quicklist node as the RDB writer lays it out. */
-type QuicklistNode = { plain: true; value: string } | { plain: false; items: string[]; bytes: number };
+import type { EncodedObject, ListpackEntry, RdbOptions } from './persistence.types';
 
 /** A stream listpack node being filled by splitStream. */
 interface StreamNode {
@@ -24,104 +21,33 @@ interface StreamNode {
 }
 
 /**
- * Object encoding: the RDB body of a value and the RDB type Redis would pick for it (listpack / intset / quicklist /
- * hash-with-TTL / stream layouts follow the encoding thresholds in RdbOptions).
+ * Object encoding: the RDB body of a value and the RDB type Redis 7.0 writes for it (RDB version 10): the value's own
+ * encoding when known (intset / hashtable sets, listpack / hashtable hashes, listpack / skiplist sorted sets), else
+ * the encoding thresholds in RdbOptions; lists as their quicklist nodes; streams as type 19.
  */
 export default class PersistenceObjectEncoderCodec {
-  // ──────────────────────────────────────────────
-  // Constants
-  // ──────────────────────────────────────────────
-
-  /** isLargeElement / quicklistNodeExceedsLimit for list-max-listpack-size `fill`. */
-  private static readonly QL_OPT_LEVEL = [4096, 8192, 16384, 32768, 65536];
-  private static readonly QL_SIZE_SAFETY_LIMIT = 8192;
-  private static readonly QL_SIZE_ESTIMATE_OVERHEAD = 8;
-
-  // ──────────────────────────────────────────────
-  // Private Helpers: lists
-  // ──────────────────────────────────────────────
-
-  private static qlSizeLimit(fill: number): number {
-    const levels = PersistenceObjectEncoderCodec.QL_OPT_LEVEL;
-    return levels[Math.min(-fill - 1, levels.length - 1)];
-  }
-
-  private static qlExceedsLimit(fill: number, newSz: number, newCount: number): boolean {
-    const E = PersistenceObjectEncoderCodec;
-    if (fill < 0) return newSz > E.qlSizeLimit(fill);
-    if (newSz > E.QL_SIZE_SAFETY_LIMIT) return true;
-    return newCount > (fill === 0 ? 1 : fill);
-  }
-
-  private static qlIsLargeElement(fill: number, sz: number): boolean {
-    const E = PersistenceObjectEncoderCodec;
-    return fill < 0 ? sz > E.qlSizeLimit(fill) : sz > E.QL_SIZE_SAFETY_LIMIT;
-  }
-
-  /**
-   * Splits a list into quicklist nodes the way Redis does for a list built by RPUSHing one element
-   * at a time: listpack encoding until it would exceed the limit, then the listpack becomes the
-   * first quicklist node and further elements go to the tail node or a new node.
-   */
-  private static splitQuicklist(list: Iterable<string>, fill: number): QuicklistNode[] {
-    const E = PersistenceObjectEncoderCodec;
-    const lpEntryBytes = PersistenceListpackCodec.entryBytes;
-    const LP_HDR_SIZE = PersistenceListpackCodec.LP_HDR_SIZE;
-    const nodes: QuicklistNode[] = [];
-    let quick = false;
-    let tail: { plain: false; items: string[]; bytes: number } = { plain: false, items: [], bytes: LP_HDR_SIZE + 1 };
-    for (const el of list) {
-      const sz = el.length;
-      if (!quick) {
-        if (!E.qlExceedsLimit(fill, tail.bytes + sz, tail.items.length + 1)) {
-          tail.items.push(el);
-          tail.bytes += lpEntryBytes(el);
-          continue;
-        }
-        quick = true;
-        if (tail.items.length) nodes.push(tail);
-      }
-      const last = nodes[nodes.length - 1];
-      if (E.qlIsLargeElement(fill, sz)) {
-        nodes.push({ plain: true, value: el });
-        continue;
-      }
-      if (last && !last.plain && !E.qlExceedsLimit(fill, last.bytes + sz + E.QL_SIZE_ESTIMATE_OVERHEAD, last.items.length + 1)) {
-        last.items.push(el);
-        last.bytes += lpEntryBytes(el);
-      } else {
-        tail = { plain: false, items: [el], bytes: LP_HDR_SIZE + 1 + lpEntryBytes(el) };
-        nodes.push(tail);
-      }
-    }
-    if (!quick && tail.items.length) nodes.push(tail);
-    return nodes;
-  }
-
   // ──────────────────────────────────────────────
   // Private Helpers: per-type bodies
   // ──────────────────────────────────────────────
 
-  private static encodeList(w: RdbWriter, list: Iterable<string>, o: RdbOptions): number {
+  /** A list as its quicklist nodes, each a listpack (Redis 7.0 only writes plain nodes past a 1 GB element). */
+  private static encodeList(w: RdbWriter, list: ListDeque, o: RdbOptions): number {
     const io = PersistenceRdbIoCodec;
-    const nodes = PersistenceObjectEncoderCodec.splitQuicklist(list, o.listMaxListpackSize);
+    const nodes = list.nodeItems();
     io.writeLen(w, nodes.length);
-    for (const n of nodes) {
-      if (n.plain) {
-        io.writeLen(w, QUICKLIST_CONTAINER.PLAIN);
-        io.writeStr(w, n.value, o.rdbCompression);
-      } else {
-        io.writeLen(w, QUICKLIST_CONTAINER.PACKED);
-        io.writeString(w, PersistenceListpackCodec.listpackEncode(n.items), o.rdbCompression);
-      }
+    for (const items of nodes) {
+      io.writeLen(w, QUICKLIST_CONTAINER.PACKED);
+      io.writeString(w, PersistenceListpackCodec.listpackEncode(items), o.rdbCompression);
     }
     return RDB_TYPE.LIST_QUICKLIST_2;
   }
 
-  private static encodeSet(w: RdbWriter, set: ReadonlySet<string>, o: RdbOptions): number {
+  /** A set as an intset or a hash table (7.0 has no listpack sets), in the encoding the set already has. */
+  private static encodeSet(w: RdbWriter, value: RedisValue & { type: 'set' }, o: RdbOptions): number {
     const io = PersistenceRdbIoCodec;
-    const members = [...set];
-    if (members.length <= o.setMaxIntsetEntries) {
+    const members = [...value.value];
+    const known = DatabaseService.knownEncoding(value);
+    if (known !== 'hashtable' && (known === 'intset' || members.length <= o.setMaxIntsetEntries)) {
       const ints: bigint[] = [];
       for (const m of members) {
         const v = PersistenceBytesCodec.stringToInt64(m);
@@ -133,18 +59,17 @@ export default class PersistenceObjectEncoderCodec {
         return RDB_TYPE.SET_INTSET;
       }
     }
-    if (members.length <= o.setMaxListpackEntries && members.every((m) => m.length <= o.setMaxListpackValue)) {
-      io.writeString(w, PersistenceListpackCodec.listpackEncode(members), o.rdbCompression);
-      return RDB_TYPE.SET_LISTPACK;
-    }
     io.writeLen(w, members.length);
     for (const m of members) io.writeStr(w, m, o.rdbCompression);
     return RDB_TYPE.SET;
   }
 
-  private static encodeZset(w: RdbWriter, z: ZSet, o: RdbOptions): number {
+  private static encodeZset(w: RdbWriter, value: RedisValue & { type: 'zset' }, o: RdbOptions): number {
     const io = PersistenceRdbIoCodec;
-    if (z.size <= o.zsetMaxListpackEntries && z.entries.every((e) => e.member.length <= o.zsetMaxListpackValue)) {
+    const z = value.value;
+    const known = DatabaseService.knownEncoding(value);
+    const compact = known !== undefined ? known === 'listpack' : z.size <= o.zsetMaxListpackEntries && z.entries.every((e) => e.member.length <= o.zsetMaxListpackValue);
+    if (compact) {
       const items: ListpackEntry[] = [];
       for (const e of z.entries) items.push(e.member, io.scoreEntry(e.score));
       io.writeString(w, PersistenceListpackCodec.listpackEncode(items), o.rdbCompression);
@@ -158,12 +83,12 @@ export default class PersistenceObjectEncoderCodec {
     return RDB_TYPE.ZSET_2;
   }
 
-  private static encodeHash(w: RdbWriter, h: ReadonlyMap<string, string>, o: RdbOptions, fieldExpires?: FieldExpires): number {
+  private static encodeHash(w: RdbWriter, value: RedisValue & { type: 'hash' }, o: RdbOptions): number {
     const io = PersistenceRdbIoCodec;
-    const ttls = new Map<string, number>();
-    if (fieldExpires) for (const [f, at] of fieldExpires) if (h.has(f)) ttls.set(f, at);
-    let small = h.size <= o.hashMaxListpackEntries;
-    if (small) {
+    const h = value.value;
+    const known = DatabaseService.knownEncoding(value);
+    let small = known !== undefined ? known === 'listpack' : h.size <= o.hashMaxListpackEntries;
+    if (small && known === undefined) {
       for (const [f, v] of h) {
         if (f.length > o.hashMaxListpackValue || v.length > o.hashMaxListpackValue) {
           small = false;
@@ -171,39 +96,18 @@ export default class PersistenceObjectEncoderCodec {
         }
       }
     }
-    if (ttls.size === 0) {
-      if (small) {
-        const items: string[] = [];
-        for (const [f, v] of h) items.push(f, v);
-        io.writeString(w, PersistenceListpackCodec.listpackEncode(items), o.rdbCompression);
-        return RDB_TYPE.HASH_LISTPACK;
-      }
-      io.writeLen(w, h.size);
-      for (const [f, v] of h) {
-        io.writeStr(w, f, o.rdbCompression);
-        io.writeStr(w, v, o.rdbCompression);
-      }
-      return RDB_TYPE.HASH;
-    }
-    const minExpire = Math.min(...ttls.values());
-    w.u64le(BigInt(minExpire));
     if (small) {
-      // listpackEx: (field, value, ttl) triplets ordered by TTL; fields without TTL (0) at the tail.
-      const withTtl = [...ttls.entries()].sort((a, b) => a[1] - b[1]);
-      const items: ListpackEntry[] = [];
-      for (const [f, at] of withTtl) items.push(f, h.get(f)!, BigInt(at));
-      for (const [f, v] of h) if (!ttls.has(f)) items.push(f, v, 0n);
+      const items: string[] = [];
+      for (const [f, v] of h) items.push(f, v);
       io.writeString(w, PersistenceListpackCodec.listpackEncode(items), o.rdbCompression);
-      return RDB_TYPE.HASH_LISTPACK_EX;
+      return RDB_TYPE.HASH_LISTPACK;
     }
     io.writeLen(w, h.size);
     for (const [f, v] of h) {
-      const at = ttls.get(f);
-      io.writeLen(w, at === undefined ? 0n : BigInt(at) - BigInt(minExpire) + 1n);
       io.writeStr(w, f, o.rdbCompression);
       io.writeStr(w, v, o.rdbCompression);
     }
-    return RDB_TYPE.HASH_METADATA;
+    return RDB_TYPE.HASH;
   }
 
   // ──────────────────────────────────────────────
@@ -302,16 +206,15 @@ export default class PersistenceObjectEncoderCodec {
       for (const c of consumers) {
         io.writeStr(w, c.name, o.rdbCompression);
         w.u64le(BigInt(c.seenTime));
-        w.u64le(BigInt(c.activeTime));
         const cpel = E.sortedPending(c.pending);
         io.writeLen(w, cpel.length);
         for (const p of cpel) w.bytes(E.encodeStreamId(p.id));
       }
     }
-    return RDB_TYPE.STREAM_LISTPACKS_3;
+    return RDB_TYPE.STREAM_LISTPACKS_2;
   }
 
-  private static writeObject(w: RdbWriter, value: RedisValue, o: RdbOptions, fieldExpires?: FieldExpires): number {
+  private static writeObject(w: RdbWriter, value: RedisValue, o: RdbOptions): number {
     const E = PersistenceObjectEncoderCodec;
     switch (value.type) {
       case 'string':
@@ -320,16 +223,13 @@ export default class PersistenceObjectEncoderCodec {
       case 'list':
         return E.encodeList(w, value.value, o);
       case 'set':
-        return E.encodeSet(w, value.value, o);
+        return E.encodeSet(w, value, o);
       case 'zset':
-        return E.encodeZset(w, value.value, o);
+        return E.encodeZset(w, value, o);
       case 'hash':
-        return E.encodeHash(w, value.value, o, fieldExpires);
+        return E.encodeHash(w, value, o);
       case 'stream':
         return E.encodeStream(w, value.value, o);
-      case 'timeseries':
-        PersistenceModuleTypeCodec.encodeTimeseries(w, value.value);
-        return RDB_TYPE.MODULE_2;
     }
   }
 
@@ -346,9 +246,9 @@ export default class PersistenceObjectEncoderCodec {
   }
 
   /** Serializes a value's object body (no type byte) and returns the RDB type Redis would pick. */
-  static encodeObject(value: RedisValue, opts?: Partial<RdbOptions>, fieldExpires?: FieldExpires): EncodedObject {
+  static encodeObject(value: RedisValue, opts?: Partial<RdbOptions>): EncodedObject {
     const w = new RdbWriter();
-    const type = PersistenceObjectEncoderCodec.writeObject(w, value, PersistenceRdbIoCodec.resolveOptions(opts), fieldExpires);
+    const type = PersistenceObjectEncoderCodec.writeObject(w, value, PersistenceRdbIoCodec.resolveOptions(opts));
     return { type, body: w.toBuffer() };
   }
 }

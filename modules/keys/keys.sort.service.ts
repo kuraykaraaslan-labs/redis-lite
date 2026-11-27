@@ -89,6 +89,7 @@ export default class KeysSortService {
       : elements;
     if (store !== null) {
       const values = out.map((x) => x ?? '');
+      // Redis 7.0 builds the stored list with the default node fill (-2) and no compression, whatever the config says
       if (values.length) ctx.db.set(store, { type: 'list', value: ListDeque.from(values) });
       else ctx.db.remove(store);
       ctx.server.touch(ctx.client.dbIndex, store);

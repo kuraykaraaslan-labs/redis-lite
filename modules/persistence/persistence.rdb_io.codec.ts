@@ -1,3 +1,5 @@
+import { formatFloat } from '@/libs/number';
+
 import PersistenceBytesCodec from './persistence.bytes.codec';
 import type { RdbReader, RdbWriter } from './persistence.bytes.codec';
 import type { ListpackEntry, RdbOptions } from './persistence.types';
@@ -15,8 +17,6 @@ export default class PersistenceRdbIoCodec {
     hashMaxListpackEntries: 128,
     hashMaxListpackValue: 64,
     setMaxIntsetEntries: 512,
-    setMaxListpackEntries: 128,
-    setMaxListpackValue: 64,
     zsetMaxListpackEntries: 128,
     zsetMaxListpackValue: 64,
     listMaxListpackSize: -2,
@@ -25,9 +25,6 @@ export default class PersistenceRdbIoCodec {
     rdbCompression: true,
     rdbChecksum: true,
   });
-
-  /** (double)(LLONG_MAX / 2): the range in which double2ll accepts a score. */
-  private static readonly DOUBLE2LL_LIMIT = 4611686018427387904;
 
   // ──────────────────────────────────────────────
   // Private Helpers
@@ -63,42 +60,6 @@ export default class PersistenceRdbIoCodec {
     }
     if (b === 0x81) return { len: r.bytes(8).readBigUInt64BE(0), encoded: false };
     throw PersistenceBytesCodec.badFormat();
-  }
-
-  /** fpconv_dtoa: shortest round-trip digits with Redis's notation rules (used by d2string). */
-  private static fpconvDtoa(value: number): string {
-    const neg = value < 0;
-    const [mant, expStr] = Math.abs(value).toExponential().split('e');
-    let digits = mant.replace('.', '');
-    const E = Number(expStr);
-    let ndigits = digits.length;
-    const K = E - (ndigits - 1);
-    let exp = Math.abs(K + ndigits - 1);
-    let out = neg ? '-' : '';
-    if (K >= 0 && exp < ndigits + 7) return out + digits + '0'.repeat(K);
-    if (K < 0 && (K > -7 || exp < 4)) {
-      const offset = ndigits - Math.abs(K);
-      if (offset <= 0) return `${out}0.${'0'.repeat(-offset)}${digits}`;
-      return `${out}${digits.slice(0, offset)}.${digits.slice(offset)}`;
-    }
-    ndigits = Math.min(ndigits, 18 - (neg ? 1 : 0));
-    digits = digits.slice(0, ndigits);
-    out += digits[0];
-    if (ndigits > 1) out += `.${digits.slice(1)}`;
-    out += 'e';
-    out += K + ndigits - 1 < 0 ? '-' : '+';
-    let cent = 0;
-    if (exp > 99) {
-      cent = Math.floor(exp / 100);
-      out += String(cent);
-      exp -= cent * 100;
-    }
-    if (exp > 9) {
-      const dec = Math.floor(exp / 10);
-      out += String(dec);
-      exp -= dec * 10;
-    } else if (cent) out += '0';
-    return out + String(exp % 10);
   }
 
   // ──────────────────────────────────────────────
@@ -226,15 +187,9 @@ export default class PersistenceRdbIoCodec {
     return v;
   }
 
-  /** Listpack element for a zset score: integer when double2ll succeeds, else d2string text. */
+  /** Listpack element for a zset score (Redis 7.0): an integer within ±2^62, else its `%.17g` text. */
   static scoreEntry(score: number): ListpackEntry {
-    const limit = PersistenceRdbIoCodec.DOUBLE2LL_LIMIT;
-    if (Number.isFinite(score) && score >= -limit && score <= limit && Number.isInteger(score)) {
-      return BigInt(score);
-    }
-    if (Number.isNaN(score)) return 'nan';
-    if (score === Infinity) return 'inf';
-    if (score === -Infinity) return '-inf';
-    return PersistenceRdbIoCodec.fpconvDtoa(score);
+    const text = formatFloat(score);
+    return Number.isInteger(score) && /^-?\d+$/.test(text) ? BigInt(text) : text;
   }
 }

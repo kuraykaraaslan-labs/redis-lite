@@ -1,4 +1,6 @@
 import { differential, s } from './differential.harness';
+import { pttlSeconds } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 const FAR = '4102444800'; // 2100-01-01, seconds
 const FAR_MS = '4102444800000';
@@ -45,4 +47,9 @@ differential('keys expire', [
   s('PEXPIRE then expiry of a list', ['RPUSH l a b', 'PEXPIRE l 50', { sleep: 200 }, 'LLEN l', 'TYPE l', 'DBSIZE']),
   s('expired key behaves as missing for writes', ['SET k 5 PX 50', { sleep: 200 }, 'INCR k', 'TTL k', 'SET n v PX 50', { sleep: 200 }, 'SET n w NX', 'GET n']),
   s('GETEX and expiry in the same flow', ['SET k v', 'GETEX k PX 50', { sleep: 200 }, 'GETEX k', 'EXISTS k']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('EXPIRE family', ['SET k v', 'EXPIRE k $N', 'TTL k', 'PEXPIRE k $N', 'TTL k', 'EXPIREAT k $N', 'TTL k', 'SET k v', 'PEXPIREAT k $N', 'EXISTS k']),
+  ...intProbes('EXPIRE on a missing key', ['EXPIRE nokey $N', 'PEXPIRE nokey $N', 'EXPIREAT nokey $N', 'PEXPIREAT nokey $N']),
+  ...intProbes('EXPIRE then TTL', ['SET k v', 'EXPIRE k $N', 'TTL k', { cmd: 'PTTL k', norm: pttlSeconds }, 'PEXPIRE k $N', 'TTL k', { cmd: 'PTTL k', norm: pttlSeconds }]),
 ]);

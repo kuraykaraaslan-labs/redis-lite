@@ -1,4 +1,4 @@
-import { arch, release, totalmem, type as osType } from 'node:os';
+import { machine, release, totalmem, type as osType } from 'node:os';
 
 import { RespVerbatim } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
@@ -22,7 +22,6 @@ export default class ServerInfoService {
     ['clients', 'Clients', true],
     ['memory', 'Memory', true],
     ['persistence', 'Persistence', true],
-    ['threads', 'Threads', true],
     ['stats', 'Stats', true],
     ['replication', 'Replication', true],
     ['cpu', 'CPU', true],
@@ -53,7 +52,7 @@ export default class ServerInfoService {
           'redis_git_dirty:0',
           'redis_build_id:0',
           'redis_mode:standalone',
-          `os:${osType()} ${release()} ${arch()}`,
+          `os:${osType()} ${release()} ${machine()}`,
           'arch_bits:64',
           'monotonic_clock:POSIX clock_gettime',
           'multiplexing_api:epoll',
@@ -72,11 +71,8 @@ export default class ServerInfoService {
           `executable:${process.argv[1] ?? ''}`,
           `config_file:${s.options.configFile ?? ''}`,
           'io_threads_active:0',
-          `listener0:name=tcp,bind=${s.options.host},port=${s.options.port}`,
         ];
-      case 'clients': {
-        const watchedKeys = clients.reduce((n, c) => n + c.watched.size, 0);
-        const blockingKeys = new Set(clients.flatMap((c) => c.blocked?.dbKeys ?? [])).size;
+      case 'clients':
         return [
           // replicas are not counted (they are listed in the replication section)
           `connected_clients:${clients.filter((c) => !c.replica?.attached).length}`,
@@ -86,14 +82,8 @@ export default class ServerInfoService {
           'client_recent_max_output_buffer:0',
           `blocked_clients:${clients.filter((c) => c.blocked).length}`,
           `tracking_clients:${clients.filter((c) => c.tracking).length}`,
-          `pubsub_clients:${clients.filter((c) => c.subscriptionCount > 0).length}`,
-          `watching_clients:${clients.filter((c) => c.watched.size > 0).length}`,
           `clients_in_timeout_table:${clients.filter((c) => c.blocked?.timer).length}`,
-          `total_watched_keys:${watchedKeys}`,
-          `total_blocking_keys:${blockingKeys}`,
-          'total_blocking_keys_on_nokey:0',
         ];
-      }
       case 'memory': {
         const report = s.memoryReport();
         return MemoryService.infoMemory(report, {
@@ -106,8 +96,6 @@ export default class ServerInfoService {
       }
       case 'persistence':
         return s.persistence.info();
-      case 'threads':
-        return [`io_thread_0:clients=${clients.length},reads=0,writes=0`];
       case 'stats': {
         const netIn = s.stats.netIn + clients.reduce((n, c) => n + c.netIn, 0);
         const netOut = s.stats.netOut + clients.reduce((n, c) => n + c.netOut, 0);
@@ -135,7 +123,6 @@ export default class ServerInfoService {
           'expire_cycle_cpu_milliseconds:0',
           `evicted_keys:${s.evictor.evictedKeys}`,
           'evicted_clients:0',
-          'evicted_scripts:0',
           `total_eviction_exceeded_time:${exceeded.total}`,
           `current_eviction_exceeded_time:${exceeded.current}`,
           `keyspace_hits:${s.stats.keyspaceHits}`,
@@ -163,14 +150,8 @@ export default class ServerInfoService {
           'total_writes_processed:0',
           'io_threaded_reads_processed:0',
           'io_threaded_writes_processed:0',
-          'client_query_buffer_limit_disconnections:0',
-          'client_output_buffer_limit_disconnections:0',
           'reply_buffer_shrinks:0',
           'reply_buffer_expands:0',
-          `acl_access_denied_auth:${s.aclStats.auth}`,
-          `acl_access_denied_cmd:${s.aclStats.command}`,
-          `acl_access_denied_key:${s.aclStats.key}`,
-          `acl_access_denied_channel:${s.aclStats.channel}`,
         ];
       }
       case 'replication':
@@ -226,7 +207,7 @@ export default class ServerInfoService {
             expires++;
             ttlSum += Math.max(0, at - now);
           }
-          return [`db${i}:keys=${keys.length},expires=${expires},avg_ttl=${expires ? Math.floor(ttlSum / expires) : 0},subexpiry=0`];
+          return [`db${i}:keys=${keys.length},expires=${expires},avg_ttl=${expires ? Math.floor(ttlSum / expires) : 0}`];
         });
       default:
         return [];

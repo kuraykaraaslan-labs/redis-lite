@@ -29,9 +29,15 @@ export default class ListStore {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** A new, empty list value. */
-  static create(): ListValue {
-    return new ListDeque();
+  /** A new, empty list value with the server's list-max-listpack-size and list-compress-depth (each list keeps its own). */
+  static create(ctx: CommandContext): ListValue {
+    const c = ctx.server.config;
+    return new ListDeque(undefined, c.num('list-max-listpack-size'), c.num('list-compress-depth'));
+  }
+
+  /** A factory of new lists for `ctx.db.getOrCreate`. */
+  static creator(ctx: CommandContext): () => ListValue {
+    return () => ListStore.create(ctx);
   }
 
   /** The list at `key`; undefined when missing; WRONGTYPE otherwise. */
@@ -71,29 +77,12 @@ export default class ListStore {
 
   /** Overwrites the element at `index` (0 ≤ index < length) in place. */
   static setAt(list: ListValue, index: number, value: string): void {
-    list.splice(index, 1, value);
+    list.set(index, value);
   }
 
-  /**
-   * Removes the elements at the ascending positions `drop` in one pass: the survivors after the first dropped position
-   * move down in place, then the tail is cut (O(length), however many positions are dropped).
-   */
+  /** Removes the elements at the ascending positions `drop` in one pass (O(length), however many are dropped). */
   static removeAt(list: ListValue, drop: readonly number[]): void {
-    if (!drop.length) return;
-    if (drop.length === 1) {
-      list.splice(drop[0], 1);
-      return;
-    }
-    let write = drop[0];
-    let next = 0;
-    for (let read = drop[0]; read < list.length; read++) {
-      if (next < drop.length && drop[next] === read) {
-        next++;
-        continue;
-      }
-      ListStore.setAt(list, write++, list.at(read) as string);
-    }
-    list.splice(write);
+    list.removeIndices(drop);
   }
 
   /** Pops up to `count` elements from the list at `key` (undefined when missing); the key goes with its last element. */
@@ -113,7 +102,7 @@ export default class ListStore {
     if (!d && ctx.db.lookup(destination)) throw new AppError(RespMessages.WRONGTYPE);
     const value = (from === 'left' ? s.shift() : s.pop()) as string;
     ctx.db.removeIfEmpty(source);
-    const target = ctx.db.getOrCreate(destination, 'list', ListStore.create);
+    const target = ctx.db.getOrCreate(destination, 'list', ListStore.creator(ctx));
     if (to === 'left') target.unshift(value);
     else target.push(value);
     ctx.server.touch(ctx.client.dbIndex, source);

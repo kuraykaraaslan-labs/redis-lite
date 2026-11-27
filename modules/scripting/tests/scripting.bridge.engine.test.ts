@@ -45,14 +45,14 @@ describe('redis.call vs redis.pcall errors', () => {
 
   it('unknown command from a script', async () => {
     const msg = await errorOf(evalLua("return redis.call('nosuchcommand')"));
-    // Redis 7+ uses the regular command lookup error inside scripts
-    expect(msg).toMatch(/^ERR unknown command 'nosuchcommand', with args beginning with:/);
+    // Redis 7.0 has its own text inside scripts
+    expect(msg).toMatch(/^ERR Unknown Redis command called from script/);
   });
 
   it('wrong arity from a script', async () => {
     const msg = await errorOf(evalLua("return redis.call('GET')"));
-    // Redis 7+ uses the regular arity error inside scripts
-    expect(msg).toMatch(/^ERR wrong number of arguments for 'get' command/);
+    // Redis 7.0 has its own text inside scripts
+    expect(msg).toMatch(/^ERR Wrong number of args calling Redis command from script/);
   });
 
   it('redis.call with no arguments', async () => {

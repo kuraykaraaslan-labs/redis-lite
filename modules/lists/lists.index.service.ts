@@ -52,8 +52,10 @@ export default class ListsIndexService {
     if (!l) return count === null ? null : [];
     const list = l;
     const matches: number[] = [];
-    const want = count === null ? 1 : count === 0 ? Infinity : count;
-    let skip = Math.abs(rank) - 1;
+    // RANK -2^63 (-Infinity here): from the tail, nothing skipped and no COUNT limit, as Redis 7.0 does
+    const unbounded = rank === -Infinity;
+    const want = count === null ? 1 : count === 0 || unbounded ? Infinity : count;
+    let skip = unbounded ? 0 : Math.abs(rank) - 1;
     const forward = rank > 0;
     for (let step = 0; step < list.length && (maxLen === 0 || step < maxLen) && matches.length < want; step++) {
       const i = forward ? step : list.length - 1 - step;
@@ -109,7 +111,7 @@ export default class ListsIndexService {
     if (!l) return 0;
     const i = l.indexOf(pivot);
     if (i < 0) return -1;
-    l.splice(position === 'before' ? i : i + 1, 0, element);
+    l.insertAt(i, position === 'before', element);
     return l.length;
   }
 }

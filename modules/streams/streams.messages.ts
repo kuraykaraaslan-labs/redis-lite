@@ -32,8 +32,10 @@ export const StreamsMessages = {
   GROUP_XREADGROUP_ONLY: 'ERR The GROUP option is only supported by XREADGROUP. You called XREAD instead.',
   NOACK_XREADGROUP_ONLY: 'ERR The NOACK option is only supported by XREADGROUP. You called XREAD instead.',
   MISSING_GROUP: 'ERR Missing GROUP option for XREADGROUP',
-  UNBALANCED_XREAD: "ERR Unbalanced 'xread' list of streams: for each stream key an ID or '$' must be specified.",
-  UNBALANCED_XREADGROUP: "ERR Unbalanced 'xreadgroup' list of streams: for each stream key an ID or '>' must be specified.",
+  /** XREAD and XREADGROUP alike (Redis 7.0). */
+  UNBALANCED_XREAD: "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
+  XREAD_BLOCK_IN_SCRIPT: 'ERR XREAD command is not allowed with BLOCK option from scripts',
+  XREADGROUP_BLOCK_IN_SCRIPT: 'ERR XREADGROUP command is not allowed with BLOCK option from scripts',
   XREAD_NEW_ID: 'ERR The > ID can be specified only when calling XREADGROUP using the GROUP <group> <consumer> option.',
   XREADGROUP_DOLLAR:
     'ERR The $ ID is meaningless in the context of XREADGROUP: you want to read the history of this consumer by specifying a proper ID, or use the > ID to get new messages. The $ ID would just return an empty result set.',
@@ -58,6 +60,7 @@ export const StreamsMessages = {
   XCLAIM_UNKNOWN_OPTION: "ERR Unrecognized XCLAIM option '{option}'",
   XAUTOCLAIM_MIN_IDLE_INVALID: 'ERR Invalid min-idle-time argument for XAUTOCLAIM',
   COUNT_NOT_POSITIVE: 'ERR COUNT must be > 0',
+  AUTOCLAIM_COUNT_TOO_HIGH: 'ERR Insufficient memory, failed allocating transient memory, COUNT too high.',
 
   // ============================================================================
   // XINFO / XSETID
@@ -67,40 +70,6 @@ export const StreamsMessages = {
   XSETID_BELOW_MAX_DELETED_ARG: 'ERR The ID specified in XSETID is smaller than the provided max_deleted_entry_id',
   XSETID_BELOW_TOP_ITEM: 'ERR The ID specified in XSETID is smaller than the target stream top item',
   XSETID_ENTRIES_ADDED_SMALL: 'ERR The entries_added specified in XSETID is smaller than the target stream length',
-
-  // ============================================================================
-  // Help replies
-  // ============================================================================
-  XGROUP_HELP: [
-    'XGROUP <subcommand> [<arg> [value] [opt] ...]. Subcommands are:',
-    'CREATE <key> <groupname> <id|$> [option]',
-    '    Create a new consumer group. Options are:',
-    '    * MKSTREAM',
-    '      Create the empty stream if it does not exist.',
-    '    * ENTRIESREAD entries_read',
-    "      Set the group's entries_read counter (internal use).",
-    'CREATECONSUMER <key> <groupname> <consumer>',
-    '    Create a new consumer in the specified group.',
-    'DELCONSUMER <key> <groupname> <consumer>',
-    '    Remove the specified consumer.',
-    'DESTROY <key> <groupname>',
-    '    Remove the specified group.',
-    'SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]',
-    '    Set the current group ID and entries_read counter.',
-    'HELP',
-    '    Print this help.',
-  ],
-  XINFO_HELP: [
-    'XINFO <subcommand> [<arg> [value] [opt] ...]. Subcommands are:',
-    'CONSUMERS <key> <groupname>',
-    '    Show consumers of <groupname>.',
-    'GROUPS <key>',
-    '    Show the stream consumer groups.',
-    'STREAM <key> [FULL [COUNT <count>]',
-    '    Show information about the stream.',
-    'HELP',
-    '    Print this help.',
-  ],
 } as const;
 
 export default StreamsMessages;

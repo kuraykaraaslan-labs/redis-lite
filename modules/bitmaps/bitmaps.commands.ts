@@ -35,9 +35,10 @@ export const bitmapCommands: CommandSpec[] = [
   {
     name: 'bitcount',
     arity: -2,
-    // read first: WRONGTYPE beats a bad range
+    // read first: WRONGTYPE beats a bad range, and a missing key answers 0 without parsing the range
     handler: (ctx, args) => {
-      const bytes = BitmapsService.read(ctx, args[0]);
+      const bytes = BitmapsService.readExisting(ctx, args[0]);
+      if (bytes === null) return 0;
       return validated(BitCountDTO, args, (input) => BitmapsService.bitCount(bytes, input));
     },
   },

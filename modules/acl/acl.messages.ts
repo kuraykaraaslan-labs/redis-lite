@@ -32,13 +32,17 @@ export const AclMessages = {
   RULE_ECHILD: 'Allowing first-arg of a subcommand is not supported',
 
   // ============================================================================
-  // Denials (getAclErrorMessage); the _VERBOSE forms are ACL DRYRUN's
+  // Denials: NOPERM texts; the _VERBOSE forms are ACL DRYRUN's, the _SCRIPT forms a script's redis.call()
   // ============================================================================
-  DENIED_COMMAND: "User {username} has no permissions to run the '{object}' command",
-  DENIED_KEY: 'No permissions to access a key',
-  DENIED_KEY_VERBOSE: "No permissions to access the '{object}' key",
-  DENIED_CHANNEL: 'No permissions to access a channel',
-  DENIED_CHANNEL_VERBOSE: "No permissions to access the '{object}' channel",
+  DENIED_COMMAND: "this user has no permissions to run the '{object}' command",
+  DENIED_COMMAND_VERBOSE: "This user has no permissions to run the '{object}' command",
+  DENIED_COMMAND_SCRIPT: "The user executing the script can't run this command or subcommand",
+  DENIED_KEY: 'this user has no permissions to access one of the keys used as arguments',
+  DENIED_KEY_VERBOSE: "This user has no permissions to access the '{object}' key",
+  DENIED_KEY_SCRIPT: "The user executing the script can't access at least one of the keys mentioned in the command arguments",
+  DENIED_CHANNEL: 'this user has no permissions to access one of the channels used as arguments',
+  DENIED_CHANNEL_VERBOSE: "This user has no permissions to access the '{object}' channel",
+  DENIED_CHANNEL_SCRIPT: "The user executing the script can't publish to the channel mentioned in the command",
   NOPERM: 'NOPERM {message}',
 
   // ============================================================================

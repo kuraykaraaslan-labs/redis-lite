@@ -18,7 +18,7 @@ describe('RDB', () => {
     expect(a.p.saveCommand()).toBe(OK);
     expect(a.p.dirty).toBe(0);
     expect(existsSync(join(dir, 'dump.rdb'))).toBe(true);
-    expect(readFileSync(join(dir, 'dump.rdb')).toString('latin1', 0, 9)).toBe('REDIS0012');
+    expect(readFileSync(join(dir, 'dump.rdb')).toString('latin1', 0, 9)).toBe('REDIS0010');
     expect(readdirSync(dir).filter((f) => f.startsWith('temp-'))).toEqual([]);
 
     const b = await harness(dir);

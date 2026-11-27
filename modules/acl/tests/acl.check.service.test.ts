@@ -71,14 +71,21 @@ describe('permission checks', () => {
   });
 
   it('error texts', () => {
-    expect(AclService.noPermError({ reason: 'command', object: 'config|get' }, 'alice')).toBe(
-      "NOPERM User alice has no permissions to run the 'config|get' command",
+    expect(AclService.noPermError({ reason: 'command', object: 'config|get' })).toBe(
+      "NOPERM this user has no permissions to run the 'config|get' command",
     );
-    expect(AclService.noPermError({ reason: 'key', object: 'k' }, 'alice')).toBe('NOPERM No permissions to access a key');
-    expect(AclService.noPermError({ reason: 'channel', object: 'c' }, 'alice')).toBe('NOPERM No permissions to access a channel');
-    expect(AclService.denialMessage({ reason: 'key', object: 'k' }, 'alice', true)).toBe("No permissions to access the 'k' key");
-    expect(AclService.denialMessage({ reason: 'channel', object: 'c' }, 'alice', true)).toBe(
-      "No permissions to access the 'c' channel",
+    expect(AclService.noPermError({ reason: 'key', object: 'k' })).toBe(
+      'NOPERM this user has no permissions to access one of the keys used as arguments',
+    );
+    expect(AclService.noPermError({ reason: 'channel', object: 'c' })).toBe(
+      'NOPERM this user has no permissions to access one of the channels used as arguments',
+    );
+    expect(AclService.denialMessage({ reason: 'key', object: 'k' }, 'verbose')).toBe("This user has no permissions to access the 'k' key");
+    expect(AclService.denialMessage({ reason: 'channel', object: 'c' }, 'verbose')).toBe(
+      "This user has no permissions to access the 'c' channel",
+    );
+    expect(AclService.denialMessage({ reason: 'command', object: 'del' }, 'script')).toBe(
+      "The user executing the script can't run this command or subcommand",
     );
   });
 
@@ -86,8 +93,8 @@ describe('permission checks', () => {
     const acl = makeAcl();
     acl.setUser('u', ['+get', '~a']);
     expect(acl.dryRun('u', 'get', null, ['a'], [r('a')])).toBeNull();
-    expect(acl.dryRun('u', 'get', null, ['b'], [r('b')])).toBe("No permissions to access the 'b' key");
-    expect(acl.dryRun('u', 'set', null, ['a', 'v'], [w('a')])).toBe("User u has no permissions to run the 'set' command");
+    expect(acl.dryRun('u', 'get', null, ['b'], [r('b')])).toBe("This user has no permissions to access the 'b' key");
+    expect(acl.dryRun('u', 'set', null, ['a', 'v'], [w('a')])).toBe("This user has no permissions to run the 'set' command");
     expect(errorOf(() => acl.dryRun('nobody', 'get', null, []))).toBe("ERR User 'nobody' not found");
   });
 });

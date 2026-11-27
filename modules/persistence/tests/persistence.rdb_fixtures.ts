@@ -78,7 +78,7 @@ export function makeStream(n: number, withGroups: boolean): Stream {
   s.maxDeletedId = { ms: 5n, seq: 1n };
   if (withGroups && n > 2) {
     const g: ConsumerGroup = { name: 'g1', lastId: s.entries[2].id, entriesRead: 3, pending: new Map(), consumers: new Map() };
-    const alice = { name: 'alice', seenTime: 1700000000123, activeTime: 1700000000100, pending: new Map<string, PendingEntry>() };
+    const alice = { name: 'alice', seenTime: 1700000000123, activeTime: -1, pending: new Map<string, PendingEntry>() };
     const bob = { name: 'bob', seenTime: 1700000000200, activeTime: -1, pending: new Map<string, PendingEntry>() };
     for (let i = 0; i < 3; i++) {
       const id = s.entries[i].id;

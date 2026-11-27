@@ -71,9 +71,11 @@ describe('COMMAND', () => {
     expect.soft(await errOrValue(t.call('COMMAND', 'GETKEYS', 'EVAL', 'return 1', '2', 'k1', 'k2', 'arg'))).toEqual(['k1', 'k2']);
     expect.soft(await errOrValue(t.call('COMMAND', 'GETKEYS', 'ZUNIONSTORE', 'dst', '2', 's1', 's2'))).toEqual(['dst', 's1', 's2']);
     expect.soft(await errOrValue(t.call('COMMAND', 'GETKEYSANDFLAGS', 'GET', 'k'))).toEqual([['k', ['RO', 'access']]]);
-    expect.soft(await errOf(t.call('COMMAND', 'GETKEYS', 'PING'))).toBe('ERR The command has no key arguments');
+    // Redis 7.0: COMMAND GETKEYS needs at least one argument after the command name (arity -4)
+    expect.soft(await errOf(t.call('COMMAND', 'GETKEYS', 'PING'))).toBe("ERR wrong number of arguments for 'command|getkeys' command");
+    expect.soft(await errOf(t.call('COMMAND', 'GETKEYS', 'PING', 'x'))).toBe('ERR The command has no key arguments');
     expect.soft(await errOf(t.call('COMMAND', 'GETKEYS', 'NOSUCH', 'a'))).toBe('ERR Invalid command specified');
-    expect.soft(await errOf(t.call('COMMAND', 'GETKEYS', 'GET'))).toBe('ERR Invalid number of arguments specified for command');
+    expect.soft(await errOf(t.call('COMMAND', 'GETKEYS', 'GET', 'a', 'b'))).toBe('ERR Invalid number of arguments specified for command');
     expect.soft(await errOf(t.call('COMMAND', 'GETKEYS'))).toBe("ERR wrong number of arguments for 'command|getkeys' command");
   });
 
@@ -81,12 +83,12 @@ describe('COMMAND', () => {
     const res = (await t.call('COMMAND', 'DOCS', 'get')) as unknown[];
     expect.soft(res[0]).toBe('get');
     const doc = pairs(res[1]);
-    expect.soft(doc.summary).toBe('Returns the string value of a key.');
+    expect.soft(doc.summary).toBe('Get the value of a key');
     expect.soft(doc.since).toBe('1.0.0');
     expect.soft(doc.group).toBe('string');
     expect.soft(doc.complexity).toBe('O(1)');
     const args = (doc.arguments as unknown[][]).map(pairs);
-    expect.soft(args[0]).toMatchObject({ name: 'key', type: 'key', display_text: 'key', key_spec_index: 0 });
+    expect.soft(args[0]).toMatchObject({ name: 'key', type: 'key', key_spec_index: 0 });
     expect.soft(await t.call('COMMAND', 'DOCS', 'nosuchcmd')).toEqual([]);
   });
 

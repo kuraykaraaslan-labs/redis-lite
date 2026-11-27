@@ -153,11 +153,6 @@ export class Persistence extends PersistenceAofLoader {
     return { source: 'rdb', ...keys };
   }
 
-  /** True when the AOF is on and everything written to it was fsynced (a replica's FACK). */
-  get aofFsynced(): boolean {
-    return this.aofState === 'on' && !this.aofFsyncPending && !this.aofBuffer;
-  }
-
   /**
    * After FLUSHALL (flushallCommand): kill a running BGSAVE; with save points configured, save the now empty dataset
    * right away. The caller then still counts FLUSHALL as one change (server.dirty++), so it propagates.

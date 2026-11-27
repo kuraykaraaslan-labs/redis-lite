@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, IntegerSchemaWith, reject } from '@/libs/schemas';
+import { IntegerSchema, IntegerSchemaWith, firstIssue, reject } from '@/libs/schemas';
 
 import CommandService from '@/modules/command/command.service';
 
@@ -83,9 +83,20 @@ export const ScriptDTO = z.tuple([z.string()], z.string()).transform(([sub, ...r
 // Function DTOs: FCALL, FUNCTION
 // ============================================================================
 
-/** FCALL function numkeys key… arg… (also FCALL_RO); a non-integer numkeys is "Bad number of keys provided". */
+/**
+ * FCALL function numkeys key… arg… (also FCALL_RO); a non-integer numkeys is "Bad number of keys provided". Redis looks
+ * the function up first, so a numkeys problem is handed over as `numKeysError`, reported only once the function exists.
+ */
 const FcallNumKeysSchema = IntegerSchemaWith(ScriptingMessages.FCALL_BAD_NUMKEYS);
-export const FcallDTO = numKeysDTO(FcallNumKeysSchema).transform(({ head, keys, argv }) => ({ name: head, keys, argv }));
+export const FcallDTO = z.tuple([z.string(), z.string()], z.string()).transform(([name, rawNumKeys, ...rest]) => {
+  const parsed = FcallNumKeysSchema.safeParse(rawNumKeys);
+  let numKeysError: string | null = null;
+  if (!parsed.success) numKeysError = firstIssue(parsed.error);
+  else if (parsed.data < 0) numKeysError = ScriptingMessages.NUMKEYS_NEGATIVE;
+  else if (parsed.data > rest.length) numKeysError = ScriptingMessages.NUMKEYS_GREATER;
+  const n = numKeysError ? 0 : (parsed.data as number);
+  return { name, keys: rest.slice(0, n), argv: rest.slice(n), numKeysError };
+});
 
 /** FUNCTION LIST [LIBRARYNAME pattern] [WITHCODE], each option at most once. */
 function parseListOptions(options: string[], ctx: z.core.$RefinementCtx) {

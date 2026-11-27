@@ -5,8 +5,9 @@ import { INT64_MAX, INT64_MIN } from '@/libs/number';
 import { RespMessages } from '@/libs/resp/messages';
 import {
   Int64Schema,
+  IntSchema,
+  IntSchemaWith,
   IntegerSchema,
-  IntegerSchemaWith,
   KeySchema,
   ScanCursorSchema,
   ScanOptionsSchema,
@@ -80,7 +81,7 @@ export const CopyDTO = z
       const opt = options[i].toLowerCase();
       if (opt === 'replace') replace = true;
       else if (opt === 'db' && i + 1 < options.length) {
-        const index = IntegerSchema.safeParse(options[++i]);
+        const index = IntSchema.safeParse(options[++i]);
         if (!index.success) return fail(firstIssue(index.error));
         dbs.push(index.data);
       } else return fail(RespMessages.SYNTAX);
@@ -158,10 +159,13 @@ export const ObjectDTO = z.tuple([z.string()], z.string()).transform(([given, ..
 // Database DTOs: MOVE, SWAPDB
 // ============================================================================
 
-export const MoveDTO = z.tuple([KeySchema, IntegerSchema]).transform(([key, db]) => ({ key, db }));
+export const MoveDTO = z.tuple([KeySchema, IntSchema]).transform(([key, db]) => ({ key, db }));
 
 export const SwapDbDTO = z
-  .tuple([IntegerSchemaWith(KeysMessages.INVALID_FIRST_DB_INDEX), IntegerSchemaWith(KeysMessages.INVALID_SECOND_DB_INDEX)])
+  .tuple([
+    IntSchemaWith(KeysMessages.INVALID_FIRST_DB_INDEX, KeysMessages.INVALID_FIRST_DB_INDEX),
+    IntSchemaWith(KeysMessages.INVALID_SECOND_DB_INDEX, KeysMessages.INVALID_SECOND_DB_INDEX),
+  ])
   .transform(([first, second]) => ({ first, second }));
 
 // ============================================================================
@@ -245,6 +249,47 @@ export const RestoreDTO = z
   });
 
 // ============================================================================
+// MIGRATE DTO
+// ============================================================================
+
+/**
+ * MIGRATE host port key|"" destination-db timeout [COPY] [REPLACE] [AUTH password | AUTH2 username password]
+ * [KEYS key …]. Like Redis 7.0: the options are read first (an unknown option or one missing its value is a syntax
+ * error; KEYS takes every remaining argument and needs the key argument to be empty), then the db and the timeout
+ * (int64); a timeout <= 0 means 1000 ms. AUTH sets the password, AUTH2 the username and the password; the last one wins
+ * for each. The port is not validated (a bad one fails when connecting).
+ */
+export const MigrateDTO = z
+  .tuple([z.string(), z.string(), z.string(), z.string(), z.string()], z.string())
+  .transform(([host, port, key, rawDb, rawTimeout, ...options], ctx) => {
+    let copy = false;
+    let replace = false;
+    let username: string | null = null;
+    let password: string | null = null;
+    let keys = [key];
+    for (let i = 0; i < options.length; i++) {
+      const opt = options[i].toLowerCase();
+      const left = options.length - i - 1;
+      if (opt === 'copy') copy = true;
+      else if (opt === 'replace') replace = true;
+      else if (opt === 'auth' && left >= 1) password = options[++i];
+      else if (opt === 'auth2' && left >= 2) {
+        username = options[++i];
+        password = options[++i];
+      } else if (opt === 'keys') {
+        if (key !== '') return reject(ctx, KeysMessages.MIGRATE_KEYS_NEEDS_EMPTY_KEY);
+        keys = options.slice(i + 1);
+        break;
+      } else return reject(ctx, RespMessages.SYNTAX);
+    }
+    const db = parseArg(Int64Schema, rawDb);
+    if (!db.ok) return reject(ctx, db.error);
+    const timeout = parseArg(Int64Schema, rawTimeout);
+    if (!timeout.ok) return reject(ctx, timeout.error);
+    return { host, port, keys, db: db.value, timeout: timeout.value <= 0n ? 1000 : Number(timeout.value), copy, replace, username, password };
+  });
+
+// ============================================================================
 // Type Exports
 // ============================================================================
 
@@ -261,3 +306,4 @@ export type MoveInput = z.infer<typeof MoveDTO>;
 export type SwapDbInput = z.infer<typeof SwapDbDTO>;
 export type SortInput = z.infer<typeof SortCmdDTO>;
 export type RestoreInput = z.infer<typeof RestoreDTO>;
+export type MigrateInput = z.infer<typeof MigrateDTO>;

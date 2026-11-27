@@ -43,7 +43,7 @@ export class AclSelector {
     return s;
   }
 
-  /** ACLDescribeSelectorCommandRules(). */
+  /** The command rules as stored (base and rules in order); ACL LIST shows AclDescribeService's rebuilt form instead. */
   describeCommands(): string {
     return [this.allCommands ? '+@all' : '-@all', ...this.commandRules].join(' ');
   }
@@ -58,8 +58,8 @@ export class AclSelector {
     return this.allChannels ? '&*' : this.channels.map((c) => `&${c}`).join(' ');
   }
 
-  /** ACLDescribeSelector(): keys, channels, commands. */
-  describe(): string {
+  /** ACLDescribeSelector(): keys, channels, commands (`commands` = the description of the command part). */
+  describe(commands = this.describeCommands()): string {
     let res = '';
     if (this.allKeys) res += '~* ';
     else for (const k of this.keyPatterns) res += `${patternString(k)} `;
@@ -68,11 +68,11 @@ export class AclSelector {
       res += 'resetchannels ';
       for (const c of this.channels) res += `&${c} `;
     }
-    return res + this.describeCommands();
+    return res + commands;
   }
 
-  info(): AclSelectorInfo {
-    return { commands: this.describeCommands(), keys: this.describeKeys(), channels: this.describeChannels() };
+  info(commands = this.describeCommands()): AclSelectorInfo {
+    return { commands, keys: this.describeKeys(), channels: this.describeChannels() };
   }
 }
 
@@ -84,6 +84,8 @@ export class AclUser {
   enabled = false;
   nopass = false;
   skipSanitizePayload = false;
+  /** The explicit sanitize-payload flag (set by `sanitize-payload` and `reset`; a new user has neither flag). */
+  sanitizePayload = false;
   /** sha256 hex hashes, in insertion order. */
   passwords: string[] = [];
   /** selectors[0] is the root selector. */
@@ -111,6 +113,7 @@ export class AclUser {
     this.enabled = other.enabled;
     this.nopass = other.nopass;
     this.skipSanitizePayload = other.skipSanitizePayload;
+    this.sanitizePayload = other.sanitizePayload;
     this.passwords = [...other.passwords];
     this.selectors = other.selectors.map((s) => s.clone());
   }
@@ -119,16 +122,17 @@ export class AclUser {
   flags(): string[] {
     const f = [this.enabled ? 'on' : 'off'];
     if (this.nopass) f.push('nopass');
-    f.push(this.skipSanitizePayload ? 'skip-sanitize-payload' : 'sanitize-payload');
+    if (this.skipSanitizePayload) f.push('skip-sanitize-payload');
+    if (this.sanitizePayload) f.push('sanitize-payload');
     return f;
   }
 
-  /** ACLDescribeUser() (the rules part of an ACL LIST line). */
-  describe(): string {
+  /** ACLDescribeUser() (the rules part of an ACL LIST line); `commands` describes each selector's command part. */
+  describe(commands: (s: AclSelector) => string = (s) => s.describeCommands()): string {
     let res = '';
     for (const f of this.flags()) res += `${f} `;
     for (const p of this.passwords) res += `#${p} `;
-    for (const s of this.selectors) res += s.root ? s.describe() : ` (${s.describe()})`;
+    for (const s of this.selectors) res += s.root ? s.describe(commands(s)) : ` (${s.describe(commands(s))})`;
     return res;
   }
 }

@@ -10,7 +10,6 @@ import type { Reply } from '@/libs/resp';
 
 import { RedisLite } from '@/index';
 import type { RedisLiteOptions } from '@/index';
-import HashesService from '@/modules/hashes/hashes.service';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
 import { RedisLiteServer } from '@/modules/server/server.core';
 import { idToString } from '@/modules/streams/streams.structure';
@@ -72,7 +71,6 @@ export function populate(run: Harness['run']): void {
   run('SADD', 'iset', '1', '2', '3');
   run('ZADD', 'zset', '1.5', 'a', '-2', 'b', 'inf', 'c', '0.1', 'd');
   run('HSET', 'hash', 'f1', 'v1', 'f2', 'v2', 'f3', 'v3');
-  run('HPEXPIRE', 'hash', '1000000', 'FIELDS', '1', 'f1');
   run('PEXPIRE', 'list', '2000000');
   run('XADD', 'stream', '1-1', 'a', '1');
   run('XADD', 'stream', '2-1', 'b', '2');
@@ -87,7 +85,7 @@ export function populate(run: Harness['run']): void {
   run('FUNCTION', 'LOAD', FUNCTION_CODE);
 }
 
-/** Dataset as plain data: values, TTLs, hash field TTLs, stream groups / PEL (not consumer seen/active times). */
+/** Dataset as plain data: values, TTLs, stream groups / PEL (not consumer seen/active times). */
 export function logical(server: RedisLiteServer): unknown {
   return server.databases.map((db) => {
     const out: Record<string, unknown> = {};
@@ -109,7 +107,7 @@ export function logical(server: RedisLiteServer): unknown {
           value = v.value.entries.map((e) => [e.member, e.score]);
           break;
         case 'hash':
-          value = { fields: [...v.value].sort(), ttl: [...(HashesService.hashFieldExpires(v.value) ?? [])].sort() };
+          value = [...v.value].sort();
           break;
         case 'stream': {
           const s = v.value;

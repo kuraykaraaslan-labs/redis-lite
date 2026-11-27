@@ -23,9 +23,7 @@ export default class ConnectionService {
   static setName = ConnectionClientService.setName.bind(ConnectionClientService);
   static getName = ConnectionClientService.getName.bind(ConnectionClientService);
   static id = ConnectionClientService.id.bind(ConnectionClientService);
-  static setInfo = ConnectionClientService.setInfo.bind(ConnectionClientService);
   static help = ConnectionClientService.help.bind(ConnectionClientService);
-  static noTouch = ConnectionClientService.noTouch.bind(ConnectionClientService);
   static noEvict = ConnectionClientService.noEvict.bind(ConnectionClientService);
   static reply = ConnectionClientService.reply.bind(ConnectionClientService);
   static pause = ConnectionClientService.pause.bind(ConnectionClientService);

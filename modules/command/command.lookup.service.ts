@@ -1,15 +1,8 @@
-import { formatMessage } from '@/libs/message-format';
-
-import { AclCategoryEnum } from '@/modules/acl/acl.enums';
-
-import { COMMAND_FLAG_ORDER } from './command.enums';
-import CommandMessages from './command.messages';
-import type { Row } from './command.meta_table';
-import { COMMAND_HISTORY, COMMAND_TABLE } from './command.meta_table';
-import type { ArgDoc, BeginSearch, CommandLookup, CommandMeta, CommandSpec, FindKeys, KeySpec } from './command.types';
+import { COMMAND_TABLE } from './command.meta_table';
+import type { CommandLookup, CommandMeta, CommandSpec, MetaRow } from './command.types';
 
 /**
- * Command metadata: builds the COMMAND table from `command.meta_table` (argument and key-spec DSLs) once, on first use,
+ * Command metadata: builds the COMMAND table from `command.meta_table` (the Redis 7.0.15 table) once, on first use,
  * and looks commands and subcommands up in it (Redis lookupCommand(), arity checks).
  *
  * The implemented commands come from `command.registry`, which hands its map over with `useRegistry()` once it is built:
@@ -26,203 +19,44 @@ export default class CommandLookupService {
   private static commands: ReadonlyMap<string, CommandSpec> = new Map();
 
   // ──────────────────────────────────────────────
-  // Private Helpers: argument DSL
+  // Private Helpers
   // ──────────────────────────────────────────────
 
-  private static splitTop(s: string): string[] {
-    const out: string[] = [];
-    let depth = 0;
-    let cur = '';
-    for (const ch of s) {
-      if (ch === '(') depth++;
-      if (ch === ')') depth--;
-      if (ch === ' ' && depth === 0) {
-        if (cur) out.push(cur);
-        cur = '';
-      } else cur += ch;
-    }
-    if (cur) out.push(cur);
-    return out;
-  }
-
-  private static parseArg(raw: string): ArgDoc {
-    let s = raw;
-    let optional = false;
-    if (s.startsWith('?')) {
-      optional = true;
-      s = s.slice(1);
-    }
-    let since: string | undefined;
-    let multiple = false;
-    let multipleToken = false;
-    for (;;) {
-      const m = /\{([\d.]+)\}$/.exec(s);
-      if (m) {
-        since = m[1];
-        s = s.slice(0, -m[0].length);
-        continue;
-      }
-      if (s.endsWith('*') && !s.endsWith('!*')) {
-        multipleToken = true;
-        s = s.slice(0, -1);
-        continue;
-      }
-      if (s.endsWith('...')) {
-        multiple = true;
-        s = s.slice(0, -3);
-        continue;
-      }
-      break;
-    }
-    const base = { optional, multiple, multipleToken, since };
-    const pure = /^([a-z0-9_-]*)(?::pure-token)?!(.+)$/.exec(s);
-    if (pure && !s.includes('(')) {
-      return { ...base, name: pure[1] || pure[2].toLowerCase(), type: 'pure-token', token: pure[2] };
-    }
-    if (s === 'key') return { ...base, name: 'key', type: 'key', keySpecIndex: 0, display: 'key' };
-    const m = /^(?:([A-Z0-9_-]+)=)?([a-z0-9_-]+):([a-z-]+?)(\d*)(?:\((.*)\))?$/s.exec(s);
-    if (!m) throw new Error(formatMessage(CommandMessages.BAD_ARGUMENT_SPEC, { spec: raw }));
-    const [, token, name, type, ksIndex, inner] = m;
-    const arg: ArgDoc = { ...base, name, type, token };
-    if (type === 'key') arg.keySpecIndex = Number(ksIndex || '0');
-    if (type === 'oneof' || type === 'block') arg.args = CommandLookupService.parseArgs(inner ?? '');
-    else arg.display = name;
-    return arg;
-  }
-
-  // ──────────────────────────────────────────────
-  // Private Helpers: key spec DSL
-  // ──────────────────────────────────────────────
-
-  private static parseKeySpecs(spec: string): KeySpec[] {
-    if (!spec) return [];
-    return spec.split(';').map((one) => {
-      const [flags, begin = '1', find = '0', ...notes] = one.split('|');
-      let b: BeginSearch;
-      if (begin === '?') b = { type: 'unknown' };
-      else if (/^-?\d+$/.test(begin)) b = { type: 'index', index: Number(begin) };
-      else {
-        const [kw, from] = begin.split('@');
-        b = { type: 'keyword', keyword: kw, startfrom: Number(from) };
-      }
-      let f: FindKeys;
-      if (find === '?') f = { type: 'unknown' };
-      else if (find.startsWith('#')) {
-        const [idx, first, step] = find.slice(1).split(',').map(Number);
-        f = { type: 'keynum', keynumidx: idx, firstkey: first, keystep: step };
-      } else {
-        const [last, step = '1', limit = '0'] = find.split('/');
-        f = { type: 'range', lastkey: Number(last), keystep: Number(step), limit: Number(limit) };
-      }
-      const spec: KeySpec = { flags: flags.split(' ').filter(Boolean), begin: b, find: f };
-      if (notes.length) spec.notes = notes.join('|');
-      return spec;
-    });
-  }
-
-  /** Redis populateCommandLegacyRangeSpec(): first/last/step from the contiguous index+range key specs. */
-  private static legacyRange(specs: KeySpec[]): [number, number, number] {
-    let first = 0;
-    let last = 0;
-    let step = 0;
-    let prevLast = 0;
-    for (const s of specs) {
-      // not_key specs count too: Redis reports the channels of SSUBSCRIBE / SPUBLISH as legacy key positions
-      if (s.begin.type !== 'index' || s.find.type !== 'range') continue;
-      const index = s.begin.index;
-      const specLast = s.find.lastkey >= 0 ? index + s.find.lastkey : s.find.lastkey;
-      if (!first) {
-        first = index;
-        last = specLast;
-        step = s.find.keystep;
-        prevLast = specLast;
-        continue;
-      }
-      if (s.find.keystep !== 1 || step !== 1 || prevLast < 0 || index !== prevLast + 1) {
-        // not contiguous: Redis gives up on a single range
-        continue;
-      }
-      last = specLast;
-      prevLast = specLast;
-    }
-    return [first, last, step];
-  }
-
-  // ──────────────────────────────────────────────
-  // Private Helpers: building
-  // ──────────────────────────────────────────────
-
-  private static build(row: Row, group: string, parent?: CommandMeta, module?: string): CommandMeta {
-    const [name, arity, flagStr, aclStr, ksStr, since, summary, complexity, argStr, extra] = row;
-    const keySpecs = CommandLookupService.parseKeySpecs(ksStr);
-    const flagSet = new Set(flagStr.split(' ').filter(Boolean));
-    const movable = keySpecs.some((s) => !s.flags.includes('not_key') && (s.begin.type !== 'index' || s.find.type !== 'range'));
-    if (movable) flagSet.add('movablekeys');
-    const acl = new Set(aclStr.split(' ').filter(Boolean));
-    if (flagSet.has('write')) acl.add('write');
-    if (flagSet.has('readonly') && !acl.has('scripting')) acl.add('read');
-    if (flagSet.has('admin')) {
-      acl.add('admin');
-      acl.add('dangerous');
-    }
-    if (flagSet.has('pubsub')) acl.add('pubsub');
-    if (flagSet.has('fast')) acl.add('fast');
-    if (flagSet.has('blocking')) acl.add('blocking');
-    if (!acl.has('fast')) acl.add('slow');
-    const [firstKey, lastKey, step] = CommandLookupService.legacyRange(keySpecs);
+  private static build(row: MetaRow, parent?: CommandMeta): CommandMeta {
+    const fullname = parent ? `${parent.name}|${row.name}` : row.name;
     const meta: CommandMeta = {
-      name,
-      fullname: parent ? `${parent.name}|${name}` : name,
-      arity,
-      flags: COMMAND_FLAG_ORDER.filter((f) => flagSet.has(f)),
-      flagSet,
-      acl: AclCategoryEnum.options.filter((c) => acl.has(c)),
-      firstKey,
-      lastKey,
-      step,
-      tips: (extra?.tips ?? '').split(' ').filter(Boolean),
-      keySpecs,
+      name: row.name,
+      fullname,
+      arity: row.arity,
+      flags: row.flags,
+      flagSet: new Set([...row.flags, ...(row.hidden ?? [])]),
+      acl: row.acl,
+      firstKey: row.keys[0],
+      lastKey: row.keys[1],
+      step: row.keys[2],
+      tips: row.tips ?? [],
+      keySpecs: row.keySpecs ?? [],
       subcommands: new Map(),
-      group,
-      since,
-      summary,
-      complexity,
-      docFlags: (extra?.docFlags ?? '').split(' ').filter(Boolean),
-      deprecatedSince: extra?.dep?.[0],
-      replacedBy: extra?.dep?.[1],
-      history: COMMAND_HISTORY[parent ? `${parent.name}|${name}` : name] ?? [],
-      args: CommandLookupService.parseArgs(argStr),
+      group: row.group,
+      since: row.since,
+      summary: row.summary,
+      complexity: row.complexity,
+      docFlags: row.docFlags ?? [],
+      deprecatedSince: row.deprecatedSince,
+      replacedBy: row.replacedBy,
+      history: row.history ?? [],
+      args: row.args ?? [],
       parent,
-      module,
     };
-    for (const sub of extra?.subs ?? []) {
-      const m = CommandLookupService.build(sub, group, meta, module);
-      meta.subcommands.set(m.name, m);
-    }
+    for (const sub of row.subs ?? []) meta.subcommands.set(sub.name, CommandLookupService.build(sub, meta));
     return meta;
-  }
-
-  /** A command implemented by redis-lite but missing from the table: metadata derived from its spec. */
-  private static fallback(name: string): CommandMeta | undefined {
-    const spec = CommandLookupService.commands.get(name);
-    if (!spec) return undefined;
-    const flags = [spec.flags?.write ? 'write' : 'readonly'];
-    if (spec.flags?.noscript) flags.push('noscript');
-    if (spec.flags?.pubsub) flags.push('pubsub');
-    if (spec.flags?.noauth) flags.push('no_auth');
-    return CommandLookupService.build([name, spec.arity, flags.join(' '), '', spec.keys ? 'RW|1' : '', '', '', ''], 'server');
   }
 
   private static metaTable(): Map<string, CommandMeta> {
     if (CommandLookupService.table) return CommandLookupService.table;
-    const all = new Map<string, CommandMeta>();
-    for (const [group, rows, module] of COMMAND_TABLE) for (const row of rows) all.set(row[0], CommandLookupService.build(row, group, undefined, module));
-    // only the commands redis-lite implements are reported
+    // only the commands redis-lite implements are reported (the registry keeps only the commands of the table)
     const out = new Map<string, CommandMeta>();
-    for (const name of CommandLookupService.commands.keys()) {
-      const m = all.get(name) ?? CommandLookupService.fallback(name);
-      if (m) out.set(name, m);
-    }
+    for (const row of COMMAND_TABLE) if (CommandLookupService.commands.has(row.name)) out.set(row.name, CommandLookupService.build(row));
     CommandLookupService.table = out;
     return out;
   }
@@ -235,11 +69,6 @@ export default class CommandLookupService {
   static useRegistry(commands: ReadonlyMap<string, CommandSpec>): void {
     CommandLookupService.commands = commands;
     CommandLookupService.table = null;
-  }
-
-  /** The argument DSL of the metadata table → COMMAND DOCS argument tree. */
-  static parseArgs(spec: string | undefined): ArgDoc[] {
-    return spec ? CommandLookupService.splitTop(spec).map((raw) => CommandLookupService.parseArg(raw)) : [];
   }
 
   /** Every implemented top-level command. */

@@ -187,10 +187,14 @@ export class LuaEngine {
     });
   }
 
-  /** FCALL / FCALL_RO: calls a registered function (case-insensitive name) with (keys, args) tables. */
-  callFunction(call: ScriptCall, name: string, keys: string[], args: string[]): Reply | Block {
+  /**
+   * FCALL / FCALL_RO: calls a registered function (case-insensitive name) with (keys, args) tables. A numkeys problem
+   * (`numKeysError`) is reported once the function is known to exist, as Redis does.
+   */
+  callFunction(call: ScriptCall, name: string, keys: string[], args: string[], numKeysError: string | null = null): Reply | Block {
     const fn = this.functions.find(name);
     if (!fn) return new RespError(ScriptingMessages.FUNCTION_NOT_FOUND);
+    if (numKeysError) return new RespError(numKeysError);
     const noWrites = fn.flags.includes('no-writes');
     if (call.readOnly && !noWrites) return new RespError(ScriptingMessages.RO_WITH_WRITE_FLAG);
     const busy = this.busyError();

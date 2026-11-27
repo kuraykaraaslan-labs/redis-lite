@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { RespMessages } from '@/libs/resp/messages';
-import { reject } from '@/libs/schemas';
+import { IntegerSchema, parseArg, reject } from '@/libs/schemas';
 
 import { TrackingCachingEnum } from './tracking.enums';
 
@@ -26,9 +26,9 @@ export const ClientTrackingDTO = z.array(z.string()).transform((args, ctx) => {
     const opt = args[i].toLowerCase();
     const more = i + 1 < args.length;
     if (opt === 'redirect' && more) {
-      const raw = args[++i];
-      if (!/^-?\d+$/.test(raw)) return reject(ctx, RespMessages.NOT_INTEGER);
-      o.redirect = Number(raw);
+      const id = parseArg(IntegerSchema, args[++i]);
+      if (!id.ok) return reject(ctx, id.error);
+      o.redirect = id.value;
     } else if (opt === 'prefix' && more) o.prefixes.push(args[++i]);
     else if (opt === 'bcast') o.bcast = true;
     else if (opt === 'optin') o.optin = true;

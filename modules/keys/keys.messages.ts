@@ -22,23 +22,6 @@ export const KeysMessages = {
     'ERR An LFU maxmemory policy is selected, idle time not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.',
   LFU_NO_FREQ:
     'ERR An LFU maxmemory policy is not selected, access frequency not tracked. Please note that when switching between policies at runtime LRU and LFU data will take some time to adjust.',
-  OBJECT_HELP: [
-    'OBJECT <subcommand> [<arg> [value] [opt] ...]. Subcommands are:',
-    'ENCODING <key>',
-    '    Return the kind of internal representation used in order to store the value',
-    '    associated with a <key>.',
-    'FREQ <key>',
-    '    Return the access frequency index of the <key>. The returned integer is',
-    '    proportional to the logarithm of the recent access frequency of the key.',
-    'IDLETIME <key>',
-    '    Return the idle time of the <key>, that is the approximated number of',
-    '    seconds elapsed since the last access to the key.',
-    'REFCOUNT <key>',
-    '    Return the number of references of the value associated with the specified',
-    '    <key>.',
-    'HELP',
-    '    Print this help.',
-  ],
 
   // SORT
   SORT_NOT_DOUBLE: "ERR One or more scores can't be converted into double",
@@ -50,6 +33,16 @@ export const KeysMessages = {
   INVALID_IDLETIME: 'ERR Invalid IDLETIME value, must be >= 0',
   INVALID_FREQ: 'ERR Invalid FREQ value, must be >= 0 and <= 255',
   BUSYKEY: 'BUSYKEY Target key name already exists.',
+
+  // MIGRATE
+  MIGRATE_KEYS_NEEDS_EMPTY_KEY: 'ERR When using MIGRATE KEYS option, the key argument must be set to the empty string',
+  /** Status reply when none of the keys exists. */
+  MIGRATE_NOKEY: 'NOKEY',
+  MIGRATE_IO_CONNECT: 'IOERR error or timeout connecting to the client',
+  MIGRATE_IO_WRITE: 'IOERR error or timeout writing to target instance',
+  MIGRATE_IO_READ: 'IOERR error or timeout reading to target instance',
+  /** `{error}` is the target's error line without its leading `-`. */
+  MIGRATE_TARGET_ERROR: 'ERR Target instance replied with error: {error}',
 } as const;
 
 export default KeysMessages;

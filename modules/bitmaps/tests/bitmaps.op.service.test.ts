@@ -35,18 +35,9 @@ describe('BITOP', () => {
     expect(await t.redis.getBuffer('bo:nd')).toEqual(Buffer.from([0x0f, 0xff]));
   });
 
-  it('DIFF / DIFF1 / ANDOR / ONE (Redis 8.2+)', async () => {
-    await t.call('SET', 'bo:x', Buffer.from([0b11110000]));
-    await t.call('SET', 'bo:y', Buffer.from([0b10100000]));
-    await t.call('SET', 'bo:z', Buffer.from([0b01000001]));
-    expect(await t.call('BITOP', 'DIFF', 'bo:r1', 'bo:x', 'bo:y', 'bo:z')).toBe(1);
-    expect(await t.redis.getBuffer('bo:r1')).toEqual(Buffer.from([0b00010000]));
-    expect(await t.call('BITOP', 'DIFF1', 'bo:r2', 'bo:x', 'bo:y', 'bo:z')).toBe(1);
-    expect(await t.redis.getBuffer('bo:r2')).toEqual(Buffer.from([0b00000001]));
-    expect(await t.call('BITOP', 'ANDOR', 'bo:r3', 'bo:x', 'bo:y', 'bo:z')).toBe(1);
-    expect(await t.redis.getBuffer('bo:r3')).toEqual(Buffer.from([0b11100000]));
-    expect(await t.call('BITOP', 'ONE', 'bo:r4', 'bo:x', 'bo:y', 'bo:z')).toBe(1);
-    expect(await t.redis.getBuffer('bo:r4')).toEqual(Buffer.from([0b00010001]));
+  it('DIFF / DIFF1 / ANDOR / ONE are syntax errors (Redis 7.0)', async () => {
+    await t.call('SET', 'bo:x', 'a');
+    for (const op of ['DIFF', 'DIFF1', 'ANDOR', 'ONE']) expect(await err(t.call('BITOP', op, 'bo:r', 'bo:x', 'bo:x'))).toBe(SYNTAX);
   });
 
   it('all sources missing deletes the destination and returns 0', async () => {
@@ -62,6 +53,8 @@ describe('BITOP', () => {
     expect(await err(t.call('BITOP', 'NOT', 'bo:d', 'bo:e1', 'bo:e2'))).toBe('ERR BITOP NOT must be called with a single source key.');
     expect(await err(t.call('BITOP', 'FOO', 'bo:d', 'bo:e1'))).toBe(SYNTAX);
     expect(await err(t.call('BITOP', 'AND', 'bo:d', 'bo:e1', 'bo:l'))).toBe(WRONGTYPE);
+    // NOT's source count is checked before the sources are read
+    expect(await err(t.call('BITOP', 'NOT', 'bo:d', 'bo:l', 'bo:l'))).toBe('ERR BITOP NOT must be called with a single source key.');
     expect(await err(t.call('BITOP', 'AND', 'bo:d'))).toBe(arity('bitop'));
   });
 });

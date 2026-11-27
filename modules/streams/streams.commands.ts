@@ -15,6 +15,8 @@ import {
   XRangeDTO,
   XReadDTO,
   XReadGroupDTO,
+  XReadGroupScriptDTO,
+  XReadScriptDTO,
   XRevRangeDTO,
   XSetIdDTO,
   XTrimDTO,
@@ -58,8 +60,19 @@ export const streamCommands: CommandSpec[] = [
   // ============================================================================
   // Read: XREAD, XREADGROUP
   // ============================================================================
-  { name: 'xread', arity: -4, handler: withDTO(XReadDTO, StreamsService.xread) },
-  { name: 'xreadgroup', arity: -7, flags: WRITE, handler: withDTO(XReadGroupDTO, StreamsService.xreadGroup) },
+  // (redis.call parses with the script variant: BLOCK is refused there)
+  {
+    name: 'xread',
+    arity: -4,
+    handler: (ctx, args) => validated(ctx.inScript ? XReadScriptDTO : XReadDTO, args, (input) => StreamsService.xread(ctx, input)),
+  },
+  {
+    name: 'xreadgroup',
+    arity: -7,
+    flags: WRITE,
+    handler: (ctx, args) =>
+      validated(ctx.inScript ? XReadGroupScriptDTO : XReadGroupDTO, args, (input) => StreamsService.xreadGroup(ctx, input)),
+  },
 
   // ============================================================================
   // Pending: XACK, XPENDING, XCLAIM, XAUTOCLAIM
@@ -69,9 +82,10 @@ export const streamCommands: CommandSpec[] = [
     arity: -4,
     flags: WRITE,
     keys: keysAt(0),
-    // read first: WRONGTYPE beats an invalid id
+    // read first: WRONGTYPE beats an invalid id, and a missing key or group answers 0 before the ids are parsed
     handler: (ctx, args) => {
       const s = StreamsService.read(ctx, { key: args[0] });
+      if (!s?.groups.has(args[1])) return 0;
       return validated(XAckDTO, args, (input) => StreamsService.ack(s, input));
     },
   },
@@ -84,7 +98,7 @@ export const streamCommands: CommandSpec[] = [
     // read first: WRONGTYPE and NOGROUP beat invalid arguments
     handler: (ctx, args) => {
       const target = StreamsService.findGroup(ctx, args[0], args[1]);
-      return validated(XClaimDTO, args, (input) => StreamsService.claim(input, target));
+      return validated(XClaimDTO, args, (input) => StreamsService.claim(ctx, input, target));
     },
   },
   { name: 'xautoclaim', arity: -6, flags: WRITE, keys: keysAt(0), handler: withDTO(XAutoClaimDTO, StreamsService.autoClaim) },

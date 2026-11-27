@@ -117,7 +117,7 @@ describe('XINFO', () => {
     expect(toMap(((await t.call('XINFO', 'GROUPS', 'xi:g')) as unknown[][])[0]).lag).toBe(2);
     await t.call('XGROUP', 'CREATE', 'xi:g', 'g2', '$');
     const g2 = toMap(((await t.call('XINFO', 'GROUPS', 'xi:g')) as unknown[][])[1]);
-    expect(g2['entries-read']).toBe(4);
+    expect(g2['entries-read']).toBe(null); // `$` leaves the counter unknown in Redis 7.0
     expect(g2.lag).toBe(0);
   });
 
@@ -128,16 +128,14 @@ describe('XINFO', () => {
     await t.call('XGROUP', 'CREATECONSUMER', 'xi:c', 'g', 'c2');
     const cons = (await t.call('XINFO', 'CONSUMERS', 'xi:c', 'g')) as unknown[][];
     expect(cons).toHaveLength(2);
-    expect(cons[0].filter((_, i) => i % 2 === 0)).toEqual(['name', 'pending', 'idle', 'inactive']);
+    expect(cons[0].filter((_, i) => i % 2 === 0)).toEqual(['name', 'pending', 'idle']);
     const c1 = toMap(cons[0]);
     expect(c1.name).toBe('c1');
     expect(c1.pending).toBe(1);
     expect(typeof c1.idle).toBe('number');
-    expect(typeof c1.inactive).toBe('number');
     const c2 = toMap(cons[1]);
     expect(c2.name).toBe('c2');
     expect(c2.pending).toBe(0);
-    expect(c2.inactive).toBe(-1); // never attempted a read
   });
 
   it('GROUPS / CONSUMERS in RESP3 are arrays of maps', async () => {
@@ -150,7 +148,7 @@ describe('XINFO', () => {
         `${bulk('last-delivered-id')}${bulk('0-0')}${bulk('entries-read')}_\r\n${bulk('lag')}:1\r\n`,
     );
     const cons = await c3.send('XINFO', 'CONSUMERS', 'xi:r3g', 'g');
-    expect(cons.startsWith(`*1\r\n%4\r\n${bulk('name')}${bulk('c')}${bulk('pending')}:0\r\n${bulk('idle')}:`)).toBe(true);
+    expect(cons.startsWith(`*1\r\n%3\r\n${bulk('name')}${bulk('c')}${bulk('pending')}:0\r\n${bulk('idle')}:`)).toBe(true);
   });
 
   it('errors', async () => {

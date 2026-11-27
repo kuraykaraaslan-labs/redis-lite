@@ -5,7 +5,7 @@ import type { Reply } from '@/libs/resp';
 import CommandService, { NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 
-import type { BgsaveInput, ShutdownInput, WaitAofInput, WaitInput } from './server.dto';
+import type { BgsaveInput, ShutdownInput, WaitInput } from './server.dto';
 import ServerMessages from './server.messages';
 
 /** Server administration: TIME, DBSIZE, ROLE, FLUSHDB / FLUSHALL, MONITOR, persistence commands, SHUTDOWN, WAIT. */
@@ -97,10 +97,5 @@ export default class ServerAdminService {
   /** WAIT numreplicas timeout: blocks until that many replicas acknowledged the client's last write (or the timeout). */
   static wait(ctx: CommandContext, { numreplicas, timeout }: WaitInput): HandlerResult {
     return ctx.server.replication.wait(ctx.client, numreplicas, timeout, ctx.noBlock);
-  }
-
-  /** WAITAOF numlocal numreplicas timeout: the local AOF counts as fsynced while it is on; replicas answer with FACK. */
-  static waitAof(ctx: CommandContext, { numlocal, numreplicas, timeout }: WaitAofInput): HandlerResult {
-    return ctx.server.replication.waitAof(ctx.client, numlocal, numreplicas, timeout, ctx.noBlock);
   }
 }

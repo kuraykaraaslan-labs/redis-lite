@@ -37,15 +37,11 @@ export default class CommandReplyService {
 
   private static argReply(a: ArgDoc): RespMap {
     const flat: Reply[] = ['name', a.name, 'type', a.type];
-    if (a.display !== undefined) flat.push('display_text', a.display);
     if (a.keySpecIndex !== undefined) flat.push('key_spec_index', a.keySpecIndex);
     if (a.token !== undefined) flat.push('token', a.token);
     if (a.since !== undefined) flat.push('since', a.since);
-    const flags: string[] = [];
-    if (a.optional) flags.push('optional');
-    if (a.multiple) flags.push('multiple');
-    if (a.multipleToken) flags.push('multiple_token');
-    if (flags.length) flat.push('flags', CommandReplyService.statuses(flags));
+    if (a.deprecatedSince !== undefined) flat.push('deprecated_since', a.deprecatedSince);
+    if (a.flags?.length) flat.push('flags', CommandReplyService.statuses(a.flags));
     if (a.args) flat.push('arguments', a.args.map((arg) => CommandReplyService.argReply(arg)));
     return RespMap.from(flat);
   }
@@ -54,8 +50,9 @@ export default class CommandReplyService {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** One COMMAND INFO entry. */
+  /** One COMMAND INFO entry. Redis 7.0 sends tips as bulk strings and key specs as a set; no subcommands is an empty set. */
   static commandInfoReply(m: CommandMeta): Reply {
+    const subs = [...m.subcommands.values()].map((sub) => CommandReplyService.commandInfoReply(sub));
     return [
       m.fullname,
       m.arity,
@@ -64,9 +61,9 @@ export default class CommandReplyService {
       m.lastKey,
       m.step,
       CommandReplyService.statuses(m.acl.map((c) => `@${c}`)),
-      CommandReplyService.statuses(m.tips),
-      m.keySpecs.map((spec) => CommandReplyService.keySpecReply(spec)),
-      [...m.subcommands.values()].map((sub) => CommandReplyService.commandInfoReply(sub)),
+      new RespSet(m.tips),
+      new RespSet(m.keySpecs.map((spec) => CommandReplyService.keySpecReply(spec))),
+      subs.length ? subs : new RespSet([]),
     ];
   }
 
@@ -74,11 +71,10 @@ export default class CommandReplyService {
   static commandDocsReply(m: CommandMeta): RespMap {
     const flat: Reply[] = ['summary', m.summary, 'since', m.since, 'group', m.group];
     if (m.complexity) flat.push('complexity', m.complexity);
-    if (m.module) flat.push('module', m.module);
     if (m.docFlags.length) flat.push('doc_flags', CommandReplyService.statuses(m.docFlags));
     if (m.deprecatedSince) flat.push('deprecated_since', m.deprecatedSince);
     if (m.replacedBy) flat.push('replaced_by', m.replacedBy);
-    if (m.history.length) flat.push('history', m.history.map(([version, change]) => [version, change]));
+    if (m.history.length) flat.push('history', new RespSet(m.history.map(([version, change]) => [version, change])));
     if (m.args.length) flat.push('arguments', m.args.map((arg) => CommandReplyService.argReply(arg)));
     if (m.subcommands.size) {
       flat.push('subcommands', new RespMap([...m.subcommands.values()].map((s) => [s.fullname, CommandReplyService.commandDocsReply(s)])));
@@ -86,8 +82,13 @@ export default class CommandReplyService {
     return RespMap.from(flat);
   }
 
-  /** `<CMD> HELP` reply (Redis addReplyHelp()): status lines, HELP appended. `lines` defaults to the command's help table. */
-  static helpReply(command: string, lines: readonly string[] = HELP_TEXT[command] ?? []): Reply {
+  /**
+   * `<CMD> HELP` reply (Redis addReplyHelp()): status lines. The table holds the whole reply of every Redis 7.0.15
+   * container; `lines` (the subcommand lines only) is the fallback for a command missing from it.
+   */
+  static helpReply(command: string, lines: readonly string[] = []): Reply {
+    const table = HELP_TEXT[command];
+    if (table) return table.map((l) => new Status(l));
     const header = formatMessage(CommandMessages.HELP_HEADER, { command: command.toUpperCase() });
     return [header, ...lines, CommandMessages.HELP_FOOTER_NAME, CommandMessages.HELP_FOOTER_TEXT].map((l) => new Status(l));
   }

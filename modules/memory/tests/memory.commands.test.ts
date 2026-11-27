@@ -41,16 +41,15 @@ async function infoMemory(): Promise<Map<string, string>> {
 }
 
 describe('MEMORY USAGE', () => {
-  it('strings: int, embstr and the expire slot of the kvobj', async () => {
-    // int: robj 16 + embedded key (1 + sdshdr5 1 + 6 + NUL) = 25 → 32, + 16 (keyspace dict entry)
+  it('strings: int and embstr (Redis 7.0: robj + key sds + dict entry; a TTL costs nothing here)', async () => {
+    // int: robj 16 + key sds (hdr5 1 + 6 + NUL → 8) + sizeof(dictEntry) 24
     await t.call('SET', 'mk:int', '12345');
     expect(await t.call('OBJECT', 'ENCODING', 'mk:int')).toBe('int');
     expect(await t.call('MEMORY', 'USAGE', 'mk:int')).toBe(48);
-    // embstr: 16 + key 'mk:e' (7) + sdshdr8 value (3 + 16 + 1) = 43 → 48, + 16
+    // embstr: robj 16 + sdshdr8 value (3 + 16 + 1) = 36 → 48, + key 8 + 24
     await t.call('SET', 'mk:e', 'abcdefghijklmnop');
     expect(await t.call('OBJECT', 'ENCODING', 'mk:e')).toBe('embstr');
-    expect(await t.call('MEMORY', 'USAGE', 'mk:e')).toBe(64);
-    // the same with a TTL: + 8 bytes of expire = 51 → 64, + 16
+    expect(await t.call('MEMORY', 'USAGE', 'mk:e')).toBe(80);
     await t.call('SET', 'mk:e', 'abcdefghijklmnop', 'PX', '100000');
     expect(await t.call('MEMORY', 'USAGE', 'mk:e')).toBe(80);
   });
@@ -96,13 +95,14 @@ describe('MEMORY STATS', () => {
     expect(keys.slice(0, head.length)).toEqual(head);
     expect(keys[head.length]).toBe('db.0');
     expect(keys.slice(head.length + 1)).toEqual([
-      'overhead.db.hashtable.lut', 'overhead.db.hashtable.rehashing', 'overhead.total', 'db.dict.rehashing.count', 'keys.count',
-      'keys.bytes-per-key', 'dataset.bytes', 'dataset.percentage', 'peak.percentage', 'allocator.allocated', 'allocator.active',
-      'allocator.resident', 'allocator.muzzy', 'allocator-fragmentation.ratio', 'allocator-fragmentation.bytes',
+      'overhead.total', 'keys.count', 'keys.bytes-per-key', 'dataset.bytes', 'dataset.percentage', 'peak.percentage',
+      'allocator.allocated', 'allocator.active', 'allocator.resident', 'allocator-fragmentation.ratio', 'allocator-fragmentation.bytes',
       'allocator-rss.ratio', 'allocator-rss.bytes', 'rss-overhead.ratio', 'rss-overhead.bytes', 'fragmentation',
       'fragmentation.bytes',
     ]);
-    expect(stats.get('db.0')).toEqual(['overhead.hashtable.main', expect.any(Number), 'overhead.hashtable.expires', expect.any(Number)]);
+    expect(stats.get('db.0')).toEqual([
+      'overhead.hashtable.main', expect.any(Number), 'overhead.hashtable.expires', expect.any(Number), 'overhead.hashtable.slot-to-keys', 0,
+    ]);
     const n = (k: string): number => Number(stats.get(k));
     // getMemoryOverheadData(): total = overhead + dataset; keys.count = every key of every db
     expect(n('overhead.total') + n('dataset.bytes')).toBe(n('total.allocated'));
@@ -119,7 +119,7 @@ describe('MEMORY STATS', () => {
     await r.send('HELLO', '3');
     const reply = await r.send('MEMORY', 'STATS');
     expect(reply).toMatch(/^%\d+\r\n\$14\r\npeak\.allocated\r\n:\d+\r\n/);
-    expect(reply).toMatch(/\$4\r\ndb\.0\r\n%2\r\n\$23\r\noverhead\.hashtable\.main\r\n:\d+\r\n/);
+    expect(reply).toMatch(/\$4\r\ndb\.0\r\n%3\r\n\$23\r\noverhead\.hashtable\.main\r\n:\d+\r\n/);
     expect(reply).toMatch(/\$13\r\nfragmentation\r\n,[\d.e+-]+\r\n/);
     r.close();
   });
@@ -136,9 +136,11 @@ describe('INFO memory', () => {
   it('agrees with MEMORY STATS and prints Redis fields', async () => {
     const info = await infoMemory();
     const stats = await memoryStats();
-    expect(Number(info.get('used_memory'))).toBe(Number(stats.get('total.allocated')));
+    // the two commands differ only by the caller's own arguments (argv-mem), counted in clients.normal
+    const near = (a: unknown, b: unknown): void => expect(Math.abs(Number(a) - Number(b))).toBeLessThan(64);
+    near(info.get('used_memory'), stats.get('total.allocated'));
     expect(Number(info.get('used_memory_dataset'))).toBe(Number(stats.get('dataset.bytes')));
-    expect(Number(info.get('used_memory_overhead'))).toBe(Number(stats.get('overhead.total')));
+    near(info.get('used_memory_overhead'), stats.get('overhead.total'));
     expect(Number(info.get('used_memory_startup'))).toBe(Number(stats.get('startup.allocated')));
     expect(info.get('used_memory_human')).toMatch(/^\d+(\.\d\d[KMGTPE])?B?$|^\d+\.\d\d[KMGTPE]$/);
     expect(info.get('used_memory_peak_perc')).toMatch(/^\d+\.\d\d%$/);
@@ -157,7 +159,7 @@ describe('INFO memory', () => {
     const info = await infoMemory();
     expect(Number(info.get('used_memory'))).toBeLessThan(high - 190_000);
     expect(Number(info.get('used_memory_peak'))).toBeGreaterThanOrEqual(high);
-    expect(Number(info.get('used_memory_peak_time'))).toBeGreaterThan(0);
+    expect(info.has('used_memory_peak_time')).toBe(false);
   });
 
   it('the peak survives FLUSHDB even when nobody looked at INFO before', async () => {
@@ -278,8 +280,11 @@ describe('DEBUG subcommands', () => {
 
   it('LISTPACK / QUICKLIST / STRINGMATCH-LEN / QUICKLIST-PACKED-THRESHOLD', async () => {
     await t.call('RPUSH', 'dbg:lp', 'a');
-    expect(await t.call('DEBUG', 'LISTPACK', 'dbg:lp')).toBe('Listpack structure printed on stdout');
-    expect(await errOf(t.call('DEBUG', 'QUICKLIST', 'dbg:lp'))).toBe('ERR Not a quicklist encoded object.');
+    await t.call('HSET', 'dbg:h', 'f', 'v');
+    expect(await t.call('DEBUG', 'LISTPACK', 'dbg:h')).toBe('Listpack structure printed on stdout');
+    expect(await t.call('DEBUG', 'QUICKLIST', 'dbg:lp')).toBe('Quicklist structure printed on stdout');
+    expect(await errOf(t.call('DEBUG', 'LISTPACK', 'dbg:lp'))).toBe('ERR Not a listpack encoded object.');
+    expect(await errOf(t.call('DEBUG', 'QUICKLIST', 'dbg:h'))).toBe('ERR Not a quicklist encoded object.');
     expect(await errOf(t.call('DEBUG', 'LISTPACK', 'mk:int'))).toBe('ERR Not a listpack encoded object.');
     expect(await errOf(t.call('DEBUG', 'LISTPACK', 'dbg:none'))).toBe('ERR no such key');
     expect(await t.call('DEBUG', 'STRINGMATCH-LEN')).toBe('Apparently Redis did not crash: test passed');

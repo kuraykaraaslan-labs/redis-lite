@@ -23,9 +23,9 @@ describe('hashes: HSCAN', () => {
     await t.call('HSET', 'h:scan', 'a', '1', 'b', '2', 'c', '3');
     expect(await t.call('HSCAN', 'h:scan', 0)).toEqual(['0', ['a', '1', 'b', '2', 'c', '3']]);
     expect(await t.call('HSCAN', 'h:scan', 0, 'COUNT', 1)).toEqual(['0', ['a', '1', 'b', '2', 'c', '3']]);
-    expect(await t.call('HSCAN', 'h:scan', 0, 'NOVALUES')).toEqual(['0', ['a', 'b', 'c']]);
+    await expect(t.call('HSCAN', 'h:scan', 0, 'NOVALUES')).rejects.toThrow('ERR syntax error');
     expect(await t.call('HSCAN', 'h:scan', 0, 'MATCH', 'b*')).toEqual(['0', ['b', '2']]);
-    expect(await t.call('HSCAN', 'h:scan', 0, 'MATCH', '[ac]', 'NOVALUES')).toEqual(['0', ['a', 'c']]);
+    expect(await t.call('HSCAN', 'h:scan', 0, 'MATCH', '[ac]')).toEqual(['0', ['a', '1', 'c', '3']]);
     expect(await t.call('HSCAN', 'h:scan-missing', 0)).toEqual(['0', []]);
   });
 
@@ -46,17 +46,6 @@ describe('hashes: HSCAN', () => {
     expect(calls).toBeGreaterThan(1);
     expect(seen.size).toBe(600);
     expect(seen.get('f42')).toBe('v42');
-    // NOVALUES on hashtable
-    const keys = new Set<string>();
-    cursor = '0';
-    do {
-      const [next, items] = (await t.call('HSCAN', 'h:scanbig', cursor, 'NOVALUES', 'MATCH', 'f1*')) as [string, string[]];
-      for (const k of items) keys.add(k);
-      cursor = next;
-    } while (cursor !== '0');
-    // f1, f10-f19, f100-f199
-    expect(keys.size).toBe(111);
-    expect([...keys].every((k) => k.startsWith('f1'))).toBe(true);
   });
 
   it('errors', async () => {

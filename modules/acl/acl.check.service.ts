@@ -115,29 +115,7 @@ export default class AclCheckService {
     args: string[],
     categoriesOf: CategoriesOf,
   ): boolean {
-    let allowed = s.allCommands;
-    let firstArgs: string[] = [];
-    let cats: string[] | null = null;
-    let parentCats: string[] | null = null;
-    for (const rule of s.commandRules) {
-      const val = rule[0] === '+';
-      const body = rule.slice(1);
-      if (body[0] === '@') {
-        const cat = body.slice(1);
-        cats ??= AclCheckService.categoriesNormalised(categoriesOf, fullname);
-        if (parent) parentCats ??= AclCheckService.categoriesNormalised(categoriesOf, parent);
-        if (cats.includes(cat) || (parentCats !== null && parentCats.includes(cat))) {
-          allowed = val;
-          firstArgs = [];
-        }
-      } else if (body === fullname || body === parent) {
-        allowed = val;
-        firstArgs = [];
-      } else if (!parent && val) {
-        const bar = body.lastIndexOf('|');
-        if (bar > 0 && body.slice(0, bar) === fullname) firstArgs.push(body.slice(bar + 1));
-      }
-    }
+    const { allowed, firstArgs } = AclCheckService.commandBit(s, fullname, parent, categoriesOf);
     if (allowed) return true;
     if (parent || firstArgs.length === 0 || args.length < 1) return false;
     const first = args[0].toLowerCase();
@@ -180,6 +158,46 @@ export default class AclCheckService {
   // ──────────────────────────────────────────────
   // Public Methods
   // ──────────────────────────────────────────────
+
+  /** A command's bit in the selector's command bitmap, and the first arguments allowed while the bit is off. */
+  static commandBit(
+    s: AclSelector,
+    fullname: string,
+    parent: string | null,
+    categoriesOf: CategoriesOf,
+  ): { allowed: boolean; firstArgs: string[] } {
+    let allowed = s.allCommands;
+    let firstArgs: string[] = [];
+    let cats: string[] | null = null;
+    let parentCats: string[] | null = null;
+    for (const rule of s.commandRules) {
+      const val = rule[0] === '+';
+      const body = rule.slice(1);
+      if (body[0] === '@') {
+        const cat = body.slice(1);
+        cats ??= AclCheckService.categoriesNormalised(categoriesOf, fullname);
+        if (parent) parentCats ??= AclCheckService.categoriesNormalised(categoriesOf, parent);
+        if (cats.includes(cat) || (parentCats !== null && parentCats.includes(cat))) {
+          allowed = val;
+          firstArgs = [];
+        }
+      } else if (body === fullname || body === parent) {
+        allowed = val;
+        firstArgs = [];
+      } else if (!parent && val) {
+        const bar = body.lastIndexOf('|');
+        if (bar > 0 && body.slice(0, bar) === fullname) firstArgs.push(body.slice(bar + 1));
+      }
+    }
+    return { allowed, firstArgs };
+  }
+
+  /** The categories of a command or subcommand, lowercase without '@' (a subcommand also has its parent's). */
+  static categoriesOfCommand(categoriesOf: CategoriesOf, fullname: string): string[] {
+    const bar = fullname.indexOf('|');
+    const own = AclCheckService.categoriesNormalised(categoriesOf, fullname);
+    return bar > 0 ? [...own, ...AclCheckService.categoriesNormalised(categoriesOf, fullname.slice(0, bar))] : own;
+  }
 
   /** Port of Redis stringmatchlen() (case-sensitive glob: * ? [abc] [^a-z] \x). */
   static globMatch(pattern: string, str: string): boolean {
@@ -235,20 +253,18 @@ export default class AclCheckService {
   }
 
   /** Text of an ACL denial (getAclErrorMessage); verbose = ACL DRYRUN wording that names the key / channel. */
-  static denialMessage(denial: AclDenial, username: string, verbose = false): string {
-    switch (denial.reason) {
-      case 'command':
-        return formatMessage(AclMessages.DENIED_COMMAND, { username, object: denial.object });
-      case 'key':
-        return verbose ? formatMessage(AclMessages.DENIED_KEY_VERBOSE, { object: denial.object }) : AclMessages.DENIED_KEY;
-      case 'channel':
-        return verbose ? formatMessage(AclMessages.DENIED_CHANNEL_VERBOSE, { object: denial.object }) : AclMessages.DENIED_CHANNEL;
-    }
+  static denialMessage(denial: AclDenial, form: 'noperm' | 'verbose' | 'script' = 'noperm'): string {
+    const texts = {
+      command: [AclMessages.DENIED_COMMAND, AclMessages.DENIED_COMMAND_VERBOSE, AclMessages.DENIED_COMMAND_SCRIPT],
+      key: [AclMessages.DENIED_KEY, AclMessages.DENIED_KEY_VERBOSE, AclMessages.DENIED_KEY_SCRIPT],
+      channel: [AclMessages.DENIED_CHANNEL, AclMessages.DENIED_CHANNEL_VERBOSE, AclMessages.DENIED_CHANNEL_SCRIPT],
+    }[denial.reason];
+    return formatMessage(texts[form === 'noperm' ? 0 : form === 'verbose' ? 1 : 2], { object: denial.object });
   }
 
   /** The error a client receives when a command is denied. */
-  static noPermError(denial: AclDenial, username: string): string {
-    return formatMessage(AclMessages.NOPERM, { message: AclCheckService.denialMessage(denial, username) });
+  static noPermError(denial: AclDenial): string {
+    return formatMessage(AclMessages.NOPERM, { message: AclCheckService.denialMessage(denial) });
   }
 
   /** ACL CAT: every category, in Redis's order. */

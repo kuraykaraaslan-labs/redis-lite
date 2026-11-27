@@ -34,14 +34,14 @@ describe('PSYNC', () => {
 });
 
 describe('REPLCONF', () => {
-  it('options come in pairs and must be known; ACK carries FACK', () => {
+  it('options come in pairs and must be known; ACK ends the command', () => {
     expect(parse(ReplconfDTO, ['capa', 'eof', 'capa', 'psync2'])).toEqual({
       pairs: [
-        { option: 'capa', value: 'eof', extra: [] },
-        { option: 'capa', value: 'psync2', extra: [] },
+        { option: 'capa', value: 'eof' },
+        { option: 'capa', value: 'psync2' },
       ],
     });
-    expect(parse(ReplconfDTO, ['ACK', '100', 'FACK', '90'])).toEqual({ pairs: [{ option: 'ack', value: '100', extra: ['90'] }] });
+    expect(parse(ReplconfDTO, ['ACK', '100', 'FACK', '90'])).toEqual({ pairs: [{ option: 'ack', value: '100' }] });
     expect(parse(ReplconfDTO, ['listening-port'])).toBe('ERR syntax error');
     expect(parse(ReplconfDTO, ['bogus', '1'])).toBe('ERR Unrecognized REPLCONF option: bogus');
   });

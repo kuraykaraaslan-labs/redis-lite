@@ -1,6 +1,8 @@
 import { AppError } from '@/libs/app-error';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import MemoryService from '@/modules/memory/memory.service';
+import type { StringValue } from '@/modules/memory/memory.types';
 
 import type { KeyInput, KeyValueInput, RangeInput, SetRangeInput } from './strings.dto';
 import StringsMessages from './strings.messages';
@@ -16,16 +18,27 @@ export default class StringsRangeService {
     if (size > ctx.server.config.num('proto-max-bulk-len')) throw new AppError(StringsMessages.STRING_TOO_LONG);
   }
 
+  /** The string value at `key` (undefined when missing; WRONGTYPE for other types). */
+  private static stored(ctx: CommandContext, key: string): StringValue | undefined {
+    if (ctx.db.get(key, 'string') === undefined) return undefined;
+    return ctx.db.raw(key) as StringValue;
+  }
+
   // ──────────────────────────────────────────────
   // Public Methods
   // ──────────────────────────────────────────────
 
   /** APPEND: creates the key when missing; returns the new length. */
   static append(ctx: CommandContext, { key, value }: KeyValueInput): number {
-    const current = ctx.db.get(key, 'string') ?? '';
-    StringsRangeService.checkSize(ctx, current.length + value.length);
-    const next = current + value;
-    ctx.db.set(key, { type: 'string', value: next, raw: true }, true);
+    const prev = StringsRangeService.stored(ctx, key);
+    if (!prev) {
+      // a missing key stores the argument itself, encoded like SET's value
+      ctx.db.set(key, { type: 'string', value }, true);
+      return value.length;
+    }
+    StringsRangeService.checkSize(ctx, prev.value.length + value.length);
+    const next = prev.value + value;
+    ctx.db.set(key, { type: 'string', value: next, raw: true, sds: MemoryService.modifiedString(prev, next.length) }, true);
     return next.length;
   }
 
@@ -65,12 +78,13 @@ export default class StringsRangeService {
 
   /** SETRANGE: overwrites from `offset`, zero-padding a shorter value; an empty value only reports the length. */
   static setRange(ctx: CommandContext, { key, offset, value }: SetRangeInput): number {
-    let current = ctx.db.get(key, 'string') ?? '';
+    const prev = StringsRangeService.stored(ctx, key);
+    let current = prev?.value ?? '';
     if (!value.length) return current.length;
     StringsRangeService.checkSize(ctx, offset + value.length);
     if (current.length < offset) current = current.padEnd(offset, '\0');
     const next = current.slice(0, offset) + value + current.slice(offset + value.length);
-    ctx.db.set(key, { type: 'string', value: next, raw: true }, true);
+    ctx.db.set(key, { type: 'string', value: next, raw: true, sds: MemoryService.modifiedString(prev, next.length) }, true);
     return next.length;
   }
 }

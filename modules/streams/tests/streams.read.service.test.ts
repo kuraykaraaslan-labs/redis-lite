@@ -48,12 +48,11 @@ describe('XREAD', () => {
     expect(await t.call('XREAD', 'STREAMS', 'xrd:dollar', '$')).toBeNull();
   });
 
-  it('+ returns the last entry', async () => {
+  it('+ is an invalid id (Redis 7.0 has no XREAD +)', async () => {
     await t.call('XADD', 'xrd:plus', '1-0', 'f', '1');
-    await t.call('XADD', 'xrd:plus', '2-0', 'f', '2');
-    expect(await t.call('XREAD', 'STREAMS', 'xrd:plus', '+')).toEqual([['xrd:plus', [['2-0', ['f', '2']]]]]);
-    expect(await t.call('XREAD', 'COUNT', 10, 'STREAMS', 'xrd:plus', '+')).toEqual([['xrd:plus', [['2-0', ['f', '2']]]]]);
-    expect(await t.call('XREAD', 'STREAMS', 'xrd:plus-missing', '+')).toBeNull();
+    const invalid = 'ERR Invalid stream ID specified as stream command argument';
+    await expect(t.call('XREAD', 'STREAMS', 'xrd:plus', '+')).rejects.toThrow(invalid);
+    await expect(t.call('XREAD', 'STREAMS', 'xrd:plus-missing', '+')).rejects.toThrow(invalid);
   });
 
   it('BLOCK wakes up on XADD from another client', async () => {
@@ -113,10 +112,10 @@ describe('XREAD', () => {
   it('errors', async () => {
     await t.call('XADD', 'xrd:e', '1-0', 'f', 'v');
     expect.soft(await err(t.call('XREAD', 'COUNT', 1, 'STREAMS', 'xrd:e'))).toBe(
-      "ERR Unbalanced 'xread' list of streams: for each stream key an ID or '$' must be specified.",
+      "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
     );
     expect.soft(await err(t.call('XREAD', 'STREAMS', 'xrd:e', 'xrd:e2', '0'))).toBe(
-      "ERR Unbalanced 'xread' list of streams: for each stream key an ID or '$' must be specified.",
+      "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
     );
     expect.soft(await err(t.call('XREAD', 'COUNT', 1, 'xrd:e', '0'))).toBe('ERR syntax error');
     expect.soft(await err(t.call('XREAD', 'COUNT', 'x', 'STREAMS', 'xrd:e', '0'))).toBe(NOT_INT);
@@ -262,7 +261,7 @@ describe('XREADGROUP', () => {
       'ERR The $ ID is meaningless in the context of XREADGROUP: you want to read the history of this consumer by specifying a proper ID, or use the > ID to get new messages. The $ ID would just return an empty result set.',
     );
     expect.soft(await err(t.call('XREADGROUP', 'GROUP', 'g', 'c', 'COUNT', 1, 'STREAMS', 'xrg:e'))).toBe(
-      "ERR Unbalanced 'xreadgroup' list of streams: for each stream key an ID or '>' must be specified.",
+      "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
     );
     expect.soft(await err(t.call('XREADGROUP', 'COUNT', 1, 'BLOCK', 10, 'STREAMS', 'xrg:e', '>'))).toBe('ERR Missing GROUP option for XREADGROUP');
     expect.soft(await err(t.call('XREADGROUP', 'GROUP', 'g', 'c', 'STREAMS', 'xrg:e', 'bad'))).toBe(INVALID_ID);

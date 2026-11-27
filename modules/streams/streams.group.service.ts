@@ -1,14 +1,15 @@
 import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
-import { OK, Status } from '@/libs/resp';
+import { OK } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
+import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 
 import type { XGroupInput } from './streams.dto';
 import StreamsMessages from './streams.messages';
 import { Stream, ZERO_ID, getOrCreateConsumer } from './streams.structure';
-import type { ConsumerGroup, StreamId, StreamIdToken } from './streams.types';
+import type { Consumer, ConsumerGroup, StreamId, StreamIdToken } from './streams.types';
 
 /** Consumer group management: XGROUP CREATE, SETID, DESTROY, CREATECONSUMER, DELCONSUMER, HELP. */
 export default class StreamsGroupService {
@@ -32,8 +33,8 @@ export default class StreamsGroupService {
       ctx.db.set(key, { type: 'stream', value: s });
     }
     if (group) throw new AppError(StreamsMessages.BUSYGROUP);
-    const read = entriesRead !== undefined ? entriesRead : id.kind === 'last' ? s.entriesAdded : null;
-    s.groups.set(groupName, { name: groupName, lastId, entriesRead: read, pending: new Map(), consumers: new Map() });
+    // without ENTRIESREAD the counter is unknown, `$` included (Redis 7.0)
+    s.groups.set(groupName, { name: groupName, lastId, entriesRead: entriesRead ?? null, pending: new Map(), consumers: new Map() });
     return OK;
   }
 
@@ -41,10 +42,22 @@ export default class StreamsGroupService {
   // Public Methods
   // ──────────────────────────────────────────────
 
+  /**
+   * The group's consumer `name` for XREADGROUP / XCLAIM / XAUTOCLAIM: created when missing, with the
+   * `xgroup-createconsumer` keyspace event of stream `key`.
+   */
+  static consumer(ctx: CommandContext, key: string, g: ConsumerGroup, name: string): Consumer {
+    const existing = g.consumers.get(name);
+    if (existing) return existing;
+    const c = getOrCreateConsumer(g, name);
+    ctx.server.notify(ctx.client.dbIndex, [{ cls: 't', event: 'xgroup-createconsumer', key }]);
+    return c;
+  }
+
   /** XGROUP: the key must exist (unless CREATE … MKSTREAM) and, except for CREATE and DESTROY, the group too. */
   static group(ctx: CommandContext, input: XGroupInput): Reply {
     const { sub, key, group: groupName, mkStream, entriesRead, consumer: consumerName } = input;
-    if (sub === 'help') return StreamsMessages.XGROUP_HELP.map((line) => new Status(line));
+    if (sub === 'help') return CommandService.helpReply('xgroup');
     const s = ctx.db.get(key, 'stream');
     const g = s?.groups.get(groupName);
     if (!mkStream) {

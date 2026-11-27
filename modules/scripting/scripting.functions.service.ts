@@ -83,10 +83,10 @@ export default class ScriptingFunctionsService {
   // ──────────────────────────────────────────────
 
   /** FCALL / FCALL_RO (`readOnly`). */
-  static fcall(ctx: CommandContext, { name, keys, argv }: FcallInput, readOnly = false): HandlerResult {
+  static fcall(ctx: CommandContext, { name, keys, argv, numKeysError }: FcallInput, readOnly = false): HandlerResult {
     const command = [ctx.name ?? 'FCALL', name, String(keys.length), ...keys, ...argv];
     const call = { client: ctx.client, command, readOnly, topLevel: !ctx.noBlock && !ctx.inScript };
-    return ctx.server.lua.callFunction(call, name, keys, argv);
+    return ctx.server.lua.callFunction(call, name, keys, argv, numKeysError);
   }
 
   /** FUNCTION <subcommand>. */

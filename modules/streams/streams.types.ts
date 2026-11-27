@@ -48,13 +48,12 @@ export interface StreamNode {
 
 /**
  * An id argument whose validity is reported only once the key (and group) were checked, because Redis checks them
- * first: `$` (last), `>` (new), `+` (max), a well-formed id, or a malformed one (reported as an invalid stream ID).
+ * first: `$` (last), `>` (new), a well-formed id, or a malformed one (reported as an invalid stream ID).
  */
 export type StreamIdToken =
   | { kind: 'id'; id: StreamId }
   | { kind: 'last' }
   | { kind: 'new' }
-  | { kind: 'max' }
   | { kind: 'invalid' };
 
 /** XCLAIM's IDLE (relative to now) or TIME (absolute, ms) option; the last one given wins. */

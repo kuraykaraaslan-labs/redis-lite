@@ -4,7 +4,6 @@ import { OK } from '@/libs/resp';
 import type { Status } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
-import HashesService from '@/modules/hashes/hashes.service';
 import type { DecodedObject, RdbOptions } from '@/modules/persistence/persistence.types';
 import PersistenceService from '@/modules/persistence/persistence.service';
 
@@ -24,8 +23,6 @@ export default class KeysDumpService {
       hashMaxListpackEntries: c.num('hash-max-listpack-entries'),
       hashMaxListpackValue: c.num('hash-max-listpack-value'),
       setMaxIntsetEntries: c.num('set-max-intset-entries'),
-      setMaxListpackEntries: c.num('set-max-listpack-entries'),
-      setMaxListpackValue: c.num('set-max-listpack-value'),
       zsetMaxListpackEntries: c.num('zset-max-listpack-entries'),
       zsetMaxListpackValue: c.num('zset-max-listpack-value'),
       listMaxListpackSize: c.num('list-max-listpack-size'),
@@ -41,12 +38,11 @@ export default class KeysDumpService {
     return new AppError(KeysMessages.BAD_DATA_FORMAT);
   }
 
-  /** DUMP: the serialized value (binary string), or nil for a missing key. Hash field TTLs are included. */
+  /** DUMP: the serialized value (binary string), or nil for a missing key. */
   static dump(ctx: CommandContext, { key }: KeyInput): string | null {
     const v = ctx.db.lookup(key);
     if (!v) return null;
-    const ttl = v.type === 'hash' ? HashesService.hashFieldExpires(v.value) : undefined;
-    return PersistenceService.dumpPayload(v, KeysDumpService.rdbOptions(ctx), ttl).toString('latin1');
+    return PersistenceService.dumpPayload(v, KeysDumpService.rdbOptions(ctx)).toString('latin1');
   }
 
   /** RESTORE: creates the key from a DUMP payload; a TTL already in the past just deletes the key. */
@@ -63,13 +59,14 @@ export default class KeysDumpService {
     // a relative TTL that overflows int64 once added to the clock wraps into the past, as in Redis
     const sum = ttl.value === 0n ? undefined : absolute ? ttl.value : BigInt(Date.now()) + ttl.value;
     const at = sum === undefined ? undefined : sum > INT64_MAX ? -1 : Number(sum);
+    const exact = sum !== undefined && sum <= INT64_MAX ? sum : undefined;
     if (at !== undefined && at <= Date.now()) {
       ctx.db.remove(key);
       return OK;
     }
+    if (value.type === 'list') value.value.adopt(ctx.server.config.num('list-max-listpack-size'), ctx.server.config.num('list-compress-depth'));
     ctx.db.set(key, value);
-    if (value.type === 'hash' && decoded.fieldExpires) HashesService.setHashFieldExpires(value.value, decoded.fieldExpires);
-    if (at !== undefined) ctx.db.setExpire(key, at);
+    if (at !== undefined) ctx.db.setExpire(key, at, exact);
     // IDLETIME applies under LRU-style policies, FREQ under LFU, like Redis's objectSetLRUOrLFU.
     if (idle !== null && !ctx.server.config.lfu) ctx.db.setIdle(key, idle);
     if (freq !== null && ctx.server.config.lfu) ctx.db.setFrequency(key, freq);

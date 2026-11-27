@@ -22,7 +22,6 @@ import { Persistence } from '@/modules/persistence/persistence.service';
 import type { Propagator } from '@/modules/persistence/persistence.service';
 import { Replication } from '@/modules/replication/replication.service';
 import { LuaEngine } from '@/modules/scripting/scripting.engine';
-import { LabelIndex } from '@/modules/timeseries/timeseries.index.structure';
 import { Tracking } from '@/modules/tracking/tracking.service';
 
 import { ServerAccess } from './server.access';
@@ -89,8 +88,6 @@ export class RedisLiteServer {
   /** used_memory_peak and the unix time (s) it was reached. */
   memoryPeak = 0;
   memoryPeakTime = 0;
-  /** The time series label index of every database (kept up to date by each Database's change hook). */
-  readonly labelIndex = new LabelIndex();
   /** Extension points for DEBUG subcommands implemented elsewhere. */
   readonly debugHooks: DebugHooks = {};
 
@@ -179,9 +176,9 @@ export class RedisLiteServer {
     return address;
   }
 
-  /** CONFIG SET port (see ServerListener.rebind). */
-  rebind(port: number): void {
-    this.listener.rebind(port, this.closing !== null);
+  /** CONFIG SET port / bind (see ServerListener.rebind). */
+  rebind(port: number, host = this.options.host): void {
+    this.listener.rebind(port, this.closing !== null, host);
   }
 
   /** True once close() / SHUTDOWN started. */
@@ -424,11 +421,6 @@ export class RedisLiteServer {
   /** Publishes keyspace / keyevent messages for events in database `dbIndex` (an event may name another db). */
   notify(dbIndex: number, events: readonly KeyEvent[]): void {
     this.keyspace.notify(dbIndex, events);
-  }
-
-  /** Hash fields expired lazily (hash field TTL): `hexpired`, plus `del` when the hash is gone. */
-  fieldsExpired(dbIndex: number, key: string, keyDeleted: boolean): void {
-    this.keyspace.fieldsExpired(dbIndex, key, keyDeleted);
   }
 
   /** FLUSHDB / FLUSHALL: empties the databases (see ServerKeyspace.flushDatabases). */

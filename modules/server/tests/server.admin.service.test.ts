@@ -5,7 +5,7 @@ import { useServer, waitFor } from '@/tests/helpers';
 import { errOf } from './server.test_helpers';
 
 /**
- * Administration commands (TIME, LASTSAVE, SAVE, BGSAVE, ROLE, WAIT, WAITAOF), with DEBUG and LOLWUT.
+ * Administration commands (TIME, LASTSAVE, SAVE, BGSAVE, ROLE, WAIT), with DEBUG and LOLWUT.
  * Expected values follow Redis Open Source 8.x behaviour (redis.io docs and the Redis source error strings).
  */
 const t = useServer();
@@ -53,7 +53,7 @@ describe('TIME / LASTSAVE / SAVE / BGSAVE / ROLE / DEBUG / LOLWUT', () => {
 
   it('LOLWUT ends with the Redis version', async () => {
     const out = String(await t.call('LOLWUT'));
-    expect.soft(out).toMatch(/Redis ver\. 8\.\d+\.\d+/);
+    expect.soft(out).toBe('Redis ver. 7.0.15\n');
     expect.soft(String(await t.call('LOLWUT', 'VERSION', '5'))).toContain('Redis ver.');
     const r = await t.raw();
     await r.send('HELLO', '3');
@@ -61,20 +61,12 @@ describe('TIME / LASTSAVE / SAVE / BGSAVE / ROLE / DEBUG / LOLWUT', () => {
   });
 });
 
-describe('WAIT / WAITAOF', () => {
+describe('WAIT', () => {
   it('WAIT with no replicas returns 0', async () => {
     expect.soft(await t.call('WAIT', '0', '0')).toBe(0);
     expect.soft(await t.call('WAIT', '1', '10')).toBe(0);
     expect.soft(await errOf(t.call('WAIT', '0', '-1'))).toBe('ERR timeout is negative');
     expect.soft(await errOf(t.call('WAIT', 'abc', '0'))).toBe('ERR value is not an integer or out of range');
     expect.soft(await errOf(t.call('WAIT', '0'))).toBe("ERR wrong number of arguments for 'wait' command");
-  });
-
-  it('WAITAOF', async () => {
-    expect.soft(await t.call('WAITAOF', '0', '0', '0')).toEqual([0, 0]);
-    expect.soft(await errOf(t.call('WAITAOF', '1', '0', '0'))).toBe(
-      'ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled.',
-    );
-    expect.soft(await errOf(t.call('WAITAOF', '0', '0'))).toBe("ERR wrong number of arguments for 'waitaof' command");
   });
 });

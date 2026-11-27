@@ -15,6 +15,7 @@ export default class DatabaseService {
   static listpackSize = DatabaseEncodingService.listpackSize.bind(DatabaseEncodingService);
   static updateEncoding = DatabaseEncodingService.updateEncoding.bind(DatabaseEncodingService);
   static objectEncoding = DatabaseEncodingService.objectEncoding.bind(DatabaseEncodingService);
+  static knownEncoding = DatabaseEncodingService.knownEncoding.bind(DatabaseEncodingService);
   static copyEncoding = DatabaseEncodingService.copyEncoding.bind(DatabaseEncodingService);
   static isCompact = DatabaseEncodingService.isCompact.bind(DatabaseEncodingService);
 

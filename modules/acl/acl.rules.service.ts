@@ -233,8 +233,10 @@ export default class AclRulesService {
       u.enabled = false;
     } else if (lower === 'skip-sanitize-payload') {
       u.skipSanitizePayload = true;
+      u.sanitizePayload = false;
     } else if (lower === 'sanitize-payload') {
       u.skipSanitizePayload = false;
+      u.sanitizePayload = true;
     } else if (lower === 'nopass') {
       u.nopass = true;
       u.passwords = [];

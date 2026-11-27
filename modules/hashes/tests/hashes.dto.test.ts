@@ -4,7 +4,7 @@ import type { z } from 'zod';
 
 import { firstIssue } from '@/libs/schemas';
 
-import { HExpireCmdDTO, HGetExDTO, HRandFieldDTO, HSetCmdDTO, HSetExDTO } from '../hashes.dto';
+import { HRandFieldDTO, HScanDTO, HSetCmdDTO } from '../hashes.dto';
 
 /**
  * Unit tests of the stateless argument grammar (no server): parsed shapes and which error wins.
@@ -24,39 +24,10 @@ describe('HSetCmdDTO', () => {
   });
 });
 
-describe('FIELDS clause', () => {
-  it('FIELDS position, numfields, then the count', () => {
-    expect(parse(HExpireCmdDTO, ['h', '10', 'NX', 'FIELDS', '1', 'f'])).toMatchObject({ condition: 'nx', fields: ['f'] });
-    expect(parse(HExpireCmdDTO, ['h', '10', 'FOO', 'FIELDS', '1', 'f'])).toBe(
-      'ERR Mandatory argument FIELDS is missing or not at the right position',
-    );
-    expect(parse(HExpireCmdDTO, ['h', '10', 'FIELDS', '0', 'f'])).toBe('ERR Number of fields must be a positive integer');
-    expect(parse(HExpireCmdDTO, ['h', '10', 'FIELDS', '2', 'f'])).toBe(
-      'ERR The `numfields` parameter must match the number of arguments',
-    );
-    expect(parse(HExpireCmdDTO, ['h', '-1', 'FIELDS', 'x'])).toBe('ERR invalid expire time, must be >= 0');
-  });
-});
-
-describe('HGetExDTO / HSetExDTO', () => {
-  it('expiry values: integer first, then positive (worded for hgetex)', () => {
-    expect(parse(HGetExDTO, ['h', 'EX', 'x', 'FIELDS', '1', 'f'])).toBe('ERR value is not an integer or out of range');
-    expect(parse(HSetExDTO, ['h', 'PX', '0', 'FIELDS', '1', 'f', 'v'])).toBe("ERR invalid expire time in 'hgetex' command");
-  });
-
-  it('HSETEX refuses conflicts where they stand', () => {
-    expect(parse(HSetExDTO, ['h', 'FNX', 'FXX', 'EX', '0'])).toBe('ERR Only one of FXX or FNX arguments can be specified');
-    expect(parse(HSetExDTO, ['h', 'KEEPTTL', 'EX', '10', 'FNX', 'FXX'])).toBe(
-      'ERR Only one of EX, PX, EXAT, PXAT or KEEPTTL arguments can be specified',
-    );
-    expect(parse(HSetExDTO, ['h', 'fnx', 'keepttl', 'FIELDS', '1', 'f', 'v'])).toEqual({
-      key: 'h',
-      fnx: true,
-      fxx: false,
-      keepTtl: true,
-      at: null,
-      pairs: ['f', 'v'],
-    });
+describe('HScanDTO', () => {
+  it('MATCH and COUNT only (no NOVALUES in Redis 7.0)', () => {
+    expect(parse(HScanDTO, ['h', '0', 'MATCH', 'a*', 'COUNT', '5'])).toEqual({ key: 'h', cursor: 0, match: 'a*', count: 5 });
+    expect(parse(HScanDTO, ['h', '0', 'NOVALUES'])).toBe('ERR syntax error');
   });
 });
 

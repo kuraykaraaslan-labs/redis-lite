@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import MemoryService from '../memory.service';
 
-const { dictBuckets, jemallocSize, keyOverhead, kvobjAllocSize, sdsAllocSize, sdsReqType } = MemoryService;
+const { dictBuckets, embstrAllocSize, jemallocSize, keyAllocSize, sdsAllocSize, sdsReqType } = MemoryService;
 
 describe('jemallocSize', () => {
   it('rounds to jemalloc size classes', () => {
@@ -46,13 +46,13 @@ describe('sds', () => {
   });
 });
 
-describe('kvobj / key overhead', () => {
-  it('embeds the key (and expire slot) in the value object', () => {
-    expect(keyOverhead('foo')).toBe(6); // 1 + hdr5 1 + 3 + NUL
-    expect(keyOverhead('foo', true)).toBe(14);
-    expect(kvobjAllocSize('foo', false)).toBe(32); // 16 + 6 = 22 -> 32 (no 24-byte class)
-    expect(kvobjAllocSize('foo', false, 3)).toBe(32); // + sdshdr8 3 + 3 + 1 = 29
-    expect(kvobjAllocSize('foo', true, 3)).toBe(48); // 37
+describe('keys and embstr objects (Redis 7.0)', () => {
+  it('the key is its own sds; an embstr holds robj + sdshdr8 + bytes + NUL', () => {
+    expect(keyAllocSize('foo')).toBe(8); // hdr5 1 + 3 + NUL
+    expect(keyAllocSize('k'.repeat(40))).toBe(48); // hdr8 3 + 40 + 1 = 44
+    expect(keyAllocSize('')).toBe(8); // empty: hdr8
+    expect(embstrAllocSize(5)).toBe(32); // 16 + 3 + 5 + 1 = 25
+    expect(embstrAllocSize(44)).toBe(64);
   });
 });
 

@@ -116,7 +116,7 @@ export default class ServerAclService {
     if (!meta) throw new AppError(formatMessage(AclMessages.COMMAND_NOT_FOUND, { name: argv[0] }));
     if (!CommandService.arityOk(meta.arity, argv.length)) throw new AppError(wrongArity(meta.fullname));
     const denial = ctx.server.aclCheckUser(user, argv, meta);
-    return denial ? AclService.denialMessage(denial, user.name, true) : OK;
+    return denial ? AclService.denialMessage(denial, 'verbose') : OK;
   }
 
   static genPass(_ctx: CommandContext, { bits }: AclGenPassInput): Reply {

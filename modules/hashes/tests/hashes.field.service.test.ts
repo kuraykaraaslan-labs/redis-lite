@@ -164,15 +164,6 @@ describe('hashes: basic', () => {
       ['HSCAN', 'h:wt', 0],
       ['HRANDFIELD', 'h:wt'],
       ['HRANDFIELD', 'h:wt', 2],
-      ['HEXPIRE', 'h:wt', 10, 'FIELDS', 1, 'a'],
-      ['HPEXPIRE', 'h:wt', 10, 'FIELDS', 1, 'a'],
-      ['HTTL', 'h:wt', 'FIELDS', 1, 'a'],
-      ['HPTTL', 'h:wt', 'FIELDS', 1, 'a'],
-      ['HEXPIRETIME', 'h:wt', 'FIELDS', 1, 'a'],
-      ['HPERSIST', 'h:wt', 'FIELDS', 1, 'a'],
-      ['HGETDEL', 'h:wt', 'FIELDS', 1, 'a'],
-      ['HGETEX', 'h:wt', 'FIELDS', 1, 'a'],
-      ['HSETEX', 'h:wt', 'FIELDS', 1, 'a', 'b'],
     ]);
   });
 
@@ -190,7 +181,7 @@ describe('hashes: basic', () => {
 });
 
 describe('hashes: encodings', () => {
-  it('listpack → hashtable by entries and by value size; listpackex with TTLs', async () => {
+  it('listpack → hashtable by entries and by value size', async () => {
     await t.call('HSET', 'h:enc1', 'a', '1');
     expect(await enc('h:enc1')).toBe('listpack');
     await t.call('HSET', 'h:enc1', ...Array.from({ length: 511 }, (_, i) => [`f${i}`, 'v']).flat());
@@ -204,10 +195,5 @@ describe('hashes: encodings', () => {
     expect(await enc('h:enc2')).toBe('hashtable');
     await t.call('HSET', 'h:enc3', 'f'.repeat(65), '1');
     expect(await enc('h:enc3')).toBe('hashtable');
-    await t.call('HSET', 'h:enc4', 'a', '1');
-    await t.call('HPEXPIRE', 'h:enc4', 100000, 'FIELDS', 1, 'a');
-    expect(await enc('h:enc4')).toBe('listpackex');
-    await t.call('HSETEX', 'h:enc5', 'EX', 100, 'FIELDS', 1, 'a', '1');
-    expect(await enc('h:enc5')).toBe('listpackex');
   });
 });

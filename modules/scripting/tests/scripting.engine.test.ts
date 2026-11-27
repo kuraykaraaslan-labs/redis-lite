@@ -57,8 +57,8 @@ describe('sandbox', () => {
     }
   });
 
-  it('os.clock is available', async () => {
-    expect(await evalLua('return type(os.clock())')).toBe('number');
+  it('os is not available (Redis 7.0)', async () => {
+    expect(await errorOf(evalLua('return type(os)'))).toMatch(/nonexistent global variable 'os'/);
   });
 
   it('standard libraries that are loaded', async () => {

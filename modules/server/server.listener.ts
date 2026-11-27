@@ -46,14 +46,15 @@ export class ServerListener {
   /**
    * CONFIG SET port: listen on the new port, then close the old listener (its open connections stay). Port 0 stops
    * listening on TCP, as in Redis. Binding is asynchronous here: when the new port cannot be bound, the old listener
-   * stays and `port` goes back to the port still in use.
+   * stays and `port` goes back to the port still in use. CONFIG SET bind moves the listener to the new address the same way.
    */
-  rebind(port: number, closing: boolean): void {
+  rebind(port: number, closing: boolean, host: string): void {
     const server = this.server;
     const old = this.net;
-    if (!old || closing || port === server.options.port) return;
+    if (!old || closing || (port === server.options.port && host === server.options.host)) return;
     const previous = server.options.port;
     server.options.port = port;
+    server.options.host = host;
     if (port === 0) {
       this.net = null;
       old.close();
@@ -66,7 +67,7 @@ export class ServerListener {
       server.config.set('port', String(previous));
       server.log('warn', '[ServerListener.rebind] unable to listen on the new port', { port, error: String(error) });
     });
-    net.listen(port, server.options.host, () => {
+    net.listen(port, host, () => {
       if (this.net !== old || server.isClosing()) {
         net.close();
         return;

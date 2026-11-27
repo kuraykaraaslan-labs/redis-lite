@@ -86,7 +86,6 @@ export abstract class ReplicationState {
       capaEof: false,
       capaPsync2: false,
       ackOffset: 0,
-      aofAckOffset: -1,
       ackTime: Date.now(),
       psync: true,
       pendingSync: null,

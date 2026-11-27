@@ -26,8 +26,6 @@ export class Database {
   /** Random sampling of all keys / keys with a TTL (eviction). */
   private allKeys = new KeySampler();
   private volatileKeys = new KeySampler();
-  /** False while a client with CLIENT NO-TOUCH runs a command. */
-  touchOnRead = true;
 
   constructor(
     private readonly onExpired: (key: string) => void,
@@ -101,7 +99,7 @@ export class Database {
   /** The value, or undefined when missing or expired (an expired key is deleted on access). Updates LRU/LFU. */
   lookup(key: string): RedisValue | undefined {
     const v = this.peek(key);
-    if (v && this.touchOnRead) this.recordAccess(key);
+    if (v) this.recordAccess(key);
     return v;
   }
 
@@ -177,8 +175,13 @@ export class Database {
     return at === undefined ? undefined : (this.farExpires.get(key) ?? BigInt(at));
   }
 
-  /** Sets the absolute expiry `at` (ms); `exact` keeps the precise int64 when `at` is past 2^53. */
-  setExpire(key: string, at: number, exact?: bigint): void {
+  /**
+   * Sets the absolute expiry `at` (ms); `exact` (or `at` given as a bigint) keeps the precise int64 when `at` is past
+   * 2^53.
+   */
+  setExpire(key: string, when: number | bigint, exactWhen?: bigint): void {
+    const at = Number(when);
+    const exact = typeof when === 'bigint' ? when : exactWhen;
     this.expires.set(key, at);
     if (exact !== undefined && !Number.isSafeInteger(at)) this.farExpires.set(key, exact);
     else this.farExpires.delete(key);

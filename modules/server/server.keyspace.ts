@@ -4,7 +4,6 @@ import type { Reply } from '@/libs/resp';
 import type { CommandMeta } from '@/modules/command/command.types';
 import type { Database } from '@/modules/database/database.service';
 import DatabaseService from '@/modules/database/database.service';
-import HashesService from '@/modules/hashes/hashes.service';
 import NotificationsService from '@/modules/notifications/notifications.service';
 import type { KeyEvent, NotifyFlags } from '@/modules/notifications/notifications.types';
 import TrackingService from '@/modules/tracking/tracking.service';
@@ -14,7 +13,7 @@ import type { RedisLiteServer } from './server.core';
 import type { KeyState } from './server.types';
 import { ServerWatches } from './server.watch';
 
-/** Element count of a value (stream entries, list / set / hash / zset elements, time series samples, string bytes). */
+/** Element count of a value (stream entries, list / set / hash / zset elements, string bytes). */
 function valueSize(v: RedisValue | undefined): number {
   if (!v) return 0;
   switch (v.type) {
@@ -27,8 +26,6 @@ function valueSize(v: RedisValue | undefined): number {
       return v.value.size;
     case 'stream':
       return v.value.length;
-    case 'timeseries':
-      return v.value.totalSamples;
   }
 }
 
@@ -61,8 +58,7 @@ export class ServerKeyspace {
     server.memoryModel.tracker.changed(dbIndex, key);
     TrackingService.invalidate(server.tracking, key, server.tracking.current);
     const value = server.databases[dbIndex]?.peek(key);
-    if (value) server.memoryModel.markAllocated(dbIndex);
-    if (value) DatabaseService.updateEncoding(value, server.config, value.type === 'hash' && HashesService.hashHasFieldTtl(value.value));
+    if (value) DatabaseService.updateEncoding(value, server.config);
     this.watches.touched(dbIndex, key);
     server.blocking.keyChanged(dbIndex, key);
   }
@@ -86,14 +82,6 @@ export class ServerKeyspace {
     this.notify(dbIndex, [{ cls: 'e', event: 'evicted', key }]);
     this.watches.touched(dbIndex, key);
     TrackingService.invalidate(server.tracking, key, null);
-  }
-
-  /** Hash fields expired lazily (hash field TTL): `hexpired`, plus `del` when the hash is gone. */
-  fieldsExpired(dbIndex: number, key: string, keyDeleted: boolean): void {
-    this.server.memoryModel.tracker.changed(dbIndex, key);
-    const events: KeyEvent[] = [{ cls: 'h', event: 'hexpired', key }];
-    if (keyDeleted) events.push({ cls: 'g', event: 'del', key });
-    this.notify(dbIndex, events);
   }
 
   /**

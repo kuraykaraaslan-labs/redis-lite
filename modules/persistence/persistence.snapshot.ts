@@ -4,13 +4,10 @@ import { join } from 'node:path';
 
 import { formatMessage } from '@/libs/message-format';
 
-import HashesService from '@/modules/hashes/hashes.service';
-import type { RedisValue } from '@/modules/database/database.types';
-
 import PersistenceMessages from './persistence.messages';
 import PersistenceService from './persistence.service';
 import { PersistenceState } from './persistence.state';
-import type { BgsaveJob, FieldExpires, LoadResult, LoadedKeys, RdbDatabase, RdbFile, RdbKeyEntry, Snapshot } from './persistence.types';
+import type { BgsaveJob, LoadResult, LoadedKeys, RdbDatabase, RdbFile, RdbKeyEntry, Snapshot } from './persistence.types';
 
 /**
  * RDB layer of the persistence runtime: the point-in-time snapshot of the dataset, loading an RDB image into the
@@ -24,39 +21,19 @@ export abstract class PersistenceSnapshot extends PersistenceState {
   // Snapshot
   // ──────────────────────────────────────────────
 
-  /** The dataset as RDB entries: live keys with TTLs, hash field TTLs (expired fields dropped), LRU/LFU info. */
+  /** The dataset as RDB entries: live keys with TTLs, LRU/LFU info. */
   snapshot(): Snapshot {
-    const now = Date.now();
     const policy = this.cfg('maxmemory-policy');
     const lfu = policy.includes('lfu');
     const lru = policy.includes('lru');
     const dbs: RdbDatabase[] = this.host.databases.map((db) => {
       const out: RdbDatabase = new Map();
       for (const key of db.keys()) {
-        let value = db.peek(key);
+        const value = db.peek(key);
         if (!value) continue;
         const entry: RdbKeyEntry = { value };
         const at = db.getExpire(key);
         if (at !== undefined) entry.expireAt = at;
-        if (value.type === 'hash') {
-          const ttl = HashesService.hashFieldExpires(value.value);
-          if (ttl) {
-            const live: FieldExpires = new Map();
-            let expired = false;
-            for (const [f, t] of ttl) {
-              if (!value.value.has(f)) continue;
-              if (t <= now) expired = true;
-              else live.set(f, t);
-            }
-            if (expired) {
-              const h = new Map([...value.value].filter(([f]) => (ttl.get(f) ?? Infinity) > now));
-              if (!h.size) continue;
-              value = { type: 'hash', value: h };
-              entry.value = value;
-            }
-            if (live.size) entry.fieldExpires = live;
-          }
-        }
         if (lfu) entry.freq = db.frequency(key);
         else if (lru) entry.idle = db.idleSeconds(key);
         out.set(key, entry);
@@ -104,6 +81,8 @@ export abstract class PersistenceSnapshot extends PersistenceState {
     }
     const now = Date.now();
     const lfu = this.cfg('maxmemory-policy').includes('lfu');
+    const fill = Number(this.cfg('list-max-listpack-size', '-2'));
+    const compress = Number(this.cfg('list-compress-depth', '0'));
     let keysLoaded = 0;
     let keysExpired = 0;
     file.dbs.forEach((entries, i) => {
@@ -113,24 +92,8 @@ export abstract class PersistenceSnapshot extends PersistenceState {
           keysExpired++;
           continue;
         }
-        let value: RedisValue = e.value;
-        let fields = e.fieldExpires;
-        if (value.type === 'hash' && fields && !preamble) {
-          const h = value.value;
-          const live: FieldExpires = new Map();
-          for (const [f, t] of fields) {
-            if (t <= now) h.delete(f);
-            else live.set(f, t);
-          }
-          fields = live;
-          if (!h.size) {
-            keysExpired++;
-            continue;
-          }
-          value = { type: 'hash', value: h };
-        }
-        db.set(key, value);
-        if (value.type === 'hash' && fields && fields.size) HashesService.setHashFieldExpires(value.value, fields);
+        if (e.value.type === 'list') e.value.value.adopt(fill, compress);
+        db.set(key, e.value);
         if (e.expireAt !== undefined) db.setExpire(key, e.expireAt);
         if (lfu && e.freq !== undefined) db.setFrequency(key, e.freq);
         else if (!lfu && e.idle !== undefined) db.setIdle(key, e.idle);

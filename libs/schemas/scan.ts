@@ -10,13 +10,12 @@ import { IntegerSchema } from './number';
 export const ScanCursorSchema = z.string().transform((raw, ctx) => parseScanCursor(raw) ?? reject(ctx, RespMessages.INVALID_CURSOR));
 
 /**
- * `[MATCH pattern] [COUNT n] [TYPE type] [NOVALUES]`, in any order and case. An option missing its value, an unknown
+ * `[MATCH pattern] [COUNT n] [TYPE type]`, in any order and case. An option missing its value, an unknown
  * option or COUNT < 1 is a syntax error; a non-integer COUNT is `ERR value is not an integer…`.
  */
 export const ScanOptionsSchema = z.array(z.string()).transform((options, ctx) => {
   let match = '*';
   let type: string | null = null;
-  let noValues = false;
   let count = 10;
   for (let i = 0; i < options.length; i++) {
     const opt = options[i].toLowerCase();
@@ -27,10 +26,9 @@ export const ScanOptionsSchema = z.array(z.string()).transform((options, ctx) =>
       if (parsed.data < 1) return reject(ctx, RespMessages.SYNTAX);
       count = parsed.data;
     } else if (opt === 'type' && i + 1 < options.length) type = options[++i].toLowerCase();
-    else if (opt === 'novalues') noValues = true;
     else return reject(ctx, RespMessages.SYNTAX);
   }
-  return { match, type, noValues, count };
+  return { match, type, count };
 });
 
 export type ScanCursor = z.infer<typeof ScanCursorSchema>;

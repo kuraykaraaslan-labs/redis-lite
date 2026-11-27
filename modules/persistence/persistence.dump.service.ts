@@ -6,7 +6,7 @@ import PersistenceMessages from './persistence.messages';
 import PersistenceObjectDecoderCodec from './persistence.object_decoder.codec';
 import PersistenceObjectEncoderCodec from './persistence.object_encoder.codec';
 import PersistenceRdbIoCodec from './persistence.rdb_io.codec';
-import type { DecodedObject, FieldExpires, RdbOptions } from './persistence.types';
+import type { DecodedObject, RdbOptions } from './persistence.types';
 
 /** DUMP / RESTORE and FUNCTION DUMP / RESTORE payloads: an object body, the 2-byte RDB version and a CRC-64. */
 export default class PersistenceDumpService {
@@ -24,8 +24,8 @@ export default class PersistenceDumpService {
   // ──────────────────────────────────────────────
 
   /** DUMP payload: type byte + object + RDB version (2 bytes LE) + CRC64 (8 bytes LE). */
-  static dumpPayload(value: RedisValue, opts?: Partial<RdbOptions>, fieldExpires?: FieldExpires): Buffer {
-    const { type, body } = PersistenceObjectEncoderCodec.encodeObject(value, opts, fieldExpires);
+  static dumpPayload(value: RedisValue, opts?: Partial<RdbOptions>): Buffer {
+    const { type, body } = PersistenceObjectEncoderCodec.encodeObject(value, opts);
     const typed = Buffer.alloc(1 + body.length);
     typed[0] = type;
     body.copy(typed, 1);

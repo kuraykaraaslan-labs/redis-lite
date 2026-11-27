@@ -64,3 +64,10 @@ export type FunctionSubcommand = z.infer<typeof FunctionSubcommandEnum>;
 export type FunctionRestorePolicy = z.infer<typeof FunctionRestorePolicyEnum>;
 export type ScriptKind = z.infer<typeof ScriptKindEnum>;
 export type ScriptFlag = (typeof SCRIPT_FLAGS)[number];
+
+// ============================================================================
+// Error tables
+// ============================================================================
+
+/** The field Redis 7.0 sets on the error table of a failed redis.call / redis.pcall: the error was already counted. */
+export const IGNORE_ERROR_STATS = 'ignore_error_stats_update';

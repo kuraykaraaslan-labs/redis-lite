@@ -53,7 +53,6 @@ export default class ConnectionSessionService {
     c.dbIndex = 0;
     c.name = '';
     c.resp = 2;
-    c.noTouch = false;
     c.noEvict = false;
     TrackingService.disable(ctx.server.tracking, c);
     c.replyOff = false;

@@ -1,8 +1,8 @@
 # @kuraykaraaslan/redis-lite: Phases
 
 > **What:** an npm package that behaves exactly like Redis, written in TypeScript. Apps change nothing except `REDIS_URL`.
-> **Reference:** Redis Open Source **8.8.x**. Every reply, error text, encoding and binary format (RDB, HLL, RESP2/RESP3) must match it.
-> **Scope:** everything: single-node Redis, persistence, replication, sentinel, cluster and the modules bundled with Redis 8 (JSON, Search, and the probabilistic and time-series modules).
+> **Reference:** Redis Open Source **7.0.15** (retargeted from 8.8 on 2026-11-26). Every reply, error text, encoding and binary format (RDB, HLL, RESP2/RESP3) must match it, and nothing added after 7.0 is offered.
+> **Scope:** everything Redis 7.0.15 has: single-node Redis, persistence, replication, sentinel and cluster. Redis 7.0 bundles no modules.
 > **Only exception:** performance. JavaScript cannot match Redis's speed, so no throughput or latency commitment is made (see the README).
 
 ---
@@ -15,13 +15,13 @@
 
 ---
 
-## Status (2026-11-25)
+## Status (2026-11-26)
 
 | Done | |
 |---|---|
-| Single-node core | 239 commands, Lua, Functions, streams, geo, bitmaps, hash field TTL |
+| Single-node core | all 240 commands of Redis 7.0.15 (command table identical to `COMMAND INFO` / `COMMAND DOCS`), Lua, Functions, streams, geo, bitmaps |
 | Clients | ioredis 5.8, BullMQ 5.66 and 6.7 tested end to end |
-| Blocked | Building the reference Redis (needs the user's permission to download and compile the Redis source) |
+| Reference | A real Redis 7.0.15 binary is the differential oracle (see docs/DIFFERENTIAL.md) |
 
 ---
 
@@ -55,7 +55,7 @@
 
 ## Phase D: replication
 
-- `REPLICAOF`, `PSYNC` with full sync over RDB and partial resync from the backlog, `WAIT`, `WAITAOF`, `ROLE`, `INFO replication`, `REPLCONF`, read-only replicas.
+- `REPLICAOF`, `PSYNC` with full sync over RDB and partial resync from the backlog, `WAIT`, `ROLE`, `INFO replication`, `REPLCONF`, read-only replicas.
 - Works with real Redis as master or replica.
 
 ## Phase E: sentinel
@@ -67,12 +67,5 @@
 
 - `cluster-enabled`: 16384 slots, CRC16 hash tags, `MOVED`/`ASK`, `CLUSTER` commands, cluster bus (gossip, failure detection, failover), resharding with `MIGRATE`/`ASKING`, `redis-lite --cluster create` style tooling.
 - Works with ioredis `Cluster` and `redis-cli --cluster`.
-
-## Phase G: modules bundled with Redis 8
-
-- JSON (`JSON.*`, JSONPath).
-- Search and query (`FT.*`: indexes on hash/JSON, query language, aggregations, vector search).
-- Probabilistic (`BF.*`, `CF.*`, `CMS.*`, `TOPK.*`, `TDIGEST.*`) and time series (`TS.*`).
-- Vector sets (`V*` commands).
 
 Each phase ends when its differential test suite matches the reference Redis byte for byte.

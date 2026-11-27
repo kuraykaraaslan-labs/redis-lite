@@ -14,12 +14,15 @@ import { serverCommands } from '@/modules/server/server.commands';
 import { setCommands } from '@/modules/sets/sets.commands';
 import { streamCommands } from '@/modules/streams/streams.commands';
 import { stringCommands } from '@/modules/strings/strings.commands';
-import { timeseriesCommands } from '@/modules/timeseries/timeseries.commands';
 import { transactionCommands } from '@/modules/transactions/transactions.commands';
 import { zsetCommands } from '@/modules/zsets/zsets.commands';
 
 import CommandLookupService from './command.lookup.service';
+import { COMMAND_TABLE } from './command.meta_table';
 import type { CommandSpec } from './command.types';
+
+/** The commands of the target's table: a handler without a table row is not served (it answers like an unknown command). */
+const TABLE_NAMES = new Set(COMMAND_TABLE.map((row) => row.name));
 
 /** Every supported command, by lowercase name. */
 export const COMMANDS: ReadonlyMap<string, CommandSpec> = new Map(
@@ -41,9 +44,10 @@ export const COMMANDS: ReadonlyMap<string, CommandSpec> = new Map(
     ...transactionCommands,
     ...scriptingCommands,
     ...functionCommands,
-    ...timeseriesCommands,
     ...replicationCommands,
-  ].map((spec) => [spec.name, spec]),
+  ]
+    .filter((spec) => TABLE_NAMES.has(spec.name))
+    .map((spec) => [spec.name, spec]),
 );
 
 // the metadata lookup reads the implemented commands from here (see CommandLookupService.useRegistry)

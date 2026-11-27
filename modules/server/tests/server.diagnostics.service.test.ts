@@ -61,6 +61,25 @@ describe('MONITOR / SLOWLOG / LATENCY / MEMORY', () => {
     expect.soft(await r.send('LATENCY', 'DOCTOR')).toMatch(/^=\d+\r\ntxt:/);
   });
 
+  it('LATENCY monitor events', async () => {
+    await t.call('CONFIG', 'SET', 'latency-monitor-threshold', '5');
+    try {
+      await t.call('DEBUG', 'SLEEP', '0.02');
+      const [[event, time, latest, max]] = (await t.call('LATENCY', 'LATEST')) as Array<[string, number, number, number]>;
+      expect.soft(event).toBe('command');
+      expect.soft(time).toBeGreaterThan(0);
+      expect.soft(latest).toBeGreaterThanOrEqual(5);
+      expect.soft(max).toBe(latest);
+      expect.soft(await t.call('LATENCY', 'HISTORY', 'command')).toEqual([[time, latest]]);
+      expect.soft(String(await t.call('LATENCY', 'GRAPH', 'command'))).toMatch(/^command - high \d+ ms, low \d+ ms \(all time high \d+ ms\)\n-{80}\n/);
+      expect.soft(String(await t.call('LATENCY', 'DOCTOR'))).toMatch(/^Dave, I have observed latency spikes/);
+      expect.soft(await t.call('LATENCY', 'RESET', 'nosuch', 'command')).toBe(1);
+      expect.soft(await t.call('LATENCY', 'LATEST')).toEqual([]);
+    } finally {
+      await t.call('CONFIG', 'SET', 'latency-monitor-threshold', '0');
+    }
+  });
+
   it('LATENCY HISTOGRAM and INFO latencystats track every called command', async () => {
     await t.call('CONFIG', 'RESETSTAT');
     await t.call('SET', 'lat', 'v');

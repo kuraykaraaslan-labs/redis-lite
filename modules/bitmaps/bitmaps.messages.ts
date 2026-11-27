@@ -12,7 +12,6 @@ export const BitmapsMessages = {
 
   // BITOP
   BITOP_NOT_SINGLE: 'ERR BITOP NOT must be called with a single source key.',
-  BITOP_TWO_SOURCES: 'ERR BITOP {operation} must be called with at least two source keys.',
 
   // BITFIELD
   BITFIELD_TYPE: 'ERR Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.',

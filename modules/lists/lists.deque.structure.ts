@@ -1,5 +1,7 @@
 import DatabaseService from '@/modules/database/database.service';
 
+import { QuicklistLayout } from './lists.quicklist.structure';
+
 // ============================================================================
 // ListDeque
 // ============================================================================
@@ -13,7 +15,8 @@ import DatabaseService from '@/modules/database/database.service';
  * queue that drained does not keep its peak memory. Freed slots are cleared so popped strings can be collected.
  *
  * It also keeps `listpackBytes`, the size its elements would take as one listpack, up to date on every change, so the
- * listpack / quicklist encoding checks after a write cost O(1) instead of a scan of the list.
+ * listpack / quicklist encoding checks after a write cost O(1) instead of a scan of the list, and `layout`, the
+ * quicklist nodes Redis 7.0 would split the list into (see QuicklistLayout), for DEBUG OBJECT, MEMORY USAGE and DUMP.
  */
 export class ListDeque implements Iterable<string> {
   // ──────────────────────────────────────────────
@@ -35,23 +38,79 @@ export class ListDeque implements Iterable<string> {
   private size = 0;
   private bytes = ListDeque.LISTPACK_EMPTY_BYTES;
 
-  constructor(capacity = ListDeque.MIN_CAPACITY) {
+  /** The quicklist nodes of the list (fill and compress depth fixed when the list is created). */
+  layout: QuicklistLayout;
+
+  /** Set on a list loaded from a format without nodes: `adopt` lays it out again as if pushed one by one. */
+  private pushBuilt = false;
+
+  constructor(capacity = ListDeque.MIN_CAPACITY, fill = -2, compress = 0) {
     let cap = ListDeque.MIN_CAPACITY;
     while (cap < capacity) cap *= 2;
     this.buf = new Array<string | undefined>(cap).fill(undefined);
     this.mask = cap - 1;
+    this.layout = new QuicklistLayout(fill, compress);
   }
 
-  /** A deque holding `items` in order. */
-  static from(items: Iterable<string>): ListDeque {
+  /** A deque holding `items` in order, laid out as if pushed one by one at the tail. */
+  static from(items: Iterable<string>, fill = -2, compress = 0): ListDeque {
     const array = Array.isArray(items) ? (items as string[]) : [...items];
-    const d = new ListDeque(array.length);
+    const d = new ListDeque(array.length, fill, compress);
     for (let i = 0; i < array.length; i++) {
+      const entry = DatabaseService.listpackEntrySize(array[i]);
       d.buf[i] = array[i];
-      d.bytes += DatabaseService.listpackEntrySize(array[i]);
+      d.bytes += entry;
+      d.layout.pushTail({ entry, length: array[i].length });
     }
     d.size = array.length;
     return d;
+  }
+
+  /** A list loaded from an RDB format without quicklist nodes (its layout follows the server's fill, see `adopt`). */
+  static loaded(items: Iterable<string>): ListDeque {
+    const d = ListDeque.from(items);
+    d.pushBuilt = true;
+    return d;
+  }
+
+  /** A deque holding the elements of `nodes`, one quicklist node per non-empty array (a loaded list keeps its nodes). */
+  static fromNodes(nodes: readonly (readonly string[])[], fill = -2, compress = 0): ListDeque {
+    const d = ListDeque.from(nodes.flat(), fill, compress);
+    d.layout = QuicklistLayout.of(
+      fill,
+      compress,
+      nodes.map((n) => ({ count: n.length, bytes: n.reduce((b, x) => b + DatabaseService.listpackEntrySize(x), QuicklistLayout.EMPTY_BYTES) })),
+    );
+    return d;
+  }
+
+  /** A copy with the same elements and the same node layout (COPY duplicates the quicklist). */
+  clone(): ListDeque {
+    const d = ListDeque.from(this.toArray(), this.layout.fill, this.layout.compress);
+    d.layout = this.layout.clone();
+    return d;
+  }
+
+  /** Re-stamps the list-max-listpack-size and list-compress-depth the list keeps (a loaded list takes the server's). */
+  adopt(fill: number, compress: number): void {
+    if (!this.pushBuilt) {
+      this.layout = QuicklistLayout.of(fill, compress, this.layout.nodes);
+      return;
+    }
+    this.pushBuilt = false;
+    this.layout = new QuicklistLayout(fill, compress);
+    for (const x of this) this.layout.pushTail({ entry: DatabaseService.listpackEntrySize(x), length: x.length });
+  }
+
+  /** The elements of each quicklist node, head to tail. */
+  nodeItems(): string[][] {
+    const out: string[][] = [];
+    let i = 0;
+    for (const n of this.layout.nodes) {
+      out.push(this.slice(i, i + n.count));
+      i += n.count;
+    }
+    return out;
   }
 
   // ──────────────────────────────────────────────
@@ -115,6 +174,23 @@ export class ListDeque implements Iterable<string> {
     this.size += count;
   }
 
+  /** Puts `value` at position `at` in the buffer (the layout is already updated). */
+  private place(at: number, value: string, entry: number): void {
+    if (this.size + 1 > this.buf.length) this.resize(this.buf.length * 2);
+    this.openGap(at, 1);
+    this.buf[(this.head + at) & this.mask] = value;
+    this.bytes += entry;
+  }
+
+  /** Inserts one element at position `at` (an insertion before the element there, or a push at the tail). */
+  private insertOne(at: number, value: string): void {
+    if (at >= this.size) {
+      this.push(value);
+      return;
+    }
+    this.insertAt(at, true, value);
+  }
+
   // ──────────────────────────────────────────────
   // Public Methods: Array-compatible
   // ──────────────────────────────────────────────
@@ -139,9 +215,11 @@ export class ListDeque implements Iterable<string> {
   push(...items: string[]): number {
     for (let j = 0; j < items.length; j++) {
       this.grow();
+      const entry = DatabaseService.listpackEntrySize(items[j]);
       this.buf[(this.head + this.size) & this.mask] = items[j];
       this.size++;
-      this.bytes += DatabaseService.listpackEntrySize(items[j]);
+      this.bytes += entry;
+      this.layout.pushTail({ entry, length: items[j].length });
     }
     return this.size;
   }
@@ -151,9 +229,11 @@ export class ListDeque implements Iterable<string> {
     for (let j = items.length - 1; j >= 0; j--) {
       this.grow();
       this.head = (this.head - 1) & this.mask;
+      const entry = DatabaseService.listpackEntrySize(items[j]);
       this.buf[this.head] = items[j];
       this.size++;
-      this.bytes += DatabaseService.listpackEntrySize(items[j]);
+      this.bytes += entry;
+      this.layout.pushHead({ entry, length: items[j].length });
     }
     return this.size;
   }
@@ -165,7 +245,9 @@ export class ListDeque implements Iterable<string> {
     const slot = (this.head + this.size) & this.mask;
     const value = this.buf[slot] as string;
     this.buf[slot] = undefined;
-    this.bytes -= DatabaseService.listpackEntrySize(value);
+    const entry = DatabaseService.listpackEntrySize(value);
+    this.bytes -= entry;
+    this.layout.popTail(entry);
     this.shrink();
     return value;
   }
@@ -177,7 +259,9 @@ export class ListDeque implements Iterable<string> {
     this.buf[this.head] = undefined;
     this.head = (this.head + 1) & this.mask;
     this.size--;
-    this.bytes -= DatabaseService.listpackEntrySize(value);
+    const entry = DatabaseService.listpackEntrySize(value);
+    this.bytes -= entry;
+    this.layout.popHead(entry);
     this.shrink();
     return value;
   }
@@ -199,13 +283,21 @@ export class ListDeque implements Iterable<string> {
     const s = this.clampIndex(start, this.size);
     const del = deleteCount === undefined ? this.size - s : Math.min(Math.max(Math.trunc(deleteCount) || 0, 0), this.size - s);
     const removed = this.slice(s, s + del);
-    for (let j = 0; j < removed.length; j++) this.bytes -= DatabaseService.listpackEntrySize(removed[j]);
-    for (let j = 0; j < items.length; j++) this.bytes += DatabaseService.listpackEntrySize(items[j]);
+    const removedEntries = removed.map((x) => DatabaseService.listpackEntrySize(x));
+    for (let j = 0; j < removed.length; j++) this.bytes -= removedEntries[j];
     if (del === items.length) {
-      for (let j = 0; j < del; j++) this.buf[(this.head + s + j) & this.mask] = items[j];
+      for (let j = 0; j < del; j++) {
+        const entry = DatabaseService.listpackEntrySize(items[j]);
+        this.bytes += entry;
+        this.layout.replace(s + j, removedEntries[j], entry);
+        this.buf[(this.head + s + j) & this.mask] = items[j];
+      }
       return removed;
     }
-    if (del > 0) this.removeRange(s, del);
+    if (del > 0) {
+      this.layout.removeRange(s, removedEntries);
+      this.removeRange(s, del);
+    }
     if (items.length) {
       const needed = this.size + items.length;
       if (needed > this.buf.length) {
@@ -213,8 +305,7 @@ export class ListDeque implements Iterable<string> {
         while (cap < needed) cap *= 2;
         this.resize(cap);
       }
-      this.openGap(s, items.length);
-      for (let j = 0; j < items.length; j++) this.buf[(this.head + s + j) & this.mask] = items[j];
+      for (let j = 0; j < items.length; j++) this.insertOne(s + j, items[j]);
     } else this.shrink();
     return removed;
   }
@@ -239,8 +330,39 @@ export class ListDeque implements Iterable<string> {
   set(index: number, value: string): void {
     if (index < 0 || index >= this.size) throw new RangeError('ListDeque index out of range');
     const slot = (this.head + index) & this.mask;
-    this.bytes += DatabaseService.listpackEntrySize(value) - DatabaseService.listpackEntrySize(this.buf[slot] as string);
+    const oldEntry = DatabaseService.listpackEntrySize(this.buf[slot] as string);
+    const entry = DatabaseService.listpackEntrySize(value);
+    this.bytes += entry - oldEntry;
+    this.layout.replace(index, oldEntry, entry);
     this.buf[slot] = value;
+  }
+
+  /** Inserts `value` before or after the element at `pivot` (0 ≤ pivot < length), as LINSERT does. */
+  insertAt(pivot: number, before: boolean, value: string): void {
+    if (pivot < 0 || pivot >= this.size) throw new RangeError('ListDeque index out of range');
+    const entry = DatabaseService.listpackEntrySize(value);
+    this.layout.insert(pivot, before, { entry, length: value.length }, (i) => DatabaseService.listpackEntrySize(this.buf[(this.head + i) & this.mask] as string));
+    this.place(before ? pivot : pivot + 1, value, entry);
+  }
+
+  /** Removes the elements at the ascending positions `drop` (LREM), node by node. */
+  removeIndices(drop: readonly number[]): void {
+    if (!drop.length) return;
+    const entries = drop.map((i) => DatabaseService.listpackEntrySize(this.buf[(this.head + i) & this.mask] as string));
+    this.layout.removeSorted(drop, entries);
+    let write = drop[0];
+    let next = 0;
+    for (let read = drop[0]; read < this.size; read++) {
+      if (next < drop.length && drop[next] === read) {
+        this.bytes -= entries[next];
+        next++;
+        continue;
+      }
+      this.buf[(this.head + write++) & this.mask] = this.buf[(this.head + read) & this.mask];
+    }
+    for (let i = write; i < this.size; i++) this.buf[(this.head + i) & this.mask] = undefined;
+    this.size = write;
+    this.shrink();
   }
 
   /** A copy of the elements as an array. */

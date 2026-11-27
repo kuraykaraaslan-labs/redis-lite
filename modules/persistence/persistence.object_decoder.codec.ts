@@ -8,13 +8,13 @@ import PersistenceBytesCodec, { RdbReader } from './persistence.bytes.codec';
 import { QUICKLIST_CONTAINER, RDB_TYPE } from './persistence.enums';
 import PersistenceListpackCodec from './persistence.listpack.codec';
 import PersistenceMessages from './persistence.messages';
-import PersistenceModuleTypeCodec from './persistence.module_type.codec';
 import PersistenceRdbIoCodec from './persistence.rdb_io.codec';
-import type { DecodedObject, FieldExpires } from './persistence.types';
+import type { DecodedObject } from './persistence.types';
 
 /**
- * Object decoding: every RDB object type Redis 2.x … 8.x writes (legacy ziplist / zipmap / intset, quicklists,
- * listpacks, hash field TTL types 22-25, the three stream layouts) back into a RedisValue.
+ * Object decoding: every RDB object type Redis 2.x … 7.0 writes (legacy ziplist / zipmap / intset, quicklists,
+ * listpacks, the two stream layouts) back into a RedisValue. Later types (listpack sets, 7.2+ streams, hash field
+ * TTLs) are refused as bad data, as 7.0 refuses them.
  */
 export default class PersistenceObjectDecoderCodec {
   // ──────────────────────────────────────────────
@@ -126,8 +126,7 @@ export default class PersistenceObjectDecoderCodec {
       for (let k = 0; k < nconsumers; k++) {
         const cname = io.readStr(r);
         const seenTime = Number(r.i64le());
-        const activeTime = type >= RDB_TYPE.STREAM_LISTPACKS_3 ? Number(r.i64le()) : seenTime;
-        const consumer: Consumer = { name: cname, seenTime, activeTime, pending: new Map() };
+        const consumer: Consumer = { name: cname, seenTime, activeTime: -1, pending: new Map() };
         const cpel = io.readLen(r);
         for (let j = 0; j < cpel; j++) {
           const key = idToString(D.decodeStreamId(r.bytes(16)));
@@ -160,26 +159,26 @@ export default class PersistenceObjectDecoderCodec {
         const n = io.readLen(r);
         const list: string[] = [];
         for (let i = 0; i < n; i++) list.push(io.readStr(r));
-        return { value: { type: 'list', value: ListDeque.from(list) } };
+        return { value: { type: 'list', value: ListDeque.loaded(list) } };
       }
       case RDB_TYPE.LIST_ZIPLIST:
-        return { value: { type: 'list', value: ListDeque.from(lp.ziplistDecode(io.readStringBuf(r)).map(lp.entryToString)) } };
+        return { value: { type: 'list', value: ListDeque.loaded(lp.ziplistDecode(io.readStringBuf(r)).map(lp.entryToString)) } };
       case RDB_TYPE.LIST_QUICKLIST:
       case RDB_TYPE.LIST_QUICKLIST_2: {
         const n = io.readLen(r);
-        const list: string[] = [];
+        const nodes: string[][] = [];
         for (let i = 0; i < n; i++) {
           if (type === RDB_TYPE.LIST_QUICKLIST) {
-            list.push(...lp.ziplistDecode(io.readStringBuf(r)).map(lp.entryToString));
+            nodes.push(lp.ziplistDecode(io.readStringBuf(r)).map(lp.entryToString));
             continue;
           }
           const container = io.readLen(r);
           const blob = io.readStringBuf(r);
-          if (container === QUICKLIST_CONTAINER.PLAIN) list.push(blob.toString('latin1'));
-          else if (container === QUICKLIST_CONTAINER.PACKED) list.push(...lp.listpackStrings(blob));
+          if (container === QUICKLIST_CONTAINER.PLAIN) nodes.push([blob.toString('latin1')]);
+          else if (container === QUICKLIST_CONTAINER.PACKED) nodes.push(lp.listpackStrings(blob));
           else throw bad();
         }
-        return { value: { type: 'list', value: ListDeque.from(list) } };
+        return { value: { type: 'list', value: ListDeque.fromNodes(nodes) } };
       }
       case RDB_TYPE.SET: {
         const n = io.readLen(r);
@@ -189,8 +188,6 @@ export default class PersistenceObjectDecoderCodec {
       }
       case RDB_TYPE.SET_INTSET:
         return { value: { type: 'set', value: new Set(lp.intsetDecode(io.readStringBuf(r)).map((v) => v.toString())) } };
-      case RDB_TYPE.SET_LISTPACK:
-        return { value: { type: 'set', value: new Set(lp.listpackStrings(io.readStringBuf(r))) } };
       case RDB_TYPE.ZSET:
       case RDB_TYPE.ZSET_2: {
         const n = io.readLen(r);
@@ -220,42 +217,10 @@ export default class PersistenceObjectDecoderCodec {
         return { value: { type: 'hash', value: D.pairsToHash(lp.ziplistDecode(io.readStringBuf(r)).map(lp.entryToString)) } };
       case RDB_TYPE.HASH_LISTPACK:
         return { value: { type: 'hash', value: D.pairsToHash(lp.listpackStrings(io.readStringBuf(r))) } };
-      case RDB_TYPE.HASH_METADATA_PRE_GA:
-      case RDB_TYPE.HASH_METADATA: {
-        const minExpire = type === RDB_TYPE.HASH_METADATA ? r.i64le() : 0n;
-        const n = io.readLen(r);
-        const h = new Map<string, string>();
-        const fe: FieldExpires = new Map();
-        for (let i = 0; i < n; i++) {
-          const ttl = io.readLenBig(r);
-          const f = io.readStr(r);
-          h.set(f, io.readStr(r));
-          if (ttl !== 0n) fe.set(f, Number(type === RDB_TYPE.HASH_METADATA ? ttl + minExpire - 1n : ttl));
-        }
-        return { value: { type: 'hash', value: h }, fieldExpires: fe };
-      }
-      case RDB_TYPE.HASH_LISTPACK_EX_PRE_GA:
-      case RDB_TYPE.HASH_LISTPACK_EX: {
-        if (type === RDB_TYPE.HASH_LISTPACK_EX) r.i64le(); // min expire
-        const items = lp.listpackDecode(io.readStringBuf(r));
-        if (items.length % 3) throw bad();
-        const h = new Map<string, string>();
-        const fe: FieldExpires = new Map();
-        for (let i = 0; i < items.length; i += 3) {
-          const f = lp.entryToString(items[i]);
-          h.set(f, lp.entryToString(items[i + 1]));
-          const ttl = items[i + 2];
-          if (typeof ttl !== 'bigint') throw bad();
-          if (ttl !== 0n) fe.set(f, Number(ttl));
-        }
-        return { value: { type: 'hash', value: h }, fieldExpires: fe };
-      }
       case RDB_TYPE.STREAM_LISTPACKS:
       case RDB_TYPE.STREAM_LISTPACKS_2:
-      case RDB_TYPE.STREAM_LISTPACKS_3:
         return { value: { type: 'stream', value: D.readStream(r, type) } };
       case RDB_TYPE.MODULE_2:
-        return { value: PersistenceModuleTypeCodec.decodeModule(r) };
       case RDB_TYPE.MODULE_PRE_GA:
         throw new Error(PersistenceMessages.MODULE_TYPES_UNSUPPORTED);
       default:

@@ -1,6 +1,5 @@
 import type { ListDeque } from '@/modules/lists/lists.deque.structure';
 import type { Stream } from '@/modules/streams/streams.structure';
-import type { TimeSeries } from '@/modules/timeseries/timeseries.structure';
 import type { ZSet } from '@/modules/zsets/zsets.structure';
 
 // ============================================================================
@@ -10,16 +9,16 @@ import type { ZSet } from '@/modules/zsets/zsets.structure';
 export type RedisValue =
   /**
    * `raw`: the value went through APPEND/SETRANGE/SETBIT/…, which Redis always leaves raw-encoded. `noInt`: written by
-   * INCRBYFLOAT, which never integer-encodes its result (embstr or raw by length, even for integer text).
+   * INCRBYFLOAT, which never integer-encodes its result (embstr or raw by length, even for integer text). `sds`: the
+   * allocation of a raw value modified in place (zmalloc size and sds capacity, see MemoryService.modifiedString);
+   * absent, it is the allocation the value's creation implies.
    */
-  | { type: 'string'; value: string; raw?: boolean; noInt?: boolean }
+  | { type: 'string'; value: string; raw?: boolean; noInt?: boolean; sds?: { size: number; cap: number } }
   | { type: 'hash'; value: Map<string, string> }
   | { type: 'list'; value: ListDeque }
   | { type: 'set'; value: Set<string> }
   | { type: 'zset'; value: ZSet }
-  | { type: 'stream'; value: Stream }
-  /** The time series module type (TYPE reports its module type name, `TSDB-TYPE`). */
-  | { type: 'timeseries'; value: TimeSeries };
+  | { type: 'stream'; value: Stream };
 
 /** The in-memory value of each Redis type. */
 export interface ValueMap {
@@ -29,7 +28,6 @@ export interface ValueMap {
   set: Set<string>;
   zset: ZSet;
   stream: Stream;
-  timeseries: TimeSeries;
 }
 
 export type ValueType = keyof ValueMap;
@@ -69,10 +67,4 @@ export interface ExpiryControl {
 export interface ScanPage {
   next: number;
   page: string[];
-}
-
-/** List size limit of list-max-listpack-size: positive = entries, negative = bytes. */
-export interface ListLimit {
-  entries: number;
-  bytes: number;
 }

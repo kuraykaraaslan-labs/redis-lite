@@ -11,7 +11,7 @@ import { errOf, pairs } from './server.test_helpers';
 
 /**
  * CONFIG.
- * Expected values follow Redis Open Source 8.x behaviour (redis.io docs and the Redis source error strings).
+ * Expected values follow Redis 7.0.15 behaviour (observed through the differential oracle).
  */
 const t = useServer();
 
@@ -109,6 +109,35 @@ describe('CONFIG', () => {
     expect.soft(await errOf(t.call('CONFIG', 'SET', 'port', 'abc'))).toBe(
       "ERR CONFIG SET failed (possibly related to argument 'port') - argument couldn't be parsed into an integer",
     );
+  });
+
+  it('SET bind moves the listener to the new address', async () => {
+    expect.soft(await t.call('CONFIG', 'SET', 'bind', '127.0.0.1 -::1')).toBe('OK');
+    expect.soft(await t.call('CONFIG', 'GET', 'bind')).toEqual(['bind', '127.0.0.1 -::1']);
+    await eventually(async () => expect(await t.call('PING')).toBe('PONG'));
+  });
+
+  it('dir and dbfilename are protected configs; aliases are listed by globs', async () => {
+    expect.soft(await errOf(t.call('CONFIG', 'SET', 'dir', '.'))).toBe(
+      "ERR CONFIG SET failed (possibly related to argument 'dir') - can't set protected config",
+    );
+    expect.soft(await errOf(t.call('CONFIG', 'SET', 'dbfilename', 'x.rdb'))).toBe(
+      "ERR CONFIG SET failed (possibly related to argument 'dbfilename') - can't set protected config",
+    );
+    expect.soft(Object.keys(pairs(await t.call('CONFIG', 'GET', '*ziplist*'))).sort()).toEqual([
+      'hash-max-ziplist-entries', 'hash-max-ziplist-value', 'list-max-ziplist-size', 'zset-max-ziplist-entries', 'zset-max-ziplist-value',
+    ]);
+  });
+
+  it('client-output-buffer-limit merges the classes it is given', async () => {
+    expect.soft(await t.call('CONFIG', 'SET', 'client-output-buffer-limit', 'normal 1mb 2kb 3 replica 1 2 3')).toBe('OK');
+    expect.soft(await t.call('CONFIG', 'GET', 'client-output-buffer-limit')).toEqual([
+      'client-output-buffer-limit', 'normal 1048576 2048 3 slave 1 2 3 pubsub 33554432 8388608 60',
+    ]);
+    expect.soft(await errOf(t.call('CONFIG', 'SET', 'client-output-buffer-limit', 'master 1 2 3'))).toBe(
+      "ERR CONFIG SET failed (possibly related to argument 'client-output-buffer-limit') - Invalid client class specified in buffer limit configuration.",
+    );
+    await t.call('CONFIG', 'SET', 'client-output-buffer-limit', 'normal 0 0 0 slave 268435456 67108864 60');
   });
 
   it('GET in RESP3 is a map', async () => {

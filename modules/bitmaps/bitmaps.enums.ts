@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-/** BITOP operations (lowercase: matched case-insensitively). DIFF, DIFF1, ANDOR and ONE are Redis 8.2+. */
-export const BitOpEnum = z.enum(['and', 'or', 'xor', 'not', 'diff', 'diff1', 'andor', 'one']);
+/** BITOP operations (lowercase: matched case-insensitively). */
+export const BitOpEnum = z.enum(['and', 'or', 'xor', 'not']);
 
 /** The unit of a BITCOUNT / BITPOS range. */
 export const RangeUnitEnum = z.enum(['byte', 'bit']);

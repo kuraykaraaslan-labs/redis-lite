@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import '@/modules/command/command.registry';
+import { RespSet } from '@/libs/resp';
+import type { Status } from '@/libs/resp';
+
+import { COMMANDS } from '@/modules/command/command.registry';
 
 import CommandService from '../command.service';
 
@@ -43,5 +46,35 @@ describe('subcommandSyntaxMessage', () => {
     expect(CommandService.subcommandSyntaxMessage('GetUser', 'acl')).toBe(
       "ERR unknown subcommand or wrong number of arguments for 'GetUser'. Try ACL HELP.",
     );
+  });
+});
+
+describe('the Redis 7.0.15 table', () => {
+  it('serves only commands of the table (a handler without a row is unknown)', () => {
+    for (const name of ['hexpire', 'waitaof', 'ts.add']) {
+      expect(COMMANDS.has(name)).toBe(false);
+      expect(CommandService.getCommandMeta(name)).toBeUndefined();
+    }
+    expect(CommandService.getCommandMeta('client|no-touch')).toBeUndefined();
+    expect(CommandService.getCommandMeta('zrank')?.arity).toBe(3);
+  });
+
+  it('keeps the hidden flags the server relies on', () => {
+    expect(CommandService.getCommandMeta('publish')?.flagSet.has('may_replicate')).toBe(true);
+    expect(CommandService.getCommandMeta('publish')?.flags).not.toContain('may_replicate');
+  });
+
+  it('sends tips as bulk strings and key specs as a set (7.0 reply types)', () => {
+    const dbsize = CommandService.getCommandMeta('dbsize');
+    const info = (dbsize && CommandService.commandInfoReply(dbsize)) as unknown[];
+    expect(info[7]).toBeInstanceOf(RespSet);
+    expect((info[7] as RespSet).items.every((t) => typeof t === 'string')).toBe(true);
+    expect(info[8]).toBeInstanceOf(RespSet);
+    expect(info[9]).toBeInstanceOf(RespSet);
+  });
+
+  it('HELP replies end with the 7.0 footer', () => {
+    const help = CommandService.helpReply('command') as Status[];
+    expect(help.at(-1)?.value).toBe('    Prints this help.');
   });
 });

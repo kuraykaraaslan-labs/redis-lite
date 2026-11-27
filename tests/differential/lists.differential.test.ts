@@ -1,7 +1,9 @@
-import { differential, s, v } from './differential.harness';
+import { differential, s } from './differential.harness';
+import { debugObject } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
-/** 7.2 added the plain listpack encoding for small lists; 7.0 reports every list as quicklist. */
-const LISTPACK = v('lists encoded as plain listpack (OBJECT ENCODING listpack) since 7.2; 7.0 always says quicklist');
+/** Redis 7.0 reports every list as quicklist: DEBUG OBJECT shows the node layout (ql_*) and DUMP the nodes themselves. */
+const ql = { cmd: 'DEBUG OBJECT l', norm: debugObject };
 
 /** 200 elements: past the 128-entry listpack limit of small lists. */
 const LONG = ['RPUSH long', ...Array.from({ length: 200 }, (_, i) => `e${i}`)].join(' ');
@@ -65,7 +67,7 @@ differential('lists', [
     'RPUSH l a', 'LPOS l a RANK 0', 'LPOS l a COUNT -1', 'LPOS l a MAXLEN -1', 'LPOS l a RANK x', 'LPOS l a COUNT', 'LPOS l a FOO 1',
     'LPOS l', 'LPOS l a MAXLEN',
   ]),
-  s('LPOS RANK of the minimum integer', ['RPUSH l a', 'LPOS l a RANK -9223372036854775808'], v('7.2 range-checks RANK to -LONG_MAX..LONG_MAX (LLONG_MIN negation overflow fix); 7.0 accepts it', 'low')),
+  s('LPOS RANK of the minimum integer', ['RPUSH l a', 'LPOS l a RANK -9223372036854775808']),
   s('LPOS repeated options last wins', ['RPUSH l a b a', 'LPOS l a RANK 1 RANK 2', 'LPOS l a COUNT 1 COUNT 0']),
 
   // LMOVE / RPOPLPUSH
@@ -87,9 +89,63 @@ differential('lists', [
   s('LMPOP wrong type key among keys', ['SET k v', 'RPUSH l a', 'LMPOP 2 k l LEFT', 'LMPOP 2 nokey l LEFT']),
 
   // encodings
-  s('small list encoding', ['RPUSH l a b', 'OBJECT ENCODING l'], LISTPACK),
-  s('long list encoding', [LONG, 'OBJECT ENCODING long', 'LINDEX long 150', 'LRANGE long 120 130', 'LPOS long e199', 'LLEN long'], LISTPACK),
+  s('small list encoding', ['RPUSH l a b', 'OBJECT ENCODING l']),
+  s('long list encoding', [LONG, 'OBJECT ENCODING long', 'LINDEX long 150', 'LRANGE long 120 130', 'LPOS long e199', 'LLEN long']),
   s('long list reads', [LONG, 'LINDEX long 150', 'LRANGE long 120 130', 'LPOS long e199', 'LLEN long']),
   s('big element encoding', [`RPUSH l ${'x'.repeat(10000)}`, 'OBJECT ENCODING l', 'LLEN l']),
   s('long list operations across nodes', [LONG, 'LINSERT long AFTER e100 mid', 'LREM long 1 e50', 'LSET long 10 ten', 'LTRIM long 5 -5', 'LRANGE long 0 7', 'LLEN long']),
+
+  // quicklist node layout (DEBUG OBJECT ql_*, MEMORY USAGE, DUMP)
+  s('quicklist of a small list', ['RPUSH l a b c', ql, 'MEMORY USAGE l', 'DUMP l']),
+  s('quicklist nodes by size, pushed at either end', [
+    'RPUSH l ' + Array.from({ length: 1000 }, (_, i) => `item-${i}`).join(' '), ql, 'MEMORY USAGE l',
+    'DEL l', 'LPUSH l ' + Array.from({ length: 1000 }, (_, i) => `item-${i}`).join(' '), ql, 'MEMORY USAGE l',
+  ]),
+  s('quicklist node fill by size class', [
+    'CONFIG SET list-max-listpack-size -1', 'RPUSH l ' + Array.from({ length: 300 }, (_, i) => `${i}`.padStart(100, 'x')).join(' '), ql, 'MEMORY USAGE l',
+    'DEL l', 'LPUSH l ' + Array.from({ length: 300 }, (_, i) => `${i}`.padStart(62, 'x')).join(' '), ql, 'MEMORY USAGE l',
+    'DEL l', 'RPUSH l ' + Array.from({ length: 1000 }, () => '1234567').join(' '), ql,
+  ]),
+  s('quicklist node fill by count', ['CONFIG SET list-max-listpack-size 5', 'RPUSH l ' + Array.from({ length: 23 }, (_, i) => `${i}`).join(' '), ql, 'MEMORY USAGE l', 'DUMP l']),
+  s('a large element takes a listpack node of its own', [`RPUSH l a ${'x'.repeat(9000)} b`, ql, 'MEMORY USAGE l', 'RPUSH l c', ql]),
+  s('LINSERT splits a full node and merges neighbours', [
+    'CONFIG SET list-max-listpack-size 5', 'RPUSH l 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14', 'LINSERT l BEFORE 7 x', ql, 'DUMP l',
+    'LINSERT l BEFORE 7 y', 'LINSERT l AFTER 9 z', 'LINSERT l BEFORE 0 h', 'LINSERT l AFTER 14 t', ql, 'DUMP l',
+    'LREM l 0 0', 'LREM l 0 1', 'LREM l 0 2', 'LREM l 0 3', 'LINSERT l AFTER 6 w', ql, 'DUMP l',
+  ]),
+  s('LINSERT merge by size', [
+    'CONFIG SET list-max-listpack-size -1', 'RPUSH l ' + Array.from({ length: 80 }, (_, i) => `${i}`.padStart(100, 'a')).join(' '),
+    `LINSERT l BEFORE ${'20'.padStart(100, 'a')} ${'x'.repeat(73)}`, ql, `LINSERT l BEFORE ${'60'.padStart(100, 'a')} ${'y'.repeat(74)}`, ql,
+  ]),
+  s('pops and trims shrink nodes without merging', [
+    'CONFIG SET list-max-listpack-size 4', 'RPUSH l 0 1 2 3 4 5 6 7 8 9', 'LPOP l 3', 'RPOP l', ql, 'LTRIM l 1 -2', ql, 'DUMP l', 'LMPOP 1 l RIGHT COUNT 2', ql,
+  ]),
+  s('each list keeps the fill it was created with', ['CONFIG SET list-max-listpack-size 5', 'RPUSH l a b c', 'CONFIG SET list-max-listpack-size 2', 'RPUSH l d e f', ql, 'RPUSH m a b c', { cmd: 'DEBUG OBJECT m', norm: debugObject }]),
+  s('list-compress-depth compresses interior nodes', [
+    'CONFIG SET list-compress-depth 1', 'CONFIG SET list-max-listpack-size 5',
+    'RPUSH l ' + Array.from({ length: 23 }, (_, i) => `${i}-`.repeat(20)).join(' '), ql, 'MEMORY USAGE l', 'LINDEX l 12', 'MEMORY USAGE l',
+  ]),
+  s('COPY and SORT STORE lay lists out', [
+    'CONFIG SET list-max-listpack-size 3', 'LPUSH l 1 2 3 4 5 6 7', 'COPY l c', { cmd: 'DEBUG OBJECT c', norm: debugObject }, 'DUMP c',
+    'SORT l STORE s', { cmd: 'DEBUG OBJECT s', norm: debugObject }, 'DUMP s', 'CONFIG SET list-compress-depth 2', 'RPOPLPUSH l d', 'LMOVE l e LEFT RIGHT',
+    { cmd: 'DEBUG OBJECT d', norm: debugObject }, { cmd: 'DEBUG OBJECT e', norm: debugObject },
+  ]),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('LRANGE start', ['RPUSH l a b c', 'LRANGE l $N 1']),
+  ...intProbes('LRANGE stop', ['RPUSH l a b c', 'LRANGE l 0 $N', 'LRANGE l $N $N']),
+  ...intProbes('LINDEX', ['RPUSH l a b c', 'LINDEX l $N']),
+  ...intProbes('LTRIM start', ['RPUSH l a b c', 'LTRIM l $N -1', 'LRANGE l 0 -1']),
+  ...intProbes('LTRIM stop', ['RPUSH l a b c', 'LTRIM l 0 $N', 'LRANGE l 0 -1']),
+  ...intProbes('LSET', ['RPUSH l a b c', 'LSET l $N x', 'LRANGE l 0 -1']),
+  ...intProbes('LPOS RANK', ['RPUSH l a b a', 'LPOS l a RANK $N']),
+  ...intProbes('LPOS COUNT', ['RPUSH l a b a', 'LPOS l a COUNT $N']),
+  ...intProbes('LPOS beyond int64', ['RPUSH l a b a', 'LPOS l a COUNT 1$N', 'LPOS l a MAXLEN 1$N', 'LPOS l a RANK 1$N', 'LPOS l a COUNT 18446744073709551615', 'LPOS l a COUNT 18446744073709551616', 'LPOS l a RANK 18446744073709551615', 'LPOS l a MAXLEN 9223372036854775809']),
+  ...intProbes('LPOS MAXLEN', ['RPUSH l a b a', 'LPOS l a MAXLEN $N']),
+  ...intProbes('LPOP RPOP count', ['RPUSH l a b c', 'LPOP l $N', 'RPUSH l a b c', 'RPOP l $N']),
+  ...intProbes('LMPOP numkeys', ['RPUSH l a b c', 'LMPOP $N l LEFT']),
+  ...intProbes('LMPOP COUNT', ['RPUSH l a b c', 'LMPOP 1 l LEFT COUNT $N']),
+  ...intProbes('BLMPOP numkeys and COUNT', ['RPUSH l a b c', 'BLMPOP 0 $N l LEFT', 'BLMPOP 0 1 l LEFT COUNT $N']),
+  ...intProbes('blocking list timeouts', ['RPUSH l a b c d e', 'BLPOP l $N', 'BRPOP l $N', 'BLMPOP $N 1 l LEFT', 'BRPOPLPUSH l d $N', 'BLMOVE l d LEFT LEFT $N']),
+  ...intProbes('LREM count', ['RPUSH l a b a', 'LREM l $N a', 'LRANGE l 0 -1']),
 ]);

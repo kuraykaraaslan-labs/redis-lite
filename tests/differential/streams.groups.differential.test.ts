@@ -1,6 +1,7 @@
 import { differential, s, v } from './differential.harness';
 import type { Step } from './differential.harness';
-import { all, msClock, pendingIdle, streamClocks } from './differential.normalizers';
+import { all, msClock, pendingIdle, shape, streamClocks } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 /** `n` XADD steps with explicit ids `<base + i>-0`. */
 function fill(key: string, n: number, base = 1): Step[] {
@@ -17,6 +18,9 @@ differential('streams.groups', [
   s('XGROUP CREATE basics', ['XADD s 1-0 f v', 'XADD s 2-0 f v', 'XGROUP CREATE s g 1-0', 'XGROUP CREATE s g 0', 'XGROUP CREATE s g $', 'XGROUP CREATE s g2 0-0', 'XINFO GROUPS s']),
   s('XGROUP CREATE missing key', ['XGROUP CREATE s g $', 'XGROUP CREATE s g $ MKSTREAM', 'TYPE s', 'XLEN s', 'XINFO STREAM s']),
   s('XGROUP CREATE dollar sets entries-read', ['XGROUP CREATE e g $ MKSTREAM', 'XINFO GROUPS e', 'XADD s 1-0 f v', 'XGROUP CREATE s g $', 'XINFO GROUPS s'], v('XGROUP CREATE with $ reports entries-read = entries-added instead of nil (changed after 7.0)', 'medium')),
+  s('entries-read after CREATE and SETID', ['XADD s 1-0 f v', 'XGROUP CREATE s g2 $', 'XGROUP CREATE s g3 1-0', 'XGROUP CREATE s g4 0', 'XGROUP CREATE s g5 $ ENTRIESREAD 3', 'XINFO GROUPS s', 'XGROUP SETID s g4 $', 'XADD s 2-0 f v', 'XINFO GROUPS s', 'XREADGROUP GROUP g2 x STREAMS s >', 'XDEL s 1-0', 'XINFO GROUPS s']),
+  s('XCLAIM and XAUTOCLAIM consumer creation', ['XADD s 1-0 f v', 'XGROUP CREATE s g 0', 'XCLAIM s g c1 0 5-0', 'XAUTOCLAIM s g c2 0 0', 'XINFO CONSUMERS s g', 'XREADGROUP GROUP g c3 STREAMS s >', 'XCLAIM s g c4 0 1-0 JUSTID', 'XAUTOCLAIM s g c5 0 0 JUSTID', 'XPENDING s g - + 10 c9', 'XINFO CONSUMERS s g'], { norm: clocks }),
+  s('stream keyevent notifications', ['CONFIG SET notify-keyspace-events Etg', 'PSUBSCRIBE __keyevent@0__:*', { c: 1, cmd: 'XADD s 1-0 f v' }, { c: 1, cmd: 'XGROUP CREATE s g 0' }, { c: 1, cmd: 'XGROUP CREATE s2 g $ MKSTREAM' }, { c: 1, cmd: 'XREADGROUP GROUP g c1 STREAMS s >' }, { c: 1, cmd: 'XGROUP CREATECONSUMER s g c2' }, { c: 1, cmd: 'XCLAIM s g c3 0 1-0' }, { c: 1, cmd: 'XAUTOCLAIM s g c4 0 0' }, { c: 1, cmd: 'XGROUP SETID s g 0' }, { c: 1, cmd: 'XGROUP DELCONSUMER s g c2' }, { c: 1, cmd: 'XSETID s 5-0' }, { c: 1, cmd: 'XADD s 6-0 f v' }, { c: 1, cmd: 'XTRIM s MAXLEN 1' }, { c: 1, cmd: 'XDEL s 6-0' }, { c: 1, cmd: 'XGROUP DESTROY s g' }, { c: 1, cmd: 'DEL s' }, { read: 16, timeout: 1000 }]),
   s('XGROUP CREATE ENTRIESREAD', [...fill('s', 5), 'XGROUP CREATE s g 2-0 ENTRIESREAD 2', 'XGROUP CREATE s g2 0 ENTRIESREAD 0', 'XGROUP CREATE s g3 $ ENTRIESREAD 5', 'XINFO GROUPS s']),
   s('XGROUP CREATE ENTRIESREAD errors', ['XADD s 1-0 f v', 'XGROUP CREATE s g 0 ENTRIESREAD -5', 'XGROUP CREATE s g 0 ENTRIESREAD x', 'XGROUP CREATE s g 0 ENTRIESREAD', 'XGROUP CREATE s g 0 ENTRIESREAD 99', 'XGROUP CREATE s g 0 FOO', 'XINFO GROUPS s']),
   s('XGROUP CREATE invalid id and wrong type', ['XADD s 1-0 f v', 'XGROUP CREATE s g bad', 'XGROUP CREATE s g >', 'SET k v', 'XGROUP CREATE k g $', 'XGROUP CREATE k g $ MKSTREAM']),
@@ -82,4 +86,10 @@ differential('streams.groups', [
   s('XINFO STREAM with groups', [...base, 'XREADGROUP GROUP g a COUNT 2 STREAMS s >', 'XINFO STREAM s']),
   s('XINFO STREAM FULL with groups', [...base, 'XREADGROUP GROUP g a COUNT 2 STREAMS s >', 'XGROUP CREATECONSUMER s g b', 'XINFO STREAM s FULL'], { norm: clocks, ...v('XINFO STREAM FULL consumers gained active-time in 7.2', 'high') }),
   s('XINFO STREAM FULL COUNT limits PEL', [...base, 'XREADGROUP GROUP g a STREAMS s >', 'XINFO STREAM s FULL COUNT 2'], { norm: clocks, ...v('XINFO STREAM FULL consumers gained active-time in 7.2', 'high') }),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('XREADGROUP COUNT', ['XADD x 1-1 f v', 'XGROUP CREATE x g 0', 'XREADGROUP GROUP g c COUNT $N STREAMS x >', 'XREADGROUP GROUP g c BLOCK $N STREAMS x 0']),
+  ...intProbes('XPENDING', ['XADD x 1-1 f v', 'XGROUP CREATE x g 0', 'XREADGROUP GROUP g c STREAMS x >', { cmd: 'XPENDING x g - + $N', norm: pendingIdle }, { cmd: 'XPENDING x g IDLE $N - + 10', norm: shape }]),
+  ...intProbes('XCLAIM', ['XADD x 1-1 f v', 'XGROUP CREATE x g 0', 'XREADGROUP GROUP g c STREAMS x >', 'XCLAIM x g c $N 1-1', 'XCLAIM x g c 0 1-1 IDLE $N JUSTID', 'XCLAIM x g c 0 1-1 TIME $N JUSTID', 'XCLAIM x g c 0 1-1 RETRYCOUNT $N JUSTID']),
+  ...intProbes('XAUTOCLAIM', ['XADD x 1-1 f v', 'XGROUP CREATE x g 0', 'XREADGROUP GROUP g c STREAMS x >', 'XAUTOCLAIM x g c $N 0 JUSTID', 'XAUTOCLAIM x g c 0 0 COUNT $N JUSTID']),
 ]);

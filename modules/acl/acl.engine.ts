@@ -5,12 +5,13 @@ import type { Reply } from '@/libs/resp';
 import { firstIssue } from '@/libs/schemas';
 
 import AclCheckService from './acl.check.service';
+import AclDescribeService from './acl.describe.service';
 import { SetUserDTO } from './acl.dto';
 import type { AclLogContext, AclPubsubDefault } from './acl.enums';
 import AclLogService from './acl.log.service';
 import AclMessages from './acl.messages';
 import AclRulesService from './acl.rules.service';
-import type { AclUser } from './acl.structure';
+import type { AclSelector, AclUser } from './acl.structure';
 import type {
   AclDenial,
   AclGetUser,
@@ -38,7 +39,7 @@ export class Acl {
   private readonly allCommandsProvider: () => string[];
   private readonly categoriesProvider: CategoriesOf;
   private readonly now: () => number;
-  private readonly logState: AclLogState = { entries: [], nextId: 0 };
+  private readonly logState: AclLogState = { entries: [] };
   /** acl-pubsub-default (CONFIG SET). */
   pubsubDefault: AclPubsubDefault;
   /** acllog-max-len (CONFIG SET). */
@@ -65,6 +66,10 @@ export class Acl {
       allChannels: this.pubsubDefault === 'allchannels',
     };
   }
+
+  /** A selector's command permissions as Redis 7.0 describes them. */
+  private readonly describeCommands = (s: AclSelector): string =>
+    AclDescribeService.commands(s, this.allCommandsProvider(), this.categoriesProvider);
 
   private defaultUser(): AclUser {
     const d = this.usersMap.get('default');
@@ -117,8 +122,8 @@ export class Acl {
     return {
       flags: u.flags(),
       passwords: [...u.passwords],
-      ...u.root.info(),
-      selectors: u.selectors.slice(1).map((s) => s.info()),
+      ...u.root.info(this.describeCommands(u.root)),
+      selectors: u.selectors.slice(1).map((s) => s.info(this.describeCommands(s))),
     };
   }
 
@@ -145,12 +150,12 @@ export class Acl {
   /** One ACL LIST line ('user alice on #… ~k:* resetchannels -@all +get'), or null. */
   describe(name: string): string | null {
     const u = this.usersMap.get(name);
-    return u ? `user ${u.name} ${u.describe()}` : null;
+    return u ? `user ${u.name} ${u.describe(this.describeCommands)}` : null;
   }
 
   /** ACL LIST. */
   list(): string[] {
-    return this.users().map((n) => `user ${n} ${this.usersMap.get(n)?.describe() ?? ''}`);
+    return this.users().map((n) => `user ${n} ${this.usersMap.get(n)?.describe(this.describeCommands) ?? ''}`);
   }
 
   /** True when the user exists, is on, and is nopass or the password matches. */
@@ -202,7 +207,7 @@ export class Acl {
     const u = this.usersMap.get(username);
     if (!u) throw new AppError(formatMessage(AclMessages.USER_NOT_FOUND, { name: username }));
     const d = this.check(u, command, subcommand, args, keys, options);
-    return d ? AclCheckService.denialMessage(d, u.name, true) : null;
+    return d ? AclCheckService.denialMessage(d, 'verbose') : null;
   }
 
   /** For killing pub/sub clients after SETUSER / LOAD shrink channels. */

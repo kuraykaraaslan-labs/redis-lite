@@ -1,5 +1,6 @@
 import { differential, s, v } from './differential.harness';
 import { anyNumber, clientInfo, digits, hello, shape } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 // connection-level commands: PING / ECHO / SELECT / HELLO / AUTH / RESET / QUIT and CLIENT name / id / reply / kill
 differential('connection', [
@@ -51,8 +52,11 @@ differential('connection', [
   // CLIENT ID / INFO / LIST
   s('CLIENT ID is an integer', [{ cmd: 'CLIENT ID', norm: anyNumber }]),
   s('CLIENT ID arity', ['CLIENT ID x']),
-  s('CLIENT INFO fields', [{ cmd: 'CLIENT INFO', norm: clientInfo }],
-    v('CLIENT INFO gained lib-name/lib-ver (7.2), watch (7.4), io-thread (8.0) and tot-net-in/tot-net-out/tot-cmds (8.0)')),
+  s('CLIENT INFO fields', [{ cmd: 'CLIENT INFO', norm: clientInfo }]),
+  s('CLIENT INFO fields inside MULTI and with WATCH', ['WATCH k', 'MULTI', 'CLIENT INFO', { cmd: 'EXEC', norm: clientInfo }]),
+  s('CLIENT LIST fields of a named subscriber', [{ c: 1, cmd: 'CLIENT SETNAME sub' }, { c: 1, cmd: 'SUBSCRIBE ch' },
+    { cmd: 'CLIENT LIST TYPE pubsub', norm: clientInfo }]),
+  s('CLIENT INFO after SELECT and HELLO 3', ['SELECT 3', { cmd: 'HELLO 3', norm: hello }, { cmd: 'CLIENT INFO', norm: clientInfo }]),
   s('CLIENT LIST TYPE bogus', ['CLIENT LIST TYPE bogus']),
   s('CLIENT LIST TYPE pubsub without subscribers', ['CLIENT LIST TYPE pubsub']),
   s('CLIENT LIST TYPE master and replica are empty', ['CLIENT LIST TYPE master', 'CLIENT LIST TYPE replica', 'CLIENT LIST TYPE slave']),
@@ -145,4 +149,11 @@ differential('connection', [
   s('QUIT closes the connection', ['QUIT', 'PING']),
   s('QUIT with arguments', ['QUIT x', 'PING']),
   s('CLIENT KILL ID unknown with digits masked', [{ cmd: 'CLIENT KILL ID 123456789', norm: digits }]),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('CLIENT ids', ['CLIENT KILL ID $N', 'CLIENT LIST ID $N', 'CLIENT UNBLOCK $N', 'CLIENT KILL ID 1 MAXAGE $N']),
+  ...intProbes('HELLO protover', ['HELLO $N']),
+  ...intProbes('CLIENT PAUSE', ['CLIENT PAUSE $N WRITE', 'CLIENT UNPAUSE']),
+  ...intProbes('CLIENT TRACKING REDIRECT', ['CLIENT TRACKING on REDIRECT $N', 'CLIENT TRACKING off']),
+  ...intProbes('SELECT', ['SELECT $N']),
 ]);

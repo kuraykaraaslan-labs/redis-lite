@@ -5,7 +5,6 @@ import type { Reply } from '@/libs/resp';
 import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 import DatabaseService from '@/modules/database/database.service';
-import HashesService from '@/modules/hashes/hashes.service';
 import MemoryService from '@/modules/memory/memory.service';
 import type { MemoryReport, MemoryStatValue } from '@/modules/memory/memory.types';
 import type { RedisValue } from '@/modules/database/database.types';
@@ -21,7 +20,7 @@ export default class ServerMemoryService {
 
   /** The OBJECT ENCODING of a value under the live config. */
   private static encodingOf(ctx: CommandContext, v: RedisValue): string {
-    return DatabaseService.objectEncoding(v, ctx.server.config, v.type === 'hash' && HashesService.hashFieldExpires(v.value) !== undefined);
+    return DatabaseService.objectEncoding(v, ctx.server.config);
   }
 
   /** Options of the memory model that follow the live config. */
@@ -30,7 +29,6 @@ export default class ServerMemoryService {
     return {
       samples,
       hasExpire: ctx.db.getExpire(key) !== undefined,
-      fieldTtls: v.type === 'hash' ? HashesService.hashFieldExpires(v.value) : undefined,
       listMaxListpackSize: cfg.num('list-max-listpack-size'),
       streamNodeMaxEntries: cfg.num('stream-node-max-entries'),
       streamNodeMaxBytes: cfg.num('stream-node-max-bytes'),

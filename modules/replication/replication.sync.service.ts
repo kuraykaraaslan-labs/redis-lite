@@ -44,7 +44,7 @@ export default class ReplicationSyncService {
     const S = ReplicationSyncService;
     const replication = ctx.server.replication;
     let reply: HandlerResult = OK;
-    for (const { option, value, extra } of pairs) {
+    for (const { option, value } of pairs) {
       switch (option) {
         case 'listening-port':
         case 'ip-address':
@@ -53,7 +53,7 @@ export default class ReplicationSyncService {
           break;
         case 'ack': {
           const offset = S.integer(value);
-          if (offset !== null) replication.replicaAck(ctx.client, offset, S.integer(extra[0]));
+          if (offset !== null) replication.replicaAck(ctx.client, offset);
           reply = NO_REPLY;
           break;
         }

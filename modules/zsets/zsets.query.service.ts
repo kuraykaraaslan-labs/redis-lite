@@ -1,6 +1,6 @@
 import { matchGlob } from '@/libs/glob';
-import { formatFloat } from '@/libs/number';
-import { NULL_ARRAY, RespDouble, RespPairs } from '@/libs/resp';
+import { formatFloat, formatG17 } from '@/libs/number';
+import { RespDouble, RespPairs } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
@@ -67,25 +67,22 @@ export default class ZSetsQueryService {
     return hi - lo;
   }
 
-  /** ZRANK / ZREVRANK; a miss with WITHSCORE is a null array, without it a null bulk. */
-  static rank(ctx: CommandContext, { key, member, withScore, reverse }: ZRankInput): Reply {
+  /** ZRANK / ZREVRANK; a miss is a null bulk. */
+  static rank(ctx: CommandContext, { key, member, reverse }: ZRankInput): Reply {
     const zset = ctx.db.get(key, 'zset');
     const rank = zset?.rank(member) ?? null;
-    if (rank === null || !zset) return withScore ? NULL_ARRAY : null;
-    const position = reverse ? zset.size - 1 - rank : rank;
-    return withScore ? [position, new RespDouble(zset.scores.get(member) ?? 0)] : position;
+    if (rank === null || !zset) return null;
+    return reverse ? zset.size - 1 - rank : rank;
   }
 
   /** ZSCAN on an existing sorted set; a compact (listpack) one is returned whole in one call, as Redis does. */
-  static scan(ctx: CommandContext, zset: ZSet, { key, cursor, match, count, noScores }: ZScanInput): Reply {
+  static scan(ctx: CommandContext, zset: ZSet, { key, cursor, match, count }: ZScanInput): Reply {
     const value = ctx.db.peek(key);
     const compact = value !== undefined && DatabaseService.isCompact(value, ctx.server.config);
     const { next, page } = compact ? { next: 0, page: zset.entries.map((e) => e.member) } : DatabaseService.scanPage(zset.scores.keys(), cursor, count);
     const out: string[] = [];
     for (const member of page) {
-      if (!matchGlob(match, member)) continue;
-      out.push(member);
-      if (!noScores) out.push(formatFloat(zset.scores.get(member) ?? 0));
+      if (matchGlob(match, member)) out.push(member, (compact ? formatFloat : formatG17)(zset.scores.get(member) ?? 0));
     }
     return [String(next), out];
   }

@@ -55,8 +55,9 @@ describe('OBJECT', () => {
     expect(await enc('ob:sb')).toBe('raw');
     await t.call('SETBIT', 'ob:sbnew', 1, 1);
     expect(await enc('ob:sbnew')).toBe('raw');
+    // APPEND to a missing key stores its argument like SET (Redis 7.0)
     await t.call('APPEND', 'ob:apnew', 'x');
-    expect(await enc('ob:apnew')).toBe('raw');
+    expect(await enc('ob:apnew')).toBe('embstr');
   });
 
   it('ENCODING after INCR is int', async () => {
@@ -69,11 +70,11 @@ describe('OBJECT', () => {
 
   it('ENCODING of other types', async () => {
     await t.call('RPUSH', 'ob:l', 'a');
-    expect(await enc('ob:l')).toBe('listpack');
+    expect(await enc('ob:l')).toBe('quicklist');
     await t.call('SADD', 'ob:si', '1', '2');
     expect(await enc('ob:si')).toBe('intset');
     await t.call('SADD', 'ob:ss', 'a');
-    expect(await enc('ob:ss')).toBe('listpack');
+    expect(await enc('ob:ss')).toBe('hashtable');
     await t.call('HSET', 'ob:h', 'f', 'v');
     expect(await enc('ob:h')).toBe('listpack');
     await t.call('ZADD', 'ob:z', 1, 'a');

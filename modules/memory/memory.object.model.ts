@@ -7,30 +7,46 @@ import type { RedisValue } from '@/modules/database/database.types';
 import type { ConsumerGroup, PendingEntry, StreamId } from '@/modules/streams/streams.types';
 
 import MemoryAllocModel from './memory.alloc.model';
+import MemoryDictModel from './memory.dict.model';
 import MemoryQuicklistModel from './memory.quicklist.model';
 import MemoryRaxModel from './memory.rax.model';
-import type { FieldTtls, MemoryUsageOptions } from './memory.types';
+import MemorySdsModel from './memory.sds.model';
+import type { MemoryUsageOptions, StringValue, StructSizes } from './memory.types';
 
 /**
- * objectComputeSize for a Redis 8 kvobj: the value object (with its embedded key and expire slot) plus everything it
- * owns. Sampled aggregates (HT sets/hashes, skiplist zsets, quicklists, stream listpacks) average the first `samples`
+ * What one key costs in Redis 7.0: its key sds plus objectComputeSize of the value (the robj and everything it owns).
+ * Sampled aggregates (HT sets/hashes, skiplist zsets, quicklists, stream listpacks) average the first `samples`
  * elements and scale by the element count, exactly like Redis.
  */
 export default class MemoryObjectModel {
   // ──────────────────────────────────────────────
-  // Private Helpers: sampling
+  // Constants
   // ──────────────────────────────────────────────
 
-  private static ttlCount(t: FieldTtls | undefined): number {
-    if (t === undefined) return 0;
-    return typeof t === 'number' ? t : t.size;
+  /** Integers Redis keeps as shared objects (OBJ_SHARED_INTEGERS). */
+  private static readonly SHARED_INT = /^(0|[1-9]\d{0,3})$/;
+
+  /** Struct sizes as objectComputeSize counts them (sizeof). */
+  private static readonly SIZEOF: StructSizes = MemoryObjectModel.structs((n) => n);
+  /** Struct sizes as the allocator hands them out (used_memory). */
+  private static readonly ALLOCATED: StructSizes = MemoryObjectModel.structs((n) => MemoryAllocModel.jemallocSize(n));
+
+  private static structs(size: (n: number) => number): StructSizes {
+    const S = MemoryAllocModel.SIZES;
+    return Object.freeze({
+      dict: size(S.dict),
+      dictEntry: size(S.dictEntry),
+      quicklist: size(S.quicklist),
+      quicklistNode: size(S.quicklistNode),
+      streamCG: size(S.streamCG),
+      streamConsumer: size(S.streamConsumer),
+      streamNACK: size(S.streamNACK),
+    });
   }
 
-  private static hasFieldTtl(t: FieldTtls | undefined, field: string, index: number): boolean {
-    if (t === undefined) return false;
-    if (typeof t === 'number') return index < t;
-    return t.has(field);
-  }
+  // ──────────────────────────────────────────────
+  // Private Helpers: sampling
+  // ──────────────────────────────────────────────
 
   /** Sum of `cost` over the first `limit` items (as objectComputeSize iterates), plus how many were sampled. */
   private static sample<T>(items: Iterable<T>, limit: number, cost: (item: T, index: number) => number): { sum: number; n: number } {
@@ -53,40 +69,32 @@ export default class MemoryObjectModel {
   // Private Helpers: per type
   // ──────────────────────────────────────────────
 
-  private static stringSize(key: string, value: string, encoding: string, hasExpire: boolean, raw: boolean): number {
+  private static stringSize(v: StringValue, encoding: string): number {
     const M = MemoryAllocModel;
-    if (encoding === 'int') return M.kvobjAllocSize(key, hasExpire);
-    if (encoding === 'embstr') return M.kvobjAllocSize(key, hasExpire, value.length);
-    return M.kvobjAllocSize(key, hasExpire) + M.rawStringAlloc(value.length, !raw);
+    if (encoding === 'int') return M.SIZES.robj;
+    if (encoding === 'embstr') return M.embstrAllocSize(v.value.length);
+    return M.SIZES.robj + MemorySdsModel.of(v).size;
   }
 
-  private static listSize(kv: number, list: ListDeque, encoding: string, limit: number, fill: number): number {
-    const M = MemoryAllocModel;
-    if (encoding !== 'quicklist') return kv + M.jemallocSize(PersistenceService.listpackBytes(list));
-    const nodes = MemoryQuicklistModel.quicklistNodes(list, fill);
-    const asize = kv + M.SIZES.quicklist;
+  /** A quicklist: the struct, then the first `limit` nodes (struct + data allocation) averaged per node. */
+  private static listSize(kv: number, list: ListDeque, limit: number, T: StructSizes): number {
+    const asize = kv + T.quicklist;
+    const sampled = MemoryQuicklistModel.quicklistNodes(list, limit);
+    if (!sampled.length) return asize;
     let elesize = 0;
-    let elecount = 0;
-    let samples = 0;
-    for (const node of nodes) {
-      elesize += M.SIZES.quicklistNode + M.jemallocSize(node.bytes);
-      elecount += node.count;
-      samples++;
-      if (samples >= limit) break;
-    }
-    return elecount ? Math.floor(asize + (elesize / elecount) * list.length) : asize;
+    for (const node of sampled) elesize += T.quicklistNode + node.alloc;
+    return Math.floor(asize + (elesize / sampled.length) * list.layout.nodes.length);
   }
 
-  private static setSize(kv: number, set: Set<string>, encoding: string, limit: number): number {
+  private static setSize(kv: number, set: Set<string>, encoding: string, limit: number, T: StructSizes): number {
     const M = MemoryAllocModel;
     if (encoding === 'intset') return kv + M.jemallocSize(M.intsetBytes(set));
-    if (encoding === 'listpack') return kv + M.jemallocSize(PersistenceService.listpackBytes([...set]));
-    const asize = kv + M.SIZES.dict + M.SIZES.bucket * M.dictBuckets(set.size);
-    const { sum, n } = MemoryObjectModel.sample(set, limit, (m) => M.SIZES.dictEntryNoValue + M.sdsAllocSize(m.length));
+    const asize = kv + T.dict + M.SIZES.bucket * MemoryDictModel.slots(set, set.size);
+    const { sum, n } = MemoryObjectModel.sample(set, limit, (m) => T.dictEntry + M.sdsAllocSize(m.length));
     return MemoryObjectModel.addAverage(asize, sum, n, set.size);
   }
 
-  private static zsetSize(kv: number, z: ZSet, encoding: string, limit: number): number {
+  private static zsetSize(kv: number, z: ZSet, encoding: string, limit: number, T: StructSizes): number {
     const M = MemoryAllocModel;
     const S = M.SIZES;
     if (encoding === 'listpack') {
@@ -95,12 +103,12 @@ export default class MemoryObjectModel {
       return kv + M.jemallocSize(PersistenceService.listpackBytes(items));
     }
     const header = M.jemallocSize(S.zskiplistNode + S.zskiplistLevel * S.zskiplistMaxLevel);
-    const asize = kv + S.zset + S.zskiplist + S.dict + S.bucket * M.dictBuckets(z.size) + header;
-    const { sum, n } = MemoryObjectModel.sample(z.entries, limit, (e) => M.sdsAllocSize(e.member.length) + S.dictEntry + M.EXPECTED_ZSL_NODE);
+    const asize = kv + S.zset + S.zskiplist + T.dict + S.bucket * MemoryDictModel.slots(z, z.size) + header;
+    const { sum, n } = MemoryObjectModel.sample(z.entries, limit, (e) => M.sdsAllocSize(e.member.length) + T.dictEntry + M.EXPECTED_ZSL_NODE);
     return MemoryObjectModel.addAverage(asize, sum, n, z.size);
   }
 
-  private static hashSize(kv: number, h: Map<string, string>, encoding: string, limit: number, ttls: FieldTtls | undefined): number {
+  private static hashSize(kv: number, h: Map<string, string>, encoding: string, limit: number, T: StructSizes): number {
     const M = MemoryAllocModel;
     const O = MemoryObjectModel;
     const listpackBytes = PersistenceService.listpackBytes;
@@ -109,19 +117,8 @@ export default class MemoryObjectModel {
       for (const [f, v] of h) items.push(f, v);
       return kv + M.jemallocSize(listpackBytes(items));
     }
-    if (encoding === 'listpackex') {
-      // (field, value, ttl) triplets; a TTL is a unix-ms integer (int64 entry), no TTL is stored as 0.
-      const withTtl = Math.min(O.ttlCount(ttls), h.size);
-      let bytes = 7 + withTtl * 10 + (h.size - withTtl) * 2;
-      for (const [f, v] of h) bytes += listpackBytes([f, v]) - 7;
-      return kv + M.jemallocSize(M.SIZES.listpackEx) + M.jemallocSize(bytes);
-    }
-    const asize = kv + M.SIZES.dict + M.SIZES.bucket * M.dictBuckets(h.size);
-    const { sum, n } = O.sample(
-      h,
-      limit,
-      ([f, v], i) => M.hfieldAllocSize(f.length, O.hasFieldTtl(ttls, f, i)) + M.sdsAllocSize(v.length) + M.SIZES.dictEntry,
-    );
+    const asize = kv + T.dict + M.SIZES.bucket * MemoryDictModel.slots(h, h.size);
+    const { sum, n } = O.sample(h, limit, ([f, v]) => M.sdsAllocSize(f.length) + M.sdsAllocSize(v.length) + T.dictEntry);
     return O.addAverage(asize, sum, n, h.size);
   }
 
@@ -131,18 +128,17 @@ export default class MemoryObjectModel {
     return out;
   }
 
-  private static groupSize(g: ConsumerGroup): number {
-    const S = MemoryAllocModel.SIZES;
+  private static groupSize(g: ConsumerGroup, T: StructSizes): number {
     const rax = MemoryRaxModel.streamRaxMemory;
     const ids = MemoryObjectModel.pendingIds;
-    let n = S.streamCG + rax(ids(g.pending)) + S.streamNACK * g.pending.size;
+    let n = T.streamCG + rax(ids(g.pending)) + T.streamNACK * g.pending.size;
     for (const c of g.consumers.values()) {
-      n += S.streamConsumer + c.name.length + rax(ids(c.pending));
+      n += T.streamConsumer + c.name.length + rax(ids(c.pending));
     }
     return n;
   }
 
-  private static streamSize(kv: number, s: Stream, limit: number, maxEntries: number, maxBytes: number): number {
+  private static streamSize(kv: number, s: Stream, limit: number, maxEntries: number, maxBytes: number, T: StructSizes): number {
     const M = MemoryAllocModel;
     s.ensureNodes(maxEntries, maxBytes);
     const nodes = s.nodes;
@@ -161,7 +157,7 @@ export default class MemoryObjectModel {
       if (samples) lpsize = Math.floor(lpsize / samples);
       asize += lpsize * (nodes.length - 1) + alloc(nodes.length - 1);
     }
-    for (const g of s.groups.values()) asize += MemoryObjectModel.groupSize(g);
+    for (const g of s.groups.values()) asize += MemoryObjectModel.groupSize(g, T);
     return asize;
   }
 
@@ -169,27 +165,32 @@ export default class MemoryObjectModel {
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** objectComputeSize: the kvobj and everything it owns (see the class comment). */
+  /** The key sds plus objectComputeSize of the value (see the class comment). */
   static objectSize(key: string, value: RedisValue, encoding: string, opts: MemoryUsageOptions): number {
+    return MemoryAllocModel.keyAllocSize(key) + MemoryObjectModel.valueSize(value, encoding, opts);
+  }
+
+  /** objectComputeSize: the robj and everything it owns. */
+  static valueSize(value: RedisValue, encoding: string, opts: MemoryUsageOptions): number {
     const O = MemoryObjectModel;
     const limit = opts.samples <= 0 ? Infinity : opts.samples;
-    const kv = MemoryAllocModel.kvobjAllocSize(key, opts.hasExpire);
+    const kv = MemoryAllocModel.SIZES.robj;
+    const T = opts.allocated ? O.ALLOCATED : O.SIZEOF;
     switch (value.type) {
       case 'string':
-        return O.stringSize(key, value.value, encoding, opts.hasExpire, value.raw === true);
+        // a shared integer object (0..9999 when maxmemory is off) allocates nothing of its own
+        if (opts.allocated && opts.sharedIntegers && encoding === 'int' && O.SHARED_INT.test(value.value)) return 0;
+        return O.stringSize(value, encoding);
       case 'list':
-        return O.listSize(kv, value.value, encoding, limit, opts.listMaxListpackSize ?? -2);
+        return O.listSize(kv, value.value, limit, T);
       case 'set':
-        return O.setSize(kv, value.value, encoding, limit);
+        return O.setSize(kv, value.value, encoding, limit, T);
       case 'zset':
-        return O.zsetSize(kv, value.value, encoding, limit);
+        return O.zsetSize(kv, value.value, encoding, limit, T);
       case 'hash':
-        return O.hashSize(kv, value.value, encoding, limit, opts.fieldTtls);
+        return O.hashSize(kv, value.value, encoding, limit, T);
       case 'stream':
-        return O.streamSize(kv, value.value, limit, opts.streamNodeMaxEntries ?? 100, opts.streamNodeMaxBytes ?? 4096);
-      case 'timeseries':
-        // a module value: the kvobj plus what the series reports as its own memory (TS.INFO memoryUsage)
-        return kv + value.value.memoryUsage();
+        return O.streamSize(kv, value.value, limit, opts.streamNodeMaxEntries ?? 100, opts.streamNodeMaxBytes ?? 4096, T);
     }
   }
 }

@@ -7,8 +7,9 @@ import CommandService from '@/modules/command/command.service';
 import type { CommandContext, HandlerResult } from '@/modules/command/command.types';
 
 import type { XReadInput } from './streams.dto';
+import StreamsGroupService from './streams.group.service';
 import StreamsMessages from './streams.messages';
-import { ZERO_ID, advanceGroup, compareIds, deliverNew, entryReply, getOrCreateConsumer, idToString, prevId } from './streams.structure';
+import { ZERO_ID, advanceGroup, compareIds, deliverNew, entryReply, idToString } from './streams.structure';
 import type { Stream } from './streams.structure';
 import type { StreamId, StreamIdToken } from './streams.types';
 
@@ -44,7 +45,6 @@ export default class StreamsReadService {
       const s = ctx.db.get(key, 'stream');
       const token = ids[j];
       if (token.kind === 'last') return s?.lastId ?? ZERO_ID;
-      if (token.kind === 'max') return s && s.length ? (prevId(s.entries[s.length - 1].id) ?? ZERO_ID) : (s?.lastId ?? ZERO_ID);
       if (token.kind === 'new') throw new AppError(StreamsMessages.XREAD_NEW_ID);
       return StreamsReadService.requireId(token);
     });
@@ -93,7 +93,7 @@ export default class StreamsReadService {
           if (blocked) return new RespError(StreamsMessages.UNBLOCKED_GROUP_DELETED);
           continue;
         }
-        const c = getOrCreateConsumer(g, consumerName);
+        const c = StreamsGroupService.consumer(ctx, key, g, consumerName);
         c.seenTime = now;
         const start = from[j];
         if (start === null) {

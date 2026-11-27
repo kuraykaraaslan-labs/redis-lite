@@ -77,23 +77,50 @@ export default class ServerLolwutService {
           (get(x, y + 3) << 6) | (get(x + 1, y + 3) << 7);
         row += String.fromCodePoint(0x2800 + byte);
       }
-      rows.push(row);
+      rows.push(`${row}\n`);
     }
-    return rows.join('\n');
+    return rows.join('');
+  }
+
+  /**
+   * LOLWUT VERSION 6: a random city skyline on a `cols` x `rows` canvas, one ANSI-coloured cell per pixel (white sky,
+   * then light grey, dark grey and black buildings from the farthest to the nearest, with lit windows).
+   */
+  private static skyline(cols: number, rows: number): string {
+    const SHADES = ['0;97;107', '0;37;47', '0;90;100', '0;30;40'];
+    const canvas = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+    const rand = (min: number, max: number): number => min + Math.floor(Math.random() * (max - min + 1));
+    for (let layer = 1; layer <= 3; layer++) {
+      const maxHeight = Math.max(1, Math.floor((rows * (5 - layer)) / 5));
+      for (let x = rand(-4, 0); x < cols; ) {
+        const width = rand(3, 10);
+        const height = rand(Math.max(1, Math.floor(maxHeight / 3)), maxHeight);
+        for (let dx = 0; dx < width; dx++) {
+          for (let dy = 0; dy < height; dy++) {
+            const px = x + dx;
+            const py = rows - 1 - dy;
+            if (px < 0 || px >= cols || py < 0) continue;
+            const window = layer > 1 && dx % 2 === 1 && dy % 2 === 1 && dx < width - 1 && dy < height - 1 && Math.random() < 0.5;
+            canvas[py][px] = window ? layer - 1 : layer;
+          }
+        }
+        x += width + rand(0, 3);
+      }
+    }
+    return canvas.map((line) => `${line.map((c) => `\x1b[${SHADES[c]}m \x1b[0m`).join('')}\n`).join('');
   }
 
   // ──────────────────────────────────────────────
   // Public Methods
   // ──────────────────────────────────────────────
 
-  /** LOLWUT [VERSION v] [options]: version 5 draws Schotter; version 6 only has its caption here. */
+  /** LOLWUT [VERSION v] [options]: version 5 draws Schotter, version 6 a skyline, any other only the version. */
   static lolwut(_ctx: CommandContext, { version, cols, perRow, perCol }: LolwutInput): Reply {
     let text: string;
     if (version === 5) {
       text = `${ServerLolwutService.render(cols, perRow, perCol)}${formatMessage(ServerMessages.LOLWUT_5_CAPTION, { version: REDIS_VERSION })}`;
     } else if (version === 6) {
-      // the LOLWUT 6 skyline drawing is not reproduced, only its caption
-      text = formatMessage(ServerMessages.LOLWUT_6_CAPTION, { version: REDIS_VERSION });
+      text = `${ServerLolwutService.skyline(cols, perRow)}${formatMessage(ServerMessages.LOLWUT_6_CAPTION, { version: REDIS_VERSION })}`;
     } else text = formatMessage(ServerMessages.LOLWUT_CAPTION, { version: REDIS_VERSION });
     return new RespVerbatim(Buffer.from(text, 'utf8').toString('latin1'));
   }

@@ -11,6 +11,7 @@ import CommandService, { Block, NO_REPLY } from '@/modules/command/command.servi
 import type { CommandContext, CommandMeta, CommandSpec, HandlerResult } from '@/modules/command/command.types';
 import type { Database } from '@/modules/database/database.service';
 import MemoryMessages from '@/modules/memory/memory.messages';
+import MemoryService from '@/modules/memory/memory.service';
 import NotificationsService from '@/modules/notifications/notifications.service';
 import ReplicationMessages from '@/modules/replication/replication.messages';
 import TrackingService from '@/modules/tracking/tracking.service';
@@ -18,6 +19,7 @@ import TrackingService from '@/modules/tracking/tracking.service';
 import type { Client } from './server.client';
 import type { RedisLiteServer } from './server.core';
 import { LatencyHistogram } from './server.latency.structure';
+import { ServerMemoryModel } from './server.memory_model';
 import ServerMessages from './server.messages';
 import type { ExecuteMode, PauseMode, Precheck } from './server.types';
 
@@ -29,7 +31,7 @@ import type { ExecuteMode, PauseMode, Precheck } from './server.types';
 const ZERO_IS_NOOP = new Set([
   'del', 'unlink', 'expire', 'pexpire', 'expireat', 'pexpireat', 'persist', 'sadd', 'srem', 'hdel', 'hsetnx', 'setnx', 'msetnx',
   'renamenx', 'smove', 'lpushx', 'rpushx', 'lrem', 'zrem', 'zremrangebyscore', 'zremrangebyrank', 'zremrangebylex', 'copy', 'move',
-  'linsert', 'pfadd', 'xdel', 'xtrim', 'xack', 'hsetex',
+  'linsert', 'pfadd', 'xdel', 'xtrim', 'xack',
 ]);
 
 /** Write commands whose null / empty reply means nothing was modified. */
@@ -43,6 +45,9 @@ const EMPTY_IS_NOOP = new Set([
 const READ_LOOKUP_WRITES = new Set(['getdel', 'getex', 'getset', 'pfcount', 'pfmerge']);
 
 const MULTI_IMMEDIATE = new Set(['exec', 'discard', 'multi', 'watch', 'quit', 'reset']);
+
+/** PROTO_MBULK_BIG_ARG: a bulk argument this large is read straight into a query buffer of its own. */
+const BIG_ARG = 32 * 1024;
 
 /** How a command sent by a client runs (not from a script, may block). Shared: nothing writes to it. */
 const TOP_LEVEL_MODE: ExecuteMode = Object.freeze({ inScript: false, noBlock: false });
@@ -146,7 +151,7 @@ export class ServerDispatcher {
     if (denial && client.user) {
       client.lastCommand = fullname;
       server.aclLogDenial(client, denial, server.aclContext(client));
-      this.rejectCommand(client, AclService.noPermError(denial, client.user.name), fullname, isExec);
+      this.rejectCommand(client, AclService.noPermError(denial), fullname, isExec);
       return true;
     }
     // the master's stream on a replica: no OOM, MISCONF, read-only or stale-data refusals
@@ -222,7 +227,7 @@ export class ServerDispatcher {
       const denial = server.aclDenial(client, argv, meta);
       if (denial) {
         server.aclLogDenial(client, denial, 'lua');
-        return new RespError(formatMessage(ServerMessages.ACL_SCRIPT_FAILURE, { reason: AclService.denialMessage(denial, client.user.name) }));
+        return new RespError(formatMessage(ServerMessages.ACL_SCRIPT_FAILURE, { reason: AclService.denialMessage(denial, 'script') }));
       }
     }
     // the checks processCommand() makes for top-level commands, for redis.call
@@ -253,8 +258,8 @@ export class ServerDispatcher {
     if (base && base.subcommands.size && argv.length > 1 && !meta) {
       return { error: unknownSubcommand(argv[1].slice(0, 128), argv[0]), statName: name };
     }
-    const isSub = Boolean(meta && meta !== base);
-    const arity = isSub && meta ? meta.arity : spec.arity;
+    // the table's arity (Redis 7.0.15) wins over the handler's own
+    const arity = meta ? meta.arity : spec.arity;
     const fullname = meta?.fullname ?? name;
     if (!CommandService.arityOk(arity, argv.length)) return { error: wrongArity(fullname), meta, statName: fullname };
     return { error: null, meta, statName: fullname };
@@ -291,8 +296,12 @@ export class ServerDispatcher {
     const fullname = checked.statName ?? name;
     const write = spec.flags?.write === true;
     if (mode.inScript) {
-      const refusal = this.scriptRefusal(client, argv, checked, write, Boolean(spec.flags?.noscript));
-      if (refusal) return refusal;
+      const noscript = Boolean(spec.flags?.noscript) || Boolean(meta?.flagSet.has('noscript'));
+      const refusal = this.scriptRefusal(client, argv, checked, write, noscript);
+      if (refusal) {
+        server.observer.commandStat(fullname).rejected++;
+        return refusal;
+      }
     }
 
     if (server.monitors.size && !meta?.flagSet.has('skip_monitor') && !meta?.flagSet.has('admin')) {
@@ -300,11 +309,11 @@ export class ServerDispatcher {
     }
     server.stats.commands++;
     client.commandsProcessed++;
-    if (!mode.inScript) client.lastCommand = fullname;
+    // inside EXEC the connection's current command stays EXEC (CLIENT LIST cmd=)
+    if (!mode.inScript && !client.inExec) client.lastCommand = fullname;
     const dbIndex = client.dbIndex;
     const db = server.databases[dbIndex];
     const ctx: CommandContext = { server, client, db, inScript: mode.inScript, noBlock: mode.noBlock, noop: false, name: argv[0] };
-    db.touchOnRead = !client.noTouch || name === 'touch';
     if (meta?.keySpecs.length) this.countKeyspaceLookups(db, meta, argv);
     const notify = server.keyspace.notifyFlags();
     // read commands only need their keys for keyspace notifications (keymiss)
@@ -320,6 +329,9 @@ export class ServerDispatcher {
       // the state of the command's keys before it runs: `new` / `keymiss` events, and SET … GET's no-op test
       const before = notify || name === 'set' ? server.keyspace.keyStates(db, keys) : null;
       const dirtyBefore = persistence.dirty;
+      // value dicts (rehashing, growth) of set / hash / sorted set commands
+      const dictKeys = ServerMemoryModel.touchesDicts(meta?.group) ? (keys.length ? keys : CommandService.keyNames(meta!, argv)) : null;
+      const dicts = dictKeys ? server.memoryModel.dictsBefore(db, dictKeys) : null;
       let noop = false;
       try {
         result = spec.handler(ctx, args);
@@ -327,6 +339,9 @@ export class ServerDispatcher {
           noop = ctx.noop || isNoop(name, args, result, before?.get(keys[0])?.exists ?? false);
           if (write && !noop) for (let i = 0; i < keys.length; i++) server.touch(dbIndex, keys[i]);
         }
+        // after touch(), which refreshes the encodings
+        if (dicts && !(result instanceof Block)) server.memoryModel.dictsAfter(dbIndex, dictKeys!, dicts, name, argv);
+        server.memoryModel.keyspaceAfter(dbIndex, name, argv, keys.length || ServerMemoryModel.keyCount(meta && [meta.firstKey, meta.lastKey, meta.step], argv.length), write);
       } catch (error) {
         if (error instanceof AppError) result = new RespError(error.message);
         else {
@@ -349,9 +364,10 @@ export class ServerDispatcher {
     if (server.config.get('latency-tracking') === 'yes') (stat.histogram ??= new LatencyHistogram()).record(usec);
     if (result instanceof RespError) {
       stat.failed++;
-      if (!mode.inScript) server.countError(result.message);
+      if (!mode.inScript && !result.counted) server.countError(result.message);
     }
     if (!mode.inScript && !meta?.flagSet.has('skip_slowlog')) server.observer.slowlogPush(client, argv, usec);
+    if (!mode.inScript) server.observer.latencySample(meta?.flagSet.has('fast') ? 'fast-command' : 'command', usec);
     return result;
   }
 
@@ -395,12 +411,21 @@ export class ServerDispatcher {
     server.tracking.current = client;
     const replOffset = server.replication.offset;
     let result: HandlerResult;
+    client.currentArgv = argv;
     try {
       result = this.run(client, argv, name, spec, TOP_LEVEL_MODE, checked);
     } finally {
       server.tracking.current = null;
+      client.currentArgv = null;
     }
-    // what WAIT / WAITAOF wait for: the stream offset after this client's last propagated write
+    // a big argument took the query buffer itself; a new one sized for it replaces it
+    for (let i = argv.length - 1; i >= 0; i--) {
+      if (argv[i].length >= BIG_ARG) {
+        client.queryBuf = MemoryService.sdsFresh(argv[i].length + 2);
+        break;
+      }
+    }
+    // what WAIT waits for: the stream offset after this client's last propagated write
     if (server.replication.offset !== replOffset) client.woff = server.replication.offset;
     if (result instanceof Block) server.blocking.block(client, result, argv);
     else if (result !== NO_REPLY) client.write(result);
@@ -418,10 +443,16 @@ export class ServerDispatcher {
     const spec = COMMANDS.get(name);
     const checked = prechecked ?? this.precheckSpec(argv, name, spec);
     if (!spec || checked.error !== null) {
+      if (mode.inScript) {
+        // redis.call has its own texts (Redis 7.0); an unknown command or subcommand gets no INFO commandstats entry
+        if (!spec || !checked.meta) return new RespError(ServerMessages.SCRIPT_UNKNOWN_COMMAND);
+        if (checked.statName) server.observer.commandStat(checked.statName).rejected++;
+        return new RespError(ServerMessages.SCRIPT_WRONG_ARITY);
+      }
       const message = checked.error ?? unknownCommand(argv[0], argv.slice(1));
       if (!spec) Logger.warn('[ServerDispatcher.execute] Unknown command', { command: name });
       if (checked.statName) server.observer.commandStat(checked.statName).rejected++;
-      if (!mode.inScript) server.countError(message);
+      server.countError(message);
       return new RespError(message);
     }
     return this.run(client, argv, name, spec, mode, checked);

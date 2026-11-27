@@ -6,8 +6,9 @@ import type { Reply } from '@/libs/resp';
 import type { CommandContext } from '@/modules/command/command.types';
 
 import type { XAckInput, XAutoClaimInput, XClaimInput, XPendingInput } from './streams.dto';
+import StreamsGroupService from './streams.group.service';
 import StreamsMessages from './streams.messages';
-import { ZERO_ID, byName, compareIds, dropPending, entryReply, getOrCreateConsumer, idToString, movePending } from './streams.structure';
+import { ZERO_ID, byName, compareIds, dropPending, entryReply, idToString, movePending } from './streams.structure';
 import type { Stream } from './streams.structure';
 import type { GroupTarget, PendingEntry } from './streams.types';
 
@@ -19,6 +20,12 @@ export default class StreamsPendingService {
 
   /** XAUTOCLAIM scans at most COUNT × this many PEL entries per call. */
   private static readonly AUTOCLAIM_ATTEMPTS_FACTOR = 10;
+
+  /**
+   * Redis 7.0 allocates room for COUNT deleted ids (16 bytes each) up front, once the group is found, and answers an
+   * error when that allocation fails: on a 64-bit Linux build it fails past 2748779069440 ids (40 TiB).
+   */
+  private static readonly AUTOCLAIM_MAX_COUNT = 2748779069440;
 
   // ──────────────────────────────────────────────
   // Private Helpers
@@ -83,7 +90,7 @@ export default class StreamsPendingService {
   }
 
   /** XCLAIM on the group found before the arguments were parsed: the claimed entries (or ids with JUSTID). */
-  static claim(input: XClaimInput, { s, g }: GroupTarget): Reply {
+  static claim(ctx: CommandContext, input: XClaimInput, { s, g }: GroupTarget): Reply {
     const { consumer: consumerName, minIdle, ids, retryCount, force, justId, lastId } = input;
     const now = Date.now();
     let deliveryTime = input.deliveryTime === null ? -1 : input.deliveryTime.kind === 'idle' ? now - input.deliveryTime.ms : input.deliveryTime.ms;
@@ -105,12 +112,13 @@ export default class StreamsPendingService {
       }
       if (!p) continue;
       if (p.consumer && minIdle && now - p.deliveryTime < minIdle) continue;
-      const c = getOrCreateConsumer(g, consumerName);
+      const c = StreamsGroupService.consumer(ctx, input.key, g, consumerName);
       movePending(g, c, p);
       p.deliveryTime = deliveryTime;
       if (retryCount >= 0) p.deliveryCount = retryCount;
       else if (!justId) p.deliveryCount++;
       out.push(justId ? k : entryReply(e));
+      c.seenTime = now;
       c.activeTime = now;
     }
     return out;
@@ -120,6 +128,7 @@ export default class StreamsPendingService {
   static autoClaim(ctx: CommandContext, input: XAutoClaimInput): Reply {
     const { consumer: consumerName, minIdle, start, justId } = input;
     const { s, g } = StreamsPendingService.findGroup(ctx, input.key, input.group);
+    if (input.count > StreamsPendingService.AUTOCLAIM_MAX_COUNT) throw new AppError(StreamsMessages.AUTOCLAIM_COUNT_TOO_HIGH);
     const now = Date.now();
     const candidates = [...g.pending.values()].filter((p) => compareIds(p.id, start) >= 0).sort(StreamsPendingService.byId);
     const claimed: Reply[] = [];
@@ -138,11 +147,12 @@ export default class StreamsPendingService {
         continue;
       }
       if (minIdle && now - p.deliveryTime < minIdle) continue;
-      const c = getOrCreateConsumer(g, consumerName);
+      const c = StreamsGroupService.consumer(ctx, input.key, g, consumerName);
       movePending(g, c, p);
       p.deliveryTime = now;
       if (!justId) p.deliveryCount++;
       claimed.push(justId ? k : entryReply(e));
+      c.seenTime = now;
       c.activeTime = now;
       count--;
     }

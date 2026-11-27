@@ -20,10 +20,10 @@ import ServerMessages from './server.messages';
 // Shared Schemas
 // ============================================================================
 
-/** A WAIT / WAITAOF timeout in ms: an integer, not negative. */
+/** A WAIT timeout in ms: an integer, not negative. */
 const WaitTimeoutSchema = IntegerSchemaWith(ServerMessages.TIMEOUT_NOT_INTEGER).refine((ms) => ms >= 0, { error: ServerMessages.TIMEOUT_NEGATIVE });
 
-/** A count that must not be negative (WAITAOF numlocal / numreplicas, DEBUG POPULATE). */
+/** A count that must not be negative (DEBUG POPULATE). */
 const NonNegativeSchema = IntegerSchema.refine((n) => n >= 0, { error: RespMessages.COUNT_POSITIVE });
 
 const SlowlogCountSchema = IntegerSchemaWith(ServerMessages.SLOWLOG_COUNT).refine((n) => n >= -1, { error: ServerMessages.SLOWLOG_COUNT });
@@ -181,6 +181,12 @@ export const DebugPackedThresholdDTO = SubcommandArgsDTO('debug', 1).transform((
 
 export const DebugListpackDTO = SubcommandArgsDTO('debug', 1).transform(({ args }) => ({ key: args[0] }));
 
+/** DEBUG HTSTATS dbid: an integer (the range is checked against the databases by the handler). */
+export const DebugHtstatsDTO = SubcommandArgsDTO('debug', 1).transform(({ args }, ctx) => {
+  const db = parseArg(IntegerSchema, args[0]);
+  return db.ok ? { db: db.value } : reject(ctx, db.error);
+});
+
 export const DebugQuicklistDTO = SubcommandArgsDTO('debug', 1, 2).transform(({ args }) => ({ key: args[0] }));
 
 /** DEBUG POPULATE count [prefix] [size]: `<prefix>:<n>` = `value:<n>`, padded / cut to `size`. */
@@ -197,7 +203,7 @@ export const DebugPopulateDTO = SubcommandArgsDTO('debug', 1, 3).transform(({ ar
 export const DebugReloadDTO = z.tuple([SubcommandSchema], z.string()).transform(([, ...options]) => ({ options }));
 
 // ============================================================================
-// Admin DTOs: FLUSHDB / FLUSHALL, SHUTDOWN, BGSAVE, WAIT, WAITAOF, LOLWUT
+// Admin DTOs: FLUSHDB / FLUSHALL, SHUTDOWN, BGSAVE, WAIT, LOLWUT
 // ============================================================================
 
 /** FLUSHDB / FLUSHALL [ASYNC | SYNC]: both modes flush at once. */
@@ -232,17 +238,6 @@ export const WaitDTO = z.tuple([z.string(), z.string()]).transform(([rawReplicas
   return numreplicas.ok ? { numreplicas: numreplicas.value, timeout: timeout.value } : reject(ctx, numreplicas.error);
 });
 
-/** WAITAOF numlocal numreplicas timeout: the timeout is checked first, as in Redis. */
-export const WaitAofDTO = z.tuple([z.string(), z.string(), z.string()]).transform(([rawLocal, rawReplicas, rawTimeout], ctx) => {
-  const timeout = parseArg(WaitTimeoutSchema, rawTimeout);
-  if (!timeout.ok) return reject(ctx, timeout.error);
-  const numlocal = parseArg(NonNegativeSchema, rawLocal);
-  if (!numlocal.ok) return reject(ctx, numlocal.error);
-  const numreplicas = parseArg(NonNegativeSchema, rawReplicas);
-  if (!numreplicas.ok) return reject(ctx, numreplicas.error);
-  return { numlocal: numlocal.value, numreplicas: numreplicas.value, timeout: timeout.value };
-});
-
 /** LOLWUT [VERSION version] [art options…]: version 5 takes columns, squares per row and per column (clamped). */
 export const LolwutDTO = z.array(z.string()).transform((args, ctx) => {
   let version = Number(REDIS_VERSION.split('.')[0]);
@@ -253,9 +248,11 @@ export const LolwutDTO = z.array(z.string()).transform((args, ctx) => {
     version = v.value;
     rest = args.slice(2);
   }
-  if (version !== 5) return { version, cols: 0, perRow: 0, perCol: 0 };
+  if (version !== 5 && version !== 6) return { version, cols: 0, perRow: 0, perCol: 0 };
+  // version 5: columns, squares per row, squares per column; version 6: columns, rows
+  const limits = version === 5 ? [[0, 66, 1000], [1, 8, 200], [2, 12, 200]] : [[0, 80, 1000], [1, 20, 1000]];
   const dims: number[] = [];
-  for (const [i, def, max] of [[0, 66, 1000], [1, 8, 200], [2, 12, 200]]) {
+  for (const [i, def, max] of limits) {
     if (rest[i] === undefined) {
       dims.push(def);
       continue;
@@ -264,7 +261,7 @@ export const LolwutDTO = z.array(z.string()).transform((args, ctx) => {
     if (!n.ok) return reject(ctx, n.error);
     dims.push(Math.min(Math.max(n.value, 1), max));
   }
-  return { version, cols: dims[0], perRow: dims[1], perCol: dims[2] };
+  return { version, cols: dims[0], perRow: dims[1], perCol: dims[2] ?? 0 };
 });
 
 // ============================================================================
@@ -298,5 +295,4 @@ export type DebugReloadInput = z.infer<typeof DebugReloadDTO>;
 export type ShutdownInput = z.infer<typeof ShutdownDTO>;
 export type BgsaveInput = z.infer<typeof BgsaveDTO>;
 export type WaitInput = z.infer<typeof WaitDTO>;
-export type WaitAofInput = z.infer<typeof WaitAofDTO>;
 export type LolwutInput = z.infer<typeof LolwutDTO>;

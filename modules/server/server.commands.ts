@@ -20,6 +20,7 @@ import {
   ConfigGetDTO,
   ConfigSetDTO,
   DebugActiveExpireDTO,
+  DebugHtstatsDTO,
   DebugListpackDTO,
   DebugNoArgsDTO,
   DebugObjectDTO,
@@ -38,7 +39,6 @@ import {
   MemoryUsageDTO,
   ShutdownDTO,
   SlowlogGetDTO,
-  WaitAofDTO,
   WaitDTO,
 } from './server.dto';
 import ServerService from './server.service';
@@ -132,9 +132,9 @@ const slowlog = bySubcommand(
 
 const latency = bySubcommand(
   {
-    latest: () => ServerService.latencySamples(),
-    history: () => ServerService.latencySamples(),
-    reset: () => ServerService.latencyReset(),
+    latest: (ctx) => ServerService.latencyLatest(ctx),
+    history: withDTO(LatencyEventDTO, ServerService.latencyHistory),
+    reset: withDTO(LatencyHistogramDTO, ServerService.latencyReset),
     graph: withDTO(LatencyEventDTO, ServerService.latencyGraph),
     histogram: withDTO(LatencyHistogramDTO, ServerService.latencyHistogram),
     doctor: (ctx) => ServerService.latencyDoctor(ctx),
@@ -164,6 +164,8 @@ const debug = bySubcommand(
     'change-repl-id': withDTO(DebugNoArgsDTO, (ctx) => ServerService.debugChangeReplId(ctx)),
     'quicklist-packed-threshold': withDTO(DebugPackedThresholdDTO, () => ServerService.debugAccepted()),
     listpack: withDTO(DebugListpackDTO, ServerService.debugListpack),
+    htstats: withDTO(DebugHtstatsDTO, ServerService.debugHtstats),
+    'htstats-key': withDTO(DebugListpackDTO, ServerService.debugHtstatsKey),
     quicklist: withDTO(DebugQuicklistDTO, ServerService.debugQuicklist),
     'stringmatch-len': withDTO(DebugNoArgsDTO, () => ServerService.debugStringMatchLen()),
     populate: withDTO(DebugPopulateDTO, ServerService.debugPopulate),
@@ -209,7 +211,6 @@ export const serverCommands: CommandSpec[] = [
   { name: 'latency', arity: -2, handler: latency },
   { name: 'monitor', arity: 1, flags: NOSCRIPT, handler: (ctx) => ServerService.monitor(ctx) },
   { name: 'shutdown', arity: -1, flags: NOSCRIPT, handler: withDTO(ShutdownDTO, ServerService.shutdown) },
-  { name: 'waitaof', arity: 4, flags: NOSCRIPT, handler: withDTO(WaitAofDTO, ServerService.waitAof) },
   { name: 'lolwut', arity: -1, handler: withDTO(LolwutDTO, ServerService.lolwut) },
   { name: 'save', arity: 1, flags: NOSCRIPT, handler: (ctx) => ServerService.save(ctx) },
   { name: 'bgsave', arity: -1, flags: NOSCRIPT, handler: withDTO(BgsaveDTO, ServerService.bgsave) },

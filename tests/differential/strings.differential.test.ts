@@ -1,4 +1,6 @@
 import { differential, s } from './differential.harness';
+import { pttlSeconds } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 const FAR = '4102444800'; // 2100-01-01, seconds
 const FAR_MS = '4102444800000';
@@ -85,4 +87,15 @@ differential('strings', [
 
   // SUBSTR (alias of GETRANGE)
   s('SUBSTR', ['SET k "Hello World"', 'SUBSTR k 0 4', 'SUBSTR k -5 -1', 'SUBSTR k 5 1', 'SUBSTR missing 0 1', 'SUBSTR k a 1', 'SUBSTR k 0']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('GETRANGE', ['SET k hello', 'GETRANGE k $N -1', 'GETRANGE k 0 $N', 'SUBSTR k $N 2', 'GETRANGE k $N $N']),
+  ...intProbes('SETRANGE', ['SET k hello', 'SETRANGE k $N x', 'SETRANGE k2 $N ""', 'GET k', 'EXISTS k2']),
+  ...intProbes('INCRBY DECRBY', ['SET k 10', 'INCRBY k $N', 'GET k', 'DECRBY k $N', 'GET k', 'INCRBY n $N', 'DECRBY m $N']),
+  ...intProbes('SET EX then TTL', ['SET k v EX $N', 'TTL k', { cmd: 'PTTL k', norm: pttlSeconds }, 'SET k v PX $N', 'TTL k', { cmd: 'PTTL k', norm: pttlSeconds }, 'GETEX k EX $N', 'TTL k', 'GETEX k PX $N', { cmd: 'PTTL k', norm: pttlSeconds }, 'SETEX k $N v', 'TTL k', 'PSETEX k $N v', { cmd: 'PTTL k', norm: pttlSeconds }]),
+  ...intProbes('SET EX PX', ['SET k v EX $N', 'SET k v PX $N', 'TTL k', 'EXISTS k']),
+  ...intProbes('SET EXAT PXAT', ['SET k v EXAT $N', 'SET k2 v PXAT $N', 'EXISTS k k2', 'PEXPIRETIME k', 'PEXPIRETIME k2', 'EXPIRETIME k2', 'TTL k']),
+  ...intProbes('SETEX PSETEX', ['SETEX k $N v', 'PSETEX k2 $N v', 'EXISTS k k2']),
+  ...intProbes('GETEX', ['SET k v', 'GETEX k EX $N', 'GETEX k PX $N', 'GETEX k EXAT $N', 'GETEX k PXAT $N', 'EXISTS k', 'PEXPIRETIME k']),
+  ...intProbes('LCS MINMATCHLEN', ['SET a hello', 'SET b hallo', 'LCS a b IDX MINMATCHLEN $N']),
 ]);

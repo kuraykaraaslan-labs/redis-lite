@@ -24,13 +24,9 @@ describe('ScanCursorSchema', () => {
 
 describe('ScanOptionsSchema', () => {
   it('defaults and case-insensitive options', () => {
-    expect(parse(ScanOptionsSchema, [])).toEqual({ match: '*', type: null, noValues: false, count: 10 });
-    expect(parse(ScanOptionsSchema, ['match', 'a*', 'COUNT', '5', 'Type', 'HASH', 'novalues'])).toEqual({
-      match: 'a*',
-      type: 'hash',
-      noValues: true,
-      count: 5,
-    });
+    expect(parse(ScanOptionsSchema, [])).toEqual({ match: '*', type: null, count: 10 });
+    expect(parse(ScanOptionsSchema, ['match', 'a*', 'COUNT', '5', 'Type', 'HASH'])).toEqual({ match: 'a*', type: 'hash', count: 5 });
+    expect(parse(ScanOptionsSchema, ['NOVALUES'])).toBe('ERR syntax error');
   });
 
   it('reports the first problem in argument order', () => {

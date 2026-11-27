@@ -21,13 +21,9 @@ export const ReplicationMessages = {
   PSYNC_FAILOVER_REFUSED: 'ERR PSYNC FAILOVER replid must match my replid.',
   REPLCONF_UNKNOWN: 'ERR Unrecognized REPLCONF option: {option}',
 
-  // WAIT / WAITAOF
+  // WAIT
   WAIT_ON_REPLICA:
     'ERR WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.',
-  // UNCERTAIN
-  WAITAOF_ON_REPLICA:
-    'ERR WAITAOF cannot be used with replica instances. Please also note that writes to replicas are just local and are not propagated.',
-  WAITAOF_APPENDONLY: 'ERR WAITAOF cannot be used when numlocal is set but appendonly is disabled.',
 
   // FAILOVER (UNCERTAIN: wording of the less common refusals)
   FAILOVER_ON_REPLICA: 'ERR FAILOVER is not valid when server is a replica.',

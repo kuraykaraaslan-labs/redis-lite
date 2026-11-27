@@ -1,5 +1,6 @@
 import { differential, s } from './differential.harness';
 import { sorted } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 const DATA = [
   'RPUSH l 3 1 2 10 5',
@@ -53,4 +54,7 @@ differential('keys sort', [
 
   // sets ordering under BY nosort is hash order: compare as a set
   s('SORT hashtable set BY nosort', ['SADD s alpha beta gamma delta', { cmd: 'SORT s BY nosort', norm: sorted }, 'SORT s ALPHA LIMIT 0 2']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('SORT LIMIT', ['RPUSH l 3 1 2', 'SORT l LIMIT $N 1', 'SORT l LIMIT 0 $N', 'SORT_RO l LIMIT 1 $N', 'SORT l LIMIT $N $N']),
 ]);

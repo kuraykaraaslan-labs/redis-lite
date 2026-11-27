@@ -19,14 +19,13 @@ export default class HashesFieldService {
   // Writes
   // ──────────────────────────────────────────────
 
-  /** HSET: the number of new fields. Setting a field clears its TTL. */
+  /** HSET: the number of new fields. */
   static hSet(ctx: CommandContext, { key, pairs }: HSetInput): number {
     const h = HashStore.readForWrite(ctx, key);
     let added = 0;
     for (const [field, value] of pairs) {
       if (!h.has(field)) added++;
       h.set(field, value);
-      HashStore.clearFieldTtl(h, field);
     }
     return added;
   }
@@ -49,10 +48,7 @@ export default class HashesFieldService {
     const h = HashStore.read(ctx, key);
     if (!h) return 0;
     let n = 0;
-    for (const f of fields) {
-      if (h.delete(f)) n++;
-      HashStore.clearFieldTtl(h, f);
-    }
+    for (const f of fields) if (h.delete(f)) n++;
     ctx.db.removeIfEmpty(key);
     return n;
   }

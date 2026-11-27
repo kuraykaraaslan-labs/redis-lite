@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { formatMessage } from '@/libs/message-format';
 import { RespMessages } from '@/libs/resp/messages';
-import { IntegerSchema, IntegerSchemaWith, KeySchema, firstIssue, reject } from '@/libs/schemas';
+import { Int64Schema, IntegerSchema, IntegerSchemaWith, KeySchema, firstIssue, reject } from '@/libs/schemas';
 
 import { TrimStrategyEnum, XGroupSubcommandEnum, XInfoSubcommandEnum } from './streams.enums';
 import type { TrimStrategy, XGroupSubcommand, XInfoSubcommand } from './streams.enums';
@@ -56,7 +56,6 @@ export const RangeEndSchema = z.string().transform((raw, ctx): StreamId => {
 function idToken(raw: string): StreamIdToken {
   if (raw === '$') return { kind: 'last' };
   if (raw === '>') return { kind: 'new' };
-  if (raw === '+') return { kind: 'max' };
   const id = parseStreamId(raw);
   return id ? { kind: 'id', id } : { kind: 'invalid' };
 }
@@ -211,8 +210,9 @@ const BlockMsSchema = IntegerSchemaWith(StreamsMessages.TIMEOUT_NOT_INTEGER);
 /**
  * The option loop of xreadCommand, shared by XREAD and XREADGROUP:
  * [GROUP group consumer] [COUNT n] [BLOCK ms] [NOACK] STREAMS key [key …] id [id …]
+ * `inScript`: the variant redis.call uses, where BLOCK is refused as soon as the option loop reaches it.
  */
-function ReadDTO(xreadgroup: boolean) {
+function ReadDTO(xreadgroup: boolean, inScript = false) {
   return z.array(z.string()).transform((args, ctx) => {
     let count: number | undefined;
     let block: number | null = null;
@@ -224,6 +224,7 @@ function ReadDTO(xreadgroup: boolean) {
       const more = args.length - 1 - i;
       const opt = args[i].toLowerCase();
       if (opt === 'block' && more) {
+        if (inScript) return reject(ctx, xreadgroup ? StreamsMessages.XREADGROUP_BLOCK_IN_SCRIPT : StreamsMessages.XREAD_BLOCK_IN_SCRIPT);
         const ms = BlockMsSchema.safeParse(args[++i]);
         if (!ms.success) return reject(ctx, firstIssue(ms.error));
         if (ms.data < 0) return reject(ctx, RespMessages.TIMEOUT_NEGATIVE);
@@ -235,7 +236,7 @@ function ReadDTO(xreadgroup: boolean) {
       } else if (opt === 'streams' && more) {
         streamsAt = i + 1;
         if ((args.length - streamsAt) % 2) {
-          return reject(ctx, xreadgroup ? StreamsMessages.UNBALANCED_XREADGROUP : StreamsMessages.UNBALANCED_XREAD);
+          return reject(ctx, StreamsMessages.UNBALANCED_XREAD);
         }
         break;
       } else if (opt === 'group' && more >= 2) {
@@ -261,6 +262,8 @@ function ReadDTO(xreadgroup: boolean) {
 
 export const XReadDTO = ReadDTO(false);
 export const XReadGroupDTO = ReadDTO(true);
+export const XReadScriptDTO = ReadDTO(false, true);
+export const XReadGroupScriptDTO = ReadDTO(true, true);
 
 // ============================================================================
 // Pending DTOs: XACK, XPENDING, XCLAIM, XAUTOCLAIM
@@ -349,7 +352,8 @@ export const XClaimDTO = z.array(z.string()).transform((args, ctx) => {
 });
 
 const XAUTOCLAIM_MIN_IDLE = IntegerSchemaWith(StreamsMessages.XAUTOCLAIM_MIN_IDLE_INVALID);
-const XAUTOCLAIM_COUNT = IntegerSchemaWith(StreamsMessages.COUNT_NOT_POSITIVE);
+/** LONG_MAX / 16. */
+const XAUTOCLAIM_MAX_COUNT = 2n ** 59n - 1n;
 
 /** XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID] */
 export const XAutoClaimDTO = z.array(z.string()).transform((args, ctx) => {
@@ -364,10 +368,10 @@ export const XAutoClaimDTO = z.array(z.string()).transform((args, ctx) => {
     const more = args.length - 1 - i;
     const opt = args[i].toLowerCase();
     if (opt === 'count' && more) {
-      const n = XAUTOCLAIM_COUNT.safeParse(args[++i]);
-      if (!n.success) return reject(ctx, firstIssue(n.error));
-      count = n.data;
-      if (count < 1 || count > Number.MAX_SAFE_INTEGER / 16) return reject(ctx, StreamsMessages.COUNT_NOT_POSITIVE);
+      // the deleted-id buffer (COUNT × 16 bytes) must fit in a long
+      const n = Int64Schema.safeParse(args[++i]);
+      if (!n.success || n.data < 1n || n.data > XAUTOCLAIM_MAX_COUNT) return reject(ctx, StreamsMessages.COUNT_NOT_POSITIVE);
+      count = Number(n.data);
     } else if (opt === 'justid') justId = true;
     else return reject(ctx, RespMessages.SYNTAX);
   }

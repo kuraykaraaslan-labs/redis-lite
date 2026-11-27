@@ -21,13 +21,22 @@ describe('numkeys (EvalDTO, EvalShaDTO, FcallDTO)', () => {
   it('splits keys and arguments', () => {
     expect(parse(EvalDTO, ['return 1', '2', 'k1', 'k2', 'a1'])).toEqual({ script: 'return 1', keys: ['k1', 'k2'], argv: ['a1'] });
     expect(parse(EvalShaDTO, ['ABCDEF', '0', 'a1'])).toEqual({ sha: 'abcdef', keys: [], argv: ['a1'] });
-    expect(parse(FcallDTO, ['fn', '1', 'k1'])).toEqual({ name: 'fn', keys: ['k1'], argv: [] });
+    expect(parse(FcallDTO, ['fn', '1', 'k1'])).toEqual({ name: 'fn', keys: ['k1'], argv: [], numKeysError: null });
   });
 
   it('checks the integer first, then the sign, then the count', () => {
     expect(parse(EvalDTO, ['return 1', 'x'])).toBe('ERR value is not an integer or out of range');
     expect(parse(EvalDTO, ['return 1', '-1'])).toBe("ERR Number of keys can't be negative");
-    expect(parse(FcallDTO, ['fn', '2', 'k1'])).toBe("ERR Number of keys can't be greater than number of args");
+    expect(parse(EvalDTO, ['return 1', '2', 'k1'])).toBe("ERR Number of keys can't be greater than number of args");
+    expect(parse(EvalDTO, ['return 1', '9223372036854775807'])).toBe("ERR Number of keys can't be greater than number of args");
+    expect(parse(EvalDTO, ['return 1', '9223372036854775808'])).toBe('ERR value is not an integer or out of range');
+  });
+
+  it('FCALL hands a numkeys problem over (the function is looked up first)', () => {
+    const error = (args: string[]) => (parse(FcallDTO, args) as { numKeysError: string | null }).numKeysError;
+    expect(error(['fn', 'x'])).toBe('ERR Bad number of keys provided');
+    expect(error(['fn', '-1'])).toBe("ERR Number of keys can't be negative");
+    expect(error(['fn', '2', 'k1'])).toBe("ERR Number of keys can't be greater than number of args");
   });
 });
 

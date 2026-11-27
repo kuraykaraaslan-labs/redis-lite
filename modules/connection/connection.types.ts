@@ -6,6 +6,5 @@ export type ClientKillFilters = {
   laddr: string | null;
   /** USER values in command order: each must name an existing user, the last one filters. */
   users: string[];
-  maxAge: number | null;
   skipMe: boolean;
 };

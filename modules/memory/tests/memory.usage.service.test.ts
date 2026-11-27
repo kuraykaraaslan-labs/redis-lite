@@ -9,30 +9,29 @@ import type { RedisValue } from '@/modules/database/database.types';
 import { RaxShape } from '../memory.rax.model';
 import MemoryService from '../memory.service';
 
-const { SIZES, debugQuicklistInfo, intsetBytes, jemallocSize, kvobjAllocSize, memoryUsage, objectSize, quicklistNodes, sdsAllocSize, serializedLength, streamRaxMemory } = MemoryService;
+const { SIZES, debugQuicklistInfo, intsetBytes, jemallocSize, memoryUsage, objectSize, quicklistNodes, sdsAllocSize, serializedLength, streamRaxMemory } = MemoryService;
 const { listpackBytes } = PersistenceService;
 
 const base = { samples: 5, hasExpire: false };
 const str = (value: string, raw = false): RedisValue => ({ type: 'string', value, raw });
 const range = (n: number, f: (i: number) => string): string[] => Array.from({ length: n }, (_, i) => f(i));
 
+// Expected figures were read from a real Redis 7.0 (MEMORY USAGE through the differential harness).
 describe('MEMORY USAGE strings', () => {
-  it('int encoding: kvobj only', () => {
-    expect(memoryUsage('foo', str('123'), 'int', base)).toBe(32 + 16);
+  it('int encoding: robj + key sds + dict entry', () => {
+    expect(memoryUsage('a', str('1'), 'int', base)).toBe(48);
   });
 
-  it('embstr: key and value share one allocation', () => {
-    expect(memoryUsage('foo', str('bar'), 'embstr', base)).toBe(32 + 16);
-    // 44-byte value: 16 + 6 + 3 + 44 + 1 = 70 -> 80
-    expect(memoryUsage('foo', str('x'.repeat(44)), 'embstr', base)).toBe(80 + 16);
-    expect(memoryUsage('foo', str('bar'), 'embstr', { samples: 5, hasExpire: true })).toBe(48 + 16);
+  it('embstr: robj and value in one allocation', () => {
+    expect(memoryUsage('b', str('hello'), 'embstr', base)).toBe(64);
+    expect(memoryUsage('longerkeyname_abcdefghijklmnopqrstuvwxyz', str('hello'), 'embstr', base)).toBe(104);
+    expect(memoryUsage('b', str('hello'), 'embstr', { samples: 5, hasExpire: true })).toBe(64);
   });
 
   it('raw: separate sds', () => {
-    // kvobj 16 + 4 = 20 -> 32; sds hdr8 3 + 100 + 1 = 104 -> 112
-    expect(memoryUsage('k', str('x'.repeat(100)), 'raw', base)).toBe(32 + 112 + 16);
+    expect(memoryUsage('c', str('x'.repeat(81)), 'raw', base)).toBe(144);
     const big = memoryUsage('k', str('x'.repeat(100000)), 'raw', base);
-    expect(big).toBe(32 + 114688 + 16);
+    expect(big).toBe(16 + 114688 + 8 + 24);
   });
 
   it('grows with value and key length', () => {
@@ -47,54 +46,50 @@ describe('MEMORY USAGE strings', () => {
 });
 
 describe('MEMORY USAGE aggregates', () => {
-  const kv = kvobjAllocSize('k', false);
+  const kv = SIZES.robj + sdsAllocSize(1);
 
-  it('listpack list', () => {
-    const list = ['a', 'b', '1'];
-    const v: RedisValue = { type: 'list', value: ListDeque.from(list) };
-    expect(objectSize('k', v, 'listpack', base)).toBe(kv + jemallocSize(listpackBytes(list)));
-    expect(listpackBytes(list)).toBe(7 + 3 + 3 + 2);
-    expect(objectSize('k', v, 'listpack', base)).toBe(32 + 16);
+  it('a small list is a quicklist of one node', () => {
+    const v: RedisValue = { type: 'list', value: ListDeque.from(['a', 'b', 'c']) };
+    expect(memoryUsage('l', v, 'quicklist', base)).toBe(144);
   });
 
-  it('quicklist list: samples nodes, scales by element count', () => {
+  it('quicklist list: samples nodes, scales by node count', () => {
     const list = range(5000, (i) => `element-${i}`);
-    const nodes = quicklistNodes(list, -2);
+    const deque = ListDeque.from(list);
+    const nodes = quicklistNodes(deque);
     expect(nodes.length).toBeGreaterThan(5);
     expect(nodes.reduce((n, q) => n + q.count, 0)).toBe(5000);
     for (const n of nodes) expect(n.bytes).toBeLessThanOrEqual(8192);
-    const v: RedisValue = { type: 'list', value: ListDeque.from(list) };
+    const v: RedisValue = { type: 'list', value: deque };
     const all = objectSize('k', v, 'quicklist', { samples: 0, hasExpire: false });
     const exact = kv + SIZES.quicklist + nodes.reduce((n, q) => n + SIZES.quicklistNode + jemallocSize(q.bytes), 0);
     expect(all).toBe(exact);
     const five = objectSize('k', v, 'quicklist', base);
-    const s = nodes.slice(0, 5);
-    const ele = s.reduce((n, q) => n + SIZES.quicklistNode + jemallocSize(q.bytes), 0);
-    const cnt = s.reduce((n, q) => n + q.count, 0);
-    expect(five).toBe(Math.floor(kv + SIZES.quicklist + (ele / cnt) * 5000));
+    const ele = nodes.slice(0, 5).reduce((n, q) => n + SIZES.quicklistNode + jemallocSize(q.bytes), 0);
+    expect(five).toBe(Math.floor(kv + SIZES.quicklist + (ele / 5) * nodes.length));
   });
 
-  it('quicklist plain nodes for large elements', () => {
-    const list = ['a', 'x'.repeat(10000), 'b'];
-    const nodes = quicklistNodes(list, -2);
-    expect(nodes.some((n) => n.plain && n.bytes === 10000)).toBe(true);
-    const info = debugQuicklistInfo(list, -2);
-    expect(info.nodes).toBe(nodes.length);
+  it('a large element gets a listpack node of its own', () => {
+    const deque = ListDeque.from(['a', 'x'.repeat(10000), 'b']);
+    const nodes = quicklistNodes(deque);
+    expect(nodes.map((n) => n.count)).toEqual([1, 1, 1]);
+    expect(nodes[1].bytes).toBe(10000 + 5 + 2 + 7);
+    const info = debugQuicklistInfo(deque);
+    expect(info.nodes).toBe(3);
     expect(info.listpackMax).toBe(-2);
   });
 
-  it('intset / listpack / hashtable sets', () => {
+  it('intset / hashtable sets', () => {
     const ints = new Set(['1', '2', '3']);
     expect(intsetBytes(ints)).toBe(8 + 6);
     expect(intsetBytes(['1', '70000'])).toBe(8 + 8);
     expect(intsetBytes(['1', '5000000000'])).toBe(8 + 16);
-    expect(objectSize('k', { type: 'set', value: ints }, 'intset', base)).toBe(kv + 16);
-    const lp = new Set(['a', 'b']);
-    expect(objectSize('k', { type: 'set', value: lp }, 'listpack', base)).toBe(kv + jemallocSize(7 + 3 + 3));
+    expect(memoryUsage('s', { type: 'set', value: ints }, 'intset', base)).toBe(64);
+    expect(memoryUsage('s2', { type: 'set', value: new Set(['a', 'b', 'c']) }, 'hashtable', base)).toBe(232);
     const ht = new Set(range(200, (i) => `member:${i}`));
     const all = objectSize('k', { type: 'set', value: ht }, 'hashtable', { samples: 0, hasExpire: false });
     let want = kv + SIZES.dict + 8 * 256;
-    for (const m of ht) want += SIZES.dictEntryNoValue + sdsAllocSize(m.length);
+    for (const m of ht) want += SIZES.dictEntry + sdsAllocSize(m.length);
     expect(all).toBe(want);
   });
 
@@ -103,7 +98,7 @@ describe('MEMORY USAGE aggregates', () => {
     const set = new Set(members);
     const v: RedisValue = { type: 'set', value: set };
     const five = objectSize('k', v, 'hashtable', base);
-    const per = SIZES.dictEntryNoValue + sdsAllocSize(2);
+    const per = SIZES.dictEntry + sdsAllocSize(2);
     expect(five).toBe(kv + SIZES.dict + 8 * 256 + per * 200);
     const all = objectSize('k', v, 'hashtable', { samples: 0, hasExpire: false });
     expect(all).toBeGreaterThan(five);
@@ -118,6 +113,11 @@ describe('MEMORY USAGE aggregates', () => {
     z.add('b', 2.5);
     const lp = objectSize('k', { type: 'zset', value: z }, 'listpack', base);
     expect(lp).toBe(kv + jemallocSize(listpackBytes(['a', 1n, 'b', '2.5'])));
+    const small = new ZSet();
+    small.add('a', 0.1);
+    small.add('b', 0.2);
+    small.add('c', 3);
+    expect(memoryUsage('zl', { type: 'zset', value: small }, 'listpack', base)).toBe(112); // scores stored as %.17g text
     const big = new ZSet();
     for (let i = 0; i < 300; i++) big.add(`m${i}`, i);
     const sl = objectSize('k', { type: 'zset', value: big }, 'skiplist', { samples: 0, hasExpire: false });
@@ -126,20 +126,16 @@ describe('MEMORY USAGE aggregates', () => {
     expect(sl).toBeLessThan(fixed + 300 * (8 + 24 + 64));
   });
 
-  it('hashes: listpack, listpackex and hashtable', () => {
+  it('hashes: listpack and hashtable', () => {
     const h = new Map([
       ['f1', 'v1'],
       ['f2', '100'],
     ]);
     const lp = objectSize('k', { type: 'hash', value: h }, 'listpack', base);
     expect(lp).toBe(kv + jemallocSize(listpackBytes(['f1', 'v1', 'f2', '100'])));
-    const ex = objectSize('k', { type: 'hash', value: h }, 'listpackex', { ...base, fieldTtls: 1 });
-    expect(ex).toBe(kv + 32 + jemallocSize(listpackBytes(['f1', 'v1', 'f2', '100']) + 10 + 2));
     const big = new Map(range(300, (i) => `field${i}`).map((f) => [f, `value-${f}`] as [string, string]));
     const ht = objectSize('k', { type: 'hash', value: big }, 'hashtable', { samples: 0, hasExpire: false });
-    const withTtl = objectSize('k', { type: 'hash', value: big }, 'hashtable', { samples: 0, hasExpire: false, fieldTtls: 300 });
     expect(ht).toBeGreaterThan(kv + SIZES.dict + 8 * 512 + 300 * SIZES.dictEntry);
-    expect(withTtl).toBeGreaterThan(ht);
   });
 
   it('compact encodings are smaller than full ones for the same data', () => {
@@ -148,15 +144,14 @@ describe('MEMORY USAGE aggregates', () => {
     expect(objectSize('k', v, 'listpack', base)).toBeLessThan(objectSize('k', v, 'hashtable', base));
     const s = new Set(range(200, (i) => String(i)));
     const sv: RedisValue = { type: 'set', value: s };
-    expect(objectSize('k', sv, 'intset', base)).toBeLessThan(objectSize('k', sv, 'listpack', base));
-    expect(objectSize('k', sv, 'listpack', base)).toBeLessThan(objectSize('k', sv, 'hashtable', base));
+    expect(objectSize('k', sv, 'intset', base)).toBeLessThan(objectSize('k', sv, 'hashtable', base));
   });
 
   it('aggregate sizes grow with element count', () => {
     let prev = 0;
     for (let n = 1; n < 600; n += 13) {
       const set = new Set(range(n, (i) => `m${i}`));
-      const u = memoryUsage('k', { type: 'set', value: set }, n > 128 ? 'hashtable' : 'listpack', { samples: 0, hasExpire: false });
+      const u = memoryUsage('k', { type: 'set', value: set }, 'hashtable', { samples: 0, hasExpire: false });
       expect(u).toBeGreaterThanOrEqual(prev);
       prev = u;
     }
@@ -187,8 +182,9 @@ describe('streams', () => {
   it('single node stream uses the preallocated listpack', () => {
     const s = new Stream();
     add(s, 1, ['f', 'v']);
-    const kv = kvobjAllocSize('k', false);
+    const kv = SIZES.robj + sdsAllocSize(1);
     expect(objectSize('k', { type: 'stream', value: s }, 'stream', base)).toBe(kv + SIZES.stream + 16 + 2 * 244 + 4096);
+    expect(memoryUsage('x', { type: 'stream', value: s }, 'stream', base)).toBe(4728);
   });
 
   it('multi-node streams sample listpacks and add the tail node', () => {

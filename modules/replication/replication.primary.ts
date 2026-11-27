@@ -1,7 +1,7 @@
 /**
  * Master side of the replication runtime: replicas attaching (REPLCONF, PSYNC, SYNC), full and partial
  * resynchronization, the propagated command stream (the Propagator's replication sink, SELECT handling), REPLCONF ACK /
- * GETACK, WAIT / WAITAOF, min-replicas-to-write and the master's periodic duties (PING, replica timeouts, backlog TTL).
+ * GETACK, WAIT, min-replicas-to-write and the master's periodic duties (PING, replica timeouts, backlog TTL).
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  *
@@ -24,15 +24,13 @@ import ReplicationMessages from './replication.messages';
 import { ReplicationState } from './replication.state';
 import type { ReplicaView } from './replication.types';
 
-/** A client blocked in WAIT / WAITAOF. */
+/** A client blocked in WAIT. */
 interface WaitEntry {
   client: Client;
   block: Block;
   /** The offset the replicas must have acknowledged (the client's last write). */
   target: number;
   numreplicas: number;
-  /** WAITAOF: [numlocal wanted, local fsync acknowledged]; null for WAIT. */
-  aof: { numlocal: number; local: number } | null;
   timer: NodeJS.Timeout | null;
 }
 
@@ -216,12 +214,11 @@ export abstract class ReplicationPrimary extends ReplicationState {
   // Acknowledgements
   // ──────────────────────────────────────────────
 
-  /** REPLCONF ACK <offset> [FACK <aofoffset>] from an attached replica (never answered). */
-  replicaAck(client: Client, offset: number, fack: number | null): void {
+  /** REPLCONF ACK <offset> from an attached replica (never answered). */
+  replicaAck(client: Client, offset: number): void {
     const info = client.replica;
     if (!info?.attached) return;
     if (offset > info.ackOffset) info.ackOffset = offset;
-    if (fack !== null && fack > info.aofAckOffset) info.aofAckOffset = fack;
     info.ackTime = Date.now();
     // the first ACK after a diskless load also confirms the replica is online
     if (info.state === 'send_bulk') info.state = 'online';
@@ -238,12 +235,12 @@ export abstract class ReplicationPrimary extends ReplicationState {
     });
   }
 
-  /** Replicas whose acknowledged offset (FACK with `aof`) reached `target`. */
-  protected countAcked(target: number, aof: boolean): number {
+  /** Replicas whose acknowledged offset reached `target`. */
+  protected countAcked(target: number): number {
     let n = 0;
     for (const c of this.replicas) {
       const info = c.replica;
-      if (info?.state === 'online' && (aof ? info.aofAckOffset : info.ackOffset) >= target) n++;
+      if (info?.state === 'online' && info.ackOffset >= target) n++;
     }
     return n;
   }
@@ -267,23 +264,19 @@ export abstract class ReplicationPrimary extends ReplicationState {
   }
 
   // ──────────────────────────────────────────────
-  // WAIT / WAITAOF
+  // WAIT
   // ──────────────────────────────────────────────
 
   /**
-   * Blocks a client until `numreplicas` replicas acknowledged its last write (`aof`: WAITAOF, which also needs the
-   * local fsync). Answers at once when already satisfied or when the client may not block (MULTI, scripts).
+   * Blocks a client until `numreplicas` replicas acknowledged its last write. Answers at once when already satisfied
+   * or when the client may not block (MULTI, scripts).
    */
-  protected waitAcks(client: Client, numreplicas: number, timeoutMs: number, noBlock: boolean, aof: WaitEntry['aof']): HandlerResult {
+  protected waitAcks(client: Client, numreplicas: number, timeoutMs: number, noBlock: boolean): HandlerResult {
     const target = client.woff;
-    const reply = (): number | number[] => {
-      const replicas = this.countAcked(target, aof !== null);
-      return aof ? [aof.local, replicas] : replicas;
-    };
-    const satisfied = (): boolean => this.countAcked(target, aof !== null) >= numreplicas && (!aof || aof.local >= aof.numlocal);
-    if (satisfied() || noBlock) return reply();
-    const block = new Block([], 0, () => undefined, reply());
-    const entry: WaitEntry = { client, block, target, numreplicas, aof, timer: null };
+    const acked = this.countAcked(target);
+    if (acked >= numreplicas || noBlock) return acked;
+    const block = new Block([], 0, () => undefined, acked);
+    const entry: WaitEntry = { client, block, target, numreplicas, timer: null };
     if (timeoutMs > 0) {
       entry.timer = setTimeout(() => this.finishWait(entry), timeoutMs);
     }
@@ -299,15 +292,13 @@ export abstract class ReplicationPrimary extends ReplicationState {
     const { client } = entry;
     // CLIENT UNBLOCK or a disconnect may have ended the wait already
     if (client.closed || client.blocked?.retry !== entry.block.retry) return;
-    const replicas = this.countAcked(entry.target, entry.aof !== null);
-    this.server.releaseBlocked(client, entry.aof ? [entry.aof.local, replicas] : replicas);
+    this.server.releaseBlocked(client, this.countAcked(entry.target));
   }
 
   /** After an ACK: answers every waiter now satisfied. */
   private serveWaiters(): void {
     for (const entry of [...this.waiters]) {
-      const enough = this.countAcked(entry.target, entry.aof !== null) >= entry.numreplicas;
-      if (enough && (!entry.aof || entry.aof.local >= entry.aof.numlocal)) this.finishWait(entry);
+      if (this.countAcked(entry.target) >= entry.numreplicas) this.finishWait(entry);
       else if (entry.client.closed) this.waiters.splice(this.waiters.indexOf(entry), 1);
     }
   }

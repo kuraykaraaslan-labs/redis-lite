@@ -105,7 +105,7 @@ export const BitPosDTO = z.tuple([KeySchema, z.string()], z.string()).transform(
 // BITOP DTO
 // ============================================================================
 
-/** BITOP operation destkey key [key …]: the source count is checked by the service, after the sources are read. */
+/** BITOP operation destkey key [key …]: NOT's source count is checked by the service. */
 export const BitOpDTO = z.tuple([z.string(), KeySchema], KeySchema).transform(([given, destination, ...sources], ctx) => {
   const operation = BitOpEnum.safeParse(given.toLowerCase());
   return operation.success ? { operation: operation.data, destination, sources } : reject(ctx, RespMessages.SYNTAX);

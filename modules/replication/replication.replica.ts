@@ -41,8 +41,6 @@ export abstract class ReplicationReplica extends ReplicationPrimary implements L
   /** Stream bytes of a transaction still open on the master client (not in the offset yet). */
   private pendingTx: Buffer[] = [];
   private pendingTxBytes = 0;
-  /** The offset the local AOF had fsynced at the last ACK (FACK). */
-  private fsyncedOffset = 0;
   /** False until this server has a history to offer in PSYNC (a server started as a replica has none). */
   protected hasHistory = true;
 
@@ -163,11 +161,9 @@ export abstract class ReplicationReplica extends ReplicationPrimary implements L
     return this.offset + this.pendingTxBytes;
   }
 
-  /** REPLCONF ACK <offset> [FACK <offset>] (FACK: the offset the local AOF has fsynced; sent while the AOF is on). */
+  /** REPLCONF ACK <offset>. */
   protected sendAck(): void {
-    const persistence = this.server.persistence;
-    if (persistence.aofFsynced) this.fsyncedOffset = this.offset;
-    this.link?.sendAck(this.offset, persistence.aofEnabled ? this.fsyncedOffset : null);
+    this.link?.sendAck(this.offset);
   }
 
   // ──────────────────────────────────────────────

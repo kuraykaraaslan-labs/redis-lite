@@ -1,5 +1,7 @@
 import { formatMessage } from '@/libs/message-format';
 
+import { REDIS_VERSION } from '@/modules/server/server.constants';
+
 import PersistenceBytesCodec, { RdbReader, RdbWriter } from './persistence.bytes.codec';
 import { RDB_OPCODE, RDB_VERSION } from './persistence.enums';
 import PersistenceMessages from './persistence.messages';
@@ -17,7 +19,7 @@ export default class PersistenceRdbService {
   /** The AUX fields Redis writes for a standalone instance, in Redis's order. */
   static defaultRdbAux(input: RdbAuxInput = {}): RdbAux {
     return [
-      ['redis-ver', input.redisVer ?? '8.8.0'],
+      ['redis-ver', input.redisVer ?? REDIS_VERSION],
       ['redis-bits', 64],
       ['ctime', input.ctime ?? Math.floor(Date.now() / 1000)],
       ['used-mem', input.usedMem ?? 0],
@@ -67,7 +69,7 @@ export default class PersistenceRdbService {
           w.u8(RDB_OPCODE.FREQ);
           w.u8(e.freq);
         }
-        const { type, body } = PersistenceObjectEncoderCodec.encodeObject(e.value, o, e.fieldExpires);
+        const { type, body } = PersistenceObjectEncoderCodec.encodeObject(e.value, o);
         w.u8(type);
         io.writeStr(w, key, o.rdbCompression);
         w.bytes(body);
@@ -156,7 +158,6 @@ export default class PersistenceRdbService {
           if (!PersistenceObjectDecoderCodec.isEmptyAggregate(decoded.value)) {
             const entry: RdbKeyEntry = { value: decoded.value };
             if (expireAt !== undefined) entry.expireAt = expireAt;
-            if (decoded.fieldExpires && decoded.fieldExpires.size) entry.fieldExpires = decoded.fieldExpires;
             if (idle !== undefined) entry.idle = idle;
             if (freq !== undefined) entry.freq = freq;
             db.set(key, entry);

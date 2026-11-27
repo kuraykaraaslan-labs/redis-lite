@@ -133,7 +133,12 @@ export default class LuaScriptRunner {
         return new RespError(formatMessage(ScriptingMessages.SCRIPT_ERROR, { message, ...where }));
       }
       lw.lua_xmove(r.thread, L, 1);
-      return this.converter.scriptError(r.name, r.chunk, line);
+      const error = this.converter.scriptError(r.name, r.chunk, line);
+      if (error !== null) return error;
+      // an error table without a usable `err` field: Redis 7.0 goes down without a reply; only this client's
+      // connection is dropped here
+      if (r.client.socket) this.server.connections.killClient(r.client);
+      return new RespError(formatMessage(ScriptingMessages.ERR_PREFIXED, { message: ScriptingMessages.UNKNOWN_ERROR }));
     } catch (error) {
       // a failure of the engine itself: the thread is not reused
       r.aborted = true;

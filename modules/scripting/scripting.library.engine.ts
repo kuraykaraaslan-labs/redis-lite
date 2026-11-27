@@ -111,7 +111,7 @@ export default class LuaFunctionLibraries {
       return 1;
     });
     if (lw.lua_pcallk(L, 0, 0, 0, 0, null) !== 0) {
-      const msg = this.converter.errorMessage();
+      const msg = this.converter.errorMessage() ?? formatMessage(ScriptingMessages.ERR_PREFIXED, { message: ScriptingMessages.UNKNOWN_ERROR });
       lw.lua_settop(L, 0);
       this.abort(formatMessage(ScriptingMessages.REGISTER_FUNCTIONS, { error: msg }));
     }

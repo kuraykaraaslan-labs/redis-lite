@@ -109,8 +109,8 @@ export const zsetCommands: CommandSpec[] = [
       return zset ? validated(ZLexCountDTO, args, (input) => ZSetsService.lexCount(zset, input)) : 0;
     },
   },
-  { name: 'zrank', arity: -3, handler: withDTO(ZRankDTO, ZSetsService.rank) },
-  { name: 'zrevrank', arity: -3, handler: withDTO(ZRevRankDTO, ZSetsService.rank) },
+  { name: 'zrank', arity: 3, handler: withDTO(ZRankDTO, ZSetsService.rank) },
+  { name: 'zrevrank', arity: 3, handler: withDTO(ZRevRankDTO, ZSetsService.rank) },
   {
     name: 'zscan',
     arity: -3,

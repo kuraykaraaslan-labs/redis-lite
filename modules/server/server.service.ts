@@ -70,7 +70,8 @@ export default class ServerService {
   static slowlogLen = ServerDiagnosticsService.slowlogLen.bind(ServerDiagnosticsService);
   static slowlogReset = ServerDiagnosticsService.slowlogReset.bind(ServerDiagnosticsService);
   static slowlogHelp = ServerDiagnosticsService.slowlogHelp.bind(ServerDiagnosticsService);
-  static latencySamples = ServerDiagnosticsService.latencySamples.bind(ServerDiagnosticsService);
+  static latencyLatest = ServerDiagnosticsService.latencyLatest.bind(ServerDiagnosticsService);
+  static latencyHistory = ServerDiagnosticsService.latencyHistory.bind(ServerDiagnosticsService);
   static latencyReset = ServerDiagnosticsService.latencyReset.bind(ServerDiagnosticsService);
   static latencyGraph = ServerDiagnosticsService.latencyGraph.bind(ServerDiagnosticsService);
   static latencyHistogram = ServerDiagnosticsService.latencyHistogram.bind(ServerDiagnosticsService);
@@ -88,6 +89,8 @@ export default class ServerService {
   // Debug — DEBUG
   static debugObject = ServerDebugService.object.bind(ServerDebugService);
   static debugListpack = ServerDebugService.listpack.bind(ServerDebugService);
+  static debugHtstats = ServerDebugService.htstats.bind(ServerDebugService);
+  static debugHtstatsKey = ServerDebugService.htstatsKey.bind(ServerDebugService);
   static debugQuicklist = ServerDebugService.quicklist.bind(ServerDebugService);
   static debugHelp = ServerDebugService.help.bind(ServerDebugService);
   static debugSleep = ServerDebugService.sleep.bind(ServerDebugService);
@@ -100,7 +103,7 @@ export default class ServerService {
   static debugStringMatchLen = ServerDebugService.stringMatchLen.bind(ServerDebugService);
   static debugAccepted = ServerDebugService.accepted.bind(ServerDebugService);
 
-  // Admin — TIME, DBSIZE, ROLE, MODULE, FLUSH*, MONITOR, SAVE / BGSAVE / BGREWRITEAOF / LASTSAVE, SHUTDOWN, WAIT, WAITAOF
+  // Admin — TIME, DBSIZE, ROLE, MODULE, FLUSH*, MONITOR, SAVE / BGSAVE / BGREWRITEAOF / LASTSAVE, SHUTDOWN, WAIT
   static time = ServerAdminService.time.bind(ServerAdminService);
   static dbSize = ServerAdminService.dbSize.bind(ServerAdminService);
   static role = ServerAdminService.role.bind(ServerAdminService);
@@ -115,7 +118,6 @@ export default class ServerService {
   static lastsave = ServerAdminService.lastsave.bind(ServerAdminService);
   static shutdown = ServerAdminService.shutdown.bind(ServerAdminService);
   static wait = ServerAdminService.wait.bind(ServerAdminService);
-  static waitAof = ServerAdminService.waitAof.bind(ServerAdminService);
 
   // LOLWUT
   static lolwut = ServerLolwutService.lolwut.bind(ServerLolwutService);

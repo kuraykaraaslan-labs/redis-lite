@@ -5,7 +5,6 @@ import type { Reply } from '@/libs/resp';
 import { Acl } from '@/modules/acl/acl.service';
 import CommandService from '@/modules/command/command.service';
 import { Database } from '@/modules/database/database.service';
-import TimeseriesService from '@/modules/timeseries/timeseries.service';
 
 import { ServerConfig } from './server.config';
 import type { RedisLiteServer } from './server.core';
@@ -63,12 +62,21 @@ export class ServerSettings {
       case 'port':
         server.rebind(Number(value));
         break;
+      case 'bind':
+        if (server.options) server.rebind(server.options.port, ServerSettings.bindHost(value));
+        break;
       case 'acl-pubsub-default':
         server.acl.pubsubDefault = value === 'allchannels' ? 'allchannels' : 'resetchannels';
         break;
       default:
         server.replication?.onConfigChange(canonical);
     }
+  }
+
+  /** The address redis-lite listens on for a `bind` list: its first entry (`*` any IPv4, `::*` any IPv6, `-` optional). */
+  static bindHost(value: string): string {
+    const first = (value.split(' ').find(Boolean) ?? '*').replace(/^-/, '');
+    return first === '*' ? '0.0.0.0' : first === '::*' ? '::' : first;
   }
 
   /** Wires DEBUG RELOAD and DEBUG LOADAOF to the persistence runtime. */
@@ -101,17 +109,14 @@ export class ServerSettings {
     return reply;
   }
 
-  /** The logical databases, wired to the keyspace (expiry), the memory tracker and the time series label index. */
+  /** The logical databases, wired to the keyspace (expiry) and the memory tracker. */
   buildDatabases(count: number): Database[] {
     const server = this.server;
     return Array.from({ length: count }, (_, i) => {
       const db: Database = new Database(
         (key) => server.keyspace.onExpired(i, key),
         server.config,
-        (key) => {
-          server.memoryModel.tracker.changed(i, key);
-          TimeseriesService.keyChanged(server, db, key);
-        },
+        (key) => server.memoryModel.tracker.changed(i, key),
         server.keyExpiry,
       );
       return db;

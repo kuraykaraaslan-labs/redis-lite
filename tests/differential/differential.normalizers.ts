@@ -190,16 +190,14 @@ export const pendingIdle: Normalizer = (reply) =>
 export const sortedFieldValues: Normalizer = (reply) => (reply.startsWith('*') ? sortedPairs(reply) : sorted(reply));
 
 /**
- * HELLO: masks the `version` and `id` values of the reply (a map in RESP3, a flat array in RESP2). Why: the version
- * string is the server's own release (7.0.x vs 8.x) and the id is the process' connection counter; every other field
- * (server, proto, mode, role, modules) is compared.
+ * HELLO: masks the `id` value of the reply (a map in RESP3, a flat array in RESP2). Why: the id is the process'
+ * connection counter; every other field (server, version, proto, mode, role, modules) is compared.
  */
 export const hello: Normalizer = (reply) =>
   mapTree(reply, (node) => {
     if (node.type !== '%' && node.type !== '*') return node;
     const children = node.children.map((child, i) => {
       const key = i % 2 === 1 ? payload(node.children[i - 1]) : '';
-      if (key === 'version') return withPayload(child, 'V');
       if (key === 'id') return { ...child, raw: ':N\r\n', head: 'N' };
       return child;
     });
@@ -274,3 +272,19 @@ export const sortedInfoLines: Normalizer = text((s) =>
     return [...head, ...body, ...tail].join('\r\n');
   }).join(''),
 );
+
+/**
+ * ACL LIST / GETUSER: sorts each run of single-command rules (`-keys -sort_ro`, `+get +set +select|0`). Why: Redis 7.0
+ * rebuilds the description from the command bitmap and lists the single commands in command-table (hash-table) order;
+ * the base and the category rules (`-@all +@read`) are deterministic and stay in place.
+ */
+export const aclRules: Normalizer = text((s) =>
+  s.replace(/[+-][^\s@(#~&%][^\s)]*(?: [+-][^\s@(#~&%][^\s)]*)+/g, (run) => run.split(' ').sort(cmp).join(' ')),
+);
+
+/**
+ * A remaining time in ms (PTTL) rounded to whole seconds, exactly (int64). Why: the milliseconds that pass between the
+ * command that set the TTL and PTTL are a clock reading; the seconds still show a wrong or imprecise expiry.
+ */
+export const pttlSeconds: Normalizer = (reply) =>
+  reply.replace(/^:(\d{4,})\r\n$/, (_, ms: string) => `:${(BigInt(ms) + 500n) / 1000n}000\r\n`);

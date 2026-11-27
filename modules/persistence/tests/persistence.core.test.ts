@@ -154,7 +154,8 @@ describe('server wiring', () => {
     const dir = tempDir();
     const locked = join(dir, 'locked');
     mkdirSync(locked);
-    await withServer({ dir, save: '3600 1' }, async (r, server) => {
+    // dir is a protected config (enable-protected-configs)
+    await withServer({ dir, save: '3600 1', config: { 'enable-protected-configs': 'yes' } }, async (r, server) => {
       await r.set('k', 'v');
       await r.config('SET', 'dir', locked);
       chmodSync(locked, 0o500);
@@ -180,7 +181,7 @@ describe('server wiring', () => {
 
   it('CONFIG SET dir / appendonly: validation, side effects, and rollback when they fail', async () => {
     const dir = tempDir();
-    await withServer({ dir, save: '' }, async (r) => {
+    await withServer({ dir, save: '', config: { 'enable-protected-configs': 'yes' } }, async (r) => {
       expect(await errMsg(r.config('SET', 'dir', join(dir, 'does-not-exist')))).toBe(
         "ERR CONFIG SET failed (possibly related to argument 'dir') - No such file or directory",
       );

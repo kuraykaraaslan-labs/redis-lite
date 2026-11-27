@@ -78,12 +78,48 @@ export function parseScanCursor(raw: string): number | null {
   return Number(raw[0] === '-' && magnitude > 0n ? UINT64_MAX + 1n - magnitude : magnitude);
 }
 
-/** Float in a reply: shortest round-trip form, `inf`/`-inf` as Redis writes them. */
+/** 2^62: the largest magnitude a sorted set score is stored as an integer in a listpack. */
+const LISTPACK_INT_SCORE_MAX = 2 ** 62;
+
+/**
+ * A sorted set score as a listpack stores it (what ZSCAN of a listpack sorted set returns): an integral score within
+ * ±2^62 as an integer, anything else as C `%.17g`, `inf` / `-inf` as Redis writes them.
+ */
 export function formatFloat(n: number): string {
   if (n === Infinity) return 'inf';
   if (n === -Infinity) return '-inf';
-  if (Object.is(n, -0)) return '0';
-  return String(n);
+  if (Number.isInteger(n) && Math.abs(n) <= LISTPACK_INT_SCORE_MAX) return BigInt(n).toString();
+  return formatG17(n);
+}
+
+/** C `%.17g`: 17 significant digits, trailing zeros dropped, exponent form below 1e-4 and from 1e17. */
+export function formatG17(n: number): string {
+  if (Number.isNaN(n)) return 'nan';
+  if (n === Infinity) return 'inf';
+  if (n === -Infinity) return '-inf';
+  if (n === 0) return Object.is(n, -0) ? '-0' : '0';
+  const [mantissa, exponent] = n.toExponential(16).split('e');
+  const e = Number(exponent);
+  if (e < -4 || e >= 17) return `${stripZeros(mantissa)}e${e < 0 ? '-' : '+'}${String(Math.abs(e)).padStart(2, '0')}`;
+  return stripZeros(n.toFixed(16 - e));
+}
+
+/** C `%.<digits>f`: like toFixed, except that an exact tie rounds to even (as printf does), not up. */
+export function formatFixed(n: number, digits: number): string {
+  const scale = 10 ** digits;
+  const twice = n * scale * 2;
+  if (!Number.isInteger(twice) || Math.abs(twice) % 2 !== 1 || !Number.isSafeInteger(twice)) return n.toFixed(digits);
+  const down = (twice - 1) / 2;
+  const v = down % 2 === 0 ? down : down + 1;
+  const sign = v < 0 ? '-' : '';
+  const abs = Math.abs(v);
+  const int = Math.floor(abs / scale);
+  return digits === 0 ? `${sign}${int}` : `${sign}${int}.${String(abs % scale).padStart(digits, '0')}`;
+}
+
+/** Drops the trailing zeros of a fraction (and the point when nothing is left), as `%g` does. */
+function stripZeros(text: string): string {
+  return text.includes('.') ? text.replace(/\.?0+$/, '') : text;
 }
 
 /** Normalizes a Redis range (negative = from the end) to [start, stop] inclusive, or null if empty. */

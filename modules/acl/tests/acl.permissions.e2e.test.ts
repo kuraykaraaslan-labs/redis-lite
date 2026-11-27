@@ -17,44 +17,44 @@ describe('permissions', () => {
     await t.call('ACL', 'SETUSER', 'cfg', 'on', '>pw', '+config|get', '+@string', '-set', '~*');
     const r = await login('cfg', 'pw');
     expect(await r.send('CONFIG', 'GET', 'maxmemory')).toBe('*2\r\n$9\r\nmaxmemory\r\n$1\r\n0\r\n');
-    expect(await r.send('CONFIG', 'SET', 'maxmemory', '0')).toBe(err("NOPERM User cfg has no permissions to run the 'config|set' command"));
+    expect(await r.send('CONFIG', 'SET', 'maxmemory', '0')).toBe(err("NOPERM this user has no permissions to run the 'config|set' command"));
     expect(await r.send('INCR', 'cnt')).toBe(':1\r\n');
-    expect(await r.send('SET', 'k', 'v')).toBe(err("NOPERM User cfg has no permissions to run the 'set' command"));
-    expect(await r.send('LPUSH', 'l', 'a')).toBe(err("NOPERM User cfg has no permissions to run the 'lpush' command"));
+    expect(await r.send('SET', 'k', 'v')).toBe(err("NOPERM this user has no permissions to run the 'set' command"));
+    expect(await r.send('LPUSH', 'l', 'a')).toBe(err("NOPERM this user has no permissions to run the 'lpush' command"));
   });
 
   it('key patterns, including %R~ and %W~', async () => {
     await t.call('ACL', 'SETUSER', 'keys', 'on', '>pw', '+@all', 'resetkeys', '~app:*', '%R~ro:*', '%W~wo:*');
     const r = await login('keys', 'pw');
     expect(await r.send('SET', 'app:1', 'v')).toBe('+OK\r\n');
-    expect(await r.send('GET', 'other')).toBe(err('NOPERM No permissions to access a key'));
+    expect(await r.send('GET', 'other')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
     expect(await r.send('GET', 'ro:1')).toBe('$-1\r\n');
-    expect(await r.send('SET', 'ro:1', 'v')).toBe(err('NOPERM No permissions to access a key'));
+    expect(await r.send('SET', 'ro:1', 'v')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
     // SET without GET only writes its key; with GET it also reads it
     expect(await r.send('SET', 'wo:1', 'v')).toBe('+OK\r\n');
-    expect(await r.send('SET', 'wo:1', 'v', 'GET')).toBe(err('NOPERM No permissions to access a key'));
-    expect(await r.send('GET', 'wo:1')).toBe(err('NOPERM No permissions to access a key'));
+    expect(await r.send('SET', 'wo:1', 'v', 'GET')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
+    expect(await r.send('GET', 'wo:1')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
     // EXISTS neither reads nor writes the value: any pattern grants it
     expect(await r.send('EXISTS', 'wo:1', 'ro:1')).toBe(':1\r\n');
     // COPY reads the source and writes the destination
     expect(await r.send('COPY', 'app:1', 'wo:2')).toBe(':1\r\n');
-    expect(await r.send('COPY', 'wo:1', 'app:2')).toBe(err('NOPERM No permissions to access a key'));
+    expect(await r.send('COPY', 'wo:1', 'app:2')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
   });
 
   it('channels: PUBLISH, SUBSCRIBE and literal PSUBSCRIBE patterns', async () => {
     await t.call('ACL', 'SETUSER', 'pub', 'on', '>pw', '+@all', 'resetchannels', '&news.*');
     const r = await login('pub', 'pw');
     expect(await r.send('PUBLISH', 'news.today', 'hi')).toBe(':0\r\n');
-    expect(await r.send('PUBLISH', 'sport', 'hi')).toBe(err('NOPERM No permissions to access a channel'));
-    expect(await r.send('PSUBSCRIBE', 'news.a*')).toBe(err('NOPERM No permissions to access a channel'));
-    expect(await r.send('SUBSCRIBE', 'sport')).toBe(err('NOPERM No permissions to access a channel'));
+    expect(await r.send('PUBLISH', 'sport', 'hi')).toBe(err('NOPERM this user has no permissions to access one of the channels used as arguments'));
+    expect(await r.send('PSUBSCRIBE', 'news.a*')).toBe(err('NOPERM this user has no permissions to access one of the channels used as arguments'));
+    expect(await r.send('SUBSCRIBE', 'sport')).toBe(err('NOPERM this user has no permissions to access one of the channels used as arguments'));
     expect(await r.send('PSUBSCRIBE', 'news.*')).toBe('*3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n');
   });
 
   it('selectors grant alternative permission sets', async () => {
     await t.call('ACL', 'SETUSER', 'sel', 'on', '>pw', '+get', '~a:*', '(+set ~b:*)');
     expect(await t.call('ACL', 'GETUSER', 'sel')).toEqual([
-      'flags', ['on', 'sanitize-payload'],
+      'flags', ['on'],
       'passwords', [sha('pw')],
       'commands', '-@all +get',
       'keys', '~a:*',
@@ -64,15 +64,15 @@ describe('permissions', () => {
     const r = await login('sel', 'pw');
     expect(await r.send('GET', 'a:1')).toBe('$-1\r\n');
     expect(await r.send('SET', 'b:1', 'x')).toBe('+OK\r\n');
-    expect(await r.send('SET', 'a:1', 'x')).toBe(err('NOPERM No permissions to access a key'));
-    expect(await r.send('GET', 'b:1')).toBe(err('NOPERM No permissions to access a key'));
+    expect(await r.send('SET', 'a:1', 'x')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
+    expect(await r.send('GET', 'b:1')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
   });
 
   it('first-arg rules (+select|0)', async () => {
     await t.call('ACL', 'SETUSER', 'db0', 'on', '>pw', '+select|0', '+ping');
     const r = await login('db0', 'pw');
     expect(await r.send('SELECT', '0')).toBe('+OK\r\n');
-    expect(await r.send('SELECT', '1')).toBe(err("NOPERM User db0 has no permissions to run the 'select' command"));
+    expect(await r.send('SELECT', '1')).toBe(err("NOPERM this user has no permissions to run the 'select' command"));
   });
 
   it('unknown commands and arity errors come before NOPERM', async () => {
@@ -80,7 +80,7 @@ describe('permissions', () => {
     const r = await login('nothing', 'pw');
     expect(await r.send('NOSUCHCMD')).toBe(err("ERR unknown command 'NOSUCHCMD', with args beginning with: "));
     expect(await r.send('GET')).toBe(err("ERR wrong number of arguments for 'get' command"));
-    expect(await r.send('GET', 'k')).toBe(err("NOPERM User nothing has no permissions to run the 'get' command"));
+    expect(await r.send('GET', 'k')).toBe(err("NOPERM this user has no permissions to run the 'get' command"));
     // AUTH has the no_auth flag: the command bit is not checked
     expect(await r.send('AUTH', 'nothing', 'pw')).toBe('+OK\r\n');
   });
@@ -93,7 +93,7 @@ describe('MULTI / EXEC', () => {
     const r = await login('tx', 'pw');
     expect(await r.send('MULTI')).toBe('+OK\r\n');
     expect(await r.send('SET', 'k', 'v')).toBe('+QUEUED\r\n');
-    expect(await r.send('INCR', 'k')).toBe(err("NOPERM User tx has no permissions to run the 'incr' command"));
+    expect(await r.send('INCR', 'k')).toBe(err("NOPERM this user has no permissions to run the 'incr' command"));
     expect(await r.send('EXEC')).toBe(err('EXECABORT Transaction discarded because of previous errors.'));
     const [entry] = await aclLog();
     expect(entry).toMatchObject({ count: 1, reason: 'command', context: 'multi', object: 'incr', username: 'tx' });
@@ -127,7 +127,7 @@ describe('MULTI / EXEC', () => {
     expect(await r.send('MULTI')).toBe('+OK\r\n');
     expect(await r.send('PING')).toBe('+QUEUED\r\n');
     expect(await r.send('EXEC')).toBe(
-      err("EXECABORT Transaction discarded because of: NOPERM User tx3 has no permissions to run the 'exec' command"),
+      err("EXECABORT Transaction discarded because of: NOPERM this user has no permissions to run the 'exec' command"),
     );
     // the transaction is gone
     expect(await r.send('PING')).toBe('+PONG\r\n');
@@ -142,10 +142,10 @@ describe('scripts', () => {
     expect(await r.send('EVAL', "return redis.call('get', KEYS[1])", '1', 'lua:k')).toBe('$-1\r\n');
     const reply = await r.send('EVAL', "return redis.call('set', KEYS[1], 'x')", '1', 'lua:k');
     expect(reply).toMatch(
-      /^-ERR ACL failure in script: User lua has no permissions to run the 'set' command script: [0-9a-f]{40}, on @user_script:1\.\r\n$/,
+      /^-ERR The user executing the script can't run this command or subcommand script: [0-9a-f]{40}, on @user_script:1\.\r\n$/,
     );
     const pcall = await r.send('EVAL', "local e = redis.pcall('set', KEYS[1], 'x'); return e['err']", '1', 'lua:k');
-    expect(pcall).toBe(bulk("ERR ACL failure in script: User lua has no permissions to run the 'set' command"));
+    expect(pcall).toBe(bulk("ERR The user executing the script can't run this command or subcommand"));
     const [entry] = await aclLog();
     expect(entry).toMatchObject({ count: 2, reason: 'command', context: 'lua', object: 'set', username: 'lua' });
     expect(String(entry['client-info'])).toMatch(/ cmd=eval /);
@@ -155,9 +155,9 @@ describe('scripts', () => {
     await t.call('ACL', 'SETUSER', 'lua2', 'on', '>pw', '+eval', '+get', '~mine:*');
     const r = await login('lua2', 'pw');
     expect(await r.send('EVAL', "return redis.call('get', 'theirs')", '0')).toMatch(
-      /^-ERR ACL failure in script: No permissions to access a key script: /,
+      /^-ERR The user executing the script can't access at least one of the keys mentioned in the command arguments script: /,
     );
-    expect(await r.send('EVAL', "return redis.call('get', 'x')", '1', 'theirs')).toBe(err('NOPERM No permissions to access a key'));
+    expect(await r.send('EVAL', "return redis.call('get', 'x')", '1', 'theirs')).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
   });
 });
 
@@ -173,14 +173,10 @@ describe('ACL LOG', () => {
     await r.send('PUBLISH', 'chan', 'msg');
     const log = await aclLog();
     expect(log).toHaveLength(3);
-    expect(Object.keys(log[0])).toEqual([
-      'count', 'reason', 'context', 'object', 'username', 'age-seconds', 'client-info', 'entry-id', 'timestamp-created',
-      'timestamp-last-updated',
-    ]);
+    expect(Object.keys(log[0])).toEqual(['count', 'reason', 'context', 'object', 'username', 'age-seconds', 'client-info']);
     expect(log[0]).toMatchObject({ count: 1, reason: 'channel', context: 'toplevel', object: 'chan', username: 'logger' });
     expect(log[1]).toMatchObject({ count: 1, reason: 'key', object: 'notallowed' });
     expect(log[2]).toMatchObject({ count: 3, reason: 'command', object: 'set' });
-    expect(log[0]['entry-id']).toBe(Number(log[2]['entry-id']) + 2);
     expect(String(log[2]['client-info'])).toMatch(/ cmd=set user=logger /);
     expect(Number(log[0]['age-seconds'])).toBeGreaterThanOrEqual(0);
     expect(await aclLog(1)).toHaveLength(1);
@@ -211,25 +207,19 @@ describe('ACL LOG', () => {
     await t.call('CONFIG', 'SET', 'acllog-max-len', '128');
   });
 
-  it('INFO stats counts denials', async () => {
-    const info = String(await t.call('INFO', 'stats'));
-    for (const f of ['auth', 'cmd', 'key', 'channel']) {
-      expect(Number(new RegExp(`acl_access_denied_${f}:(\\d+)`).exec(info)?.[1])).toBeGreaterThan(0);
-    }
-  });
 });
 
 describe('ACL DRYRUN', () => {
   it('reports what would be denied without running anything', async () => {
     await t.call('ACL', 'SETUSER', 'dry', 'on', 'nopass', '+get', '+publish', '~k:*', 'resetchannels', '&c');
     expect(await t.call('ACL', 'DRYRUN', 'dry', 'GET', 'k:1')).toBe('OK');
-    expect(await t.call('ACL', 'DRYRUN', 'dry', 'SET', 'k:1', 'v')).toBe("User dry has no permissions to run the 'set' command");
-    expect(await t.call('ACL', 'DRYRUN', 'dry', 'GET', 'other')).toBe("No permissions to access the 'other' key");
-    expect(await t.call('ACL', 'DRYRUN', 'dry', 'PUBLISH', 'x', 'm')).toBe("No permissions to access the 'x' channel");
+    expect(await t.call('ACL', 'DRYRUN', 'dry', 'SET', 'k:1', 'v')).toBe("This user has no permissions to run the 'set' command");
+    expect(await t.call('ACL', 'DRYRUN', 'dry', 'GET', 'other')).toBe("This user has no permissions to access the 'other' key");
+    expect(await t.call('ACL', 'DRYRUN', 'dry', 'PUBLISH', 'x', 'm')).toBe("This user has no permissions to access the 'x' channel");
     expect(await errOf(t.call('ACL', 'DRYRUN', 'dry', 'GET'))).toBe("ERR wrong number of arguments for 'get' command");
     expect(await errOf(t.call('ACL', 'DRYRUN', 'ghost', 'GET', 'k'))).toBe("ERR User 'ghost' not found");
     expect(await errOf(t.call('ACL', 'DRYRUN', 'dry', 'NOPE'))).toBe("ERR Command 'NOPE' not found");
-    expect(await t.call('ACL', 'DRYRUN', 'dry', 'CONFIG', 'GET', 'x')).toBe("User dry has no permissions to run the 'config|get' command");
+    expect(await t.call('ACL', 'DRYRUN', 'dry', 'CONFIG', 'GET', 'x')).toBe("This user has no permissions to run the 'config|get' command");
   });
 });
 

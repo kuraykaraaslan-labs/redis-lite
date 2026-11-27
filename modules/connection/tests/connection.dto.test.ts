@@ -4,7 +4,7 @@ import type { z } from 'zod';
 
 import { firstIssue } from '@/libs/schemas';
 
-import { AuthDTO, ClientKillDTO, ClientListDTO, ClientPauseDTO, ClientSetInfoDTO, ClientUnblockDTO, HelloDTO, PingDTO } from '../connection.dto';
+import { AuthDTO, ClientKillDTO, ClientListDTO, ClientPauseDTO, ClientUnblockDTO, HelloDTO, PingDTO } from '../connection.dto';
 
 /**
  * Unit tests of the stateless argument grammar (no server): parsed shapes and which error wins.
@@ -50,11 +50,6 @@ describe('HelloDTO', () => {
 });
 
 describe('CLIENT DTOs', () => {
-  it('SETINFO checks the attribute before its value', () => {
-    expect(parse(ClientSetInfoDTO, ['setinfo', 'LIB-X', 'a b'])).toBe("ERR Unrecognized option 'LIB-X'");
-    expect(parse(ClientSetInfoDTO, ['setinfo', 'LIB-NAME', 'a b'])).toBe('ERR LIB-NAME cannot contain spaces, newlines or special characters.');
-  });
-
   it('LIST parses TYPE and ID filters', () => {
     expect(parse(ClientListDTO, ['list', 'type', 'SLAVE'])).toEqual({ type: 'replica', ids: null });
     expect(parse(ClientListDTO, ['list', 'id', '1', 'x'])).toBe('ERR Invalid client ID');

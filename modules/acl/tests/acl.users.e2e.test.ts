@@ -22,7 +22,7 @@ describe('users and AUTH', () => {
   it('SETUSER creates a user that AUTH accepts', async () => {
     expect(await t.call('ACL', 'SETUSER', 'alice', 'on', '>p1', '~cached:*', '+get')).toBe('OK');
     expect(await t.call('ACL', 'GETUSER', 'alice')).toEqual([
-      'flags', ['on', 'sanitize-payload'],
+      'flags', ['on'],
       'passwords', [sha('p1')],
       'commands', '-@all +get',
       'keys', '~cached:*',
@@ -30,7 +30,7 @@ describe('users and AUTH', () => {
       'selectors', [],
     ]);
     const list = (await t.call('ACL', 'LIST')) as string[];
-    expect(list).toContain(`user alice on sanitize-payload #${sha('p1')} ~cached:* resetchannels -@all +get`);
+    expect(list).toContain(`user alice on #${sha('p1')} ~cached:* resetchannels -@all +get`);
     expect(await t.call('ACL', 'USERS')).toEqual(['alice', 'default']);
 
     const r = await raw();
@@ -38,7 +38,7 @@ describe('users and AUTH', () => {
     expect(await r.send('ACL', 'WHOAMI')).toBe(bulk('default'));
     expect(await r.send('AUTH', 'alice', 'p1')).toBe('+OK\r\n');
     // ACL WHOAMI needs +acl|whoami: alice may only run GET
-    expect(await r.send('ACL', 'WHOAMI')).toBe(err("NOPERM User alice has no permissions to run the 'acl|whoami' command"));
+    expect(await r.send('ACL', 'WHOAMI')).toBe(err("NOPERM this user has no permissions to run the 'acl|whoami' command"));
     expect(await r.send('GET', 'cached:1')).toBe('$-1\r\n');
   });
 
@@ -140,7 +140,7 @@ describe('effects of user changes on connections', () => {
     await waitForBlocked(t);
     await t.call('ACL', 'SETUSER', 'blk', 'resetkeys');
     await t.call('LPUSH', 'blk:list', 'x');
-    expect(await pending).toBe(err('NOPERM No permissions to access a key'));
+    expect(await pending).toBe(err('NOPERM this user has no permissions to access one of the keys used as arguments'));
     expect(await t.call('LLEN', 'blk:list')).toBe(1);
   });
 });
@@ -150,7 +150,7 @@ describe('the default user', () => {
     const before = await raw();
     expect(await t.call('CONFIG', 'SET', 'requirepass', 'sekret')).toBe('OK');
     const list = (await t.call('ACL', 'LIST')) as string[];
-    expect(list).toContain(`user default on sanitize-payload #${sha('sekret')} ~* &* +@all`);
+    expect(list).toContain(`user default on #${sha('sekret')} ~* &* +@all`);
     const after = await raw();
     expect(await after.send('GET', 'k')).toBe(err('NOAUTH Authentication required.'));
     // unknown commands are reported before authentication is required
@@ -178,7 +178,7 @@ describe('ACL replies', () => {
     await r.send('HELLO', '3');
     expect(await r.send('ACL', 'GETUSER', 'r3')).toBe(
       '%6\r\n' +
-        '$5\r\nflags\r\n~3\r\n$2\r\non\r\n$6\r\nnopass\r\n$16\r\nsanitize-payload\r\n' +
+        '$5\r\nflags\r\n~2\r\n$2\r\non\r\n$6\r\nnopass\r\n' +
         '$9\r\npasswords\r\n*0\r\n' +
         '$8\r\ncommands\r\n$10\r\n-@all +get\r\n' +
         '$4\r\nkeys\r\n$4\r\n~k:*\r\n' +
@@ -194,15 +194,15 @@ describe('ACL replies', () => {
     await r.send('AUTH', 'x', 'y');
     await r.send('HELLO', '3');
     const reply = await r.send('ACL', 'LOG');
-    expect(reply).toMatch(/^\*1\r\n%10\r\n\$5\r\ncount\r\n:1\r\n\$6\r\nreason\r\n\$4\r\nauth\r\n/);
+    expect(reply).toMatch(/^\*1\r\n%7\r\n\$5\r\ncount\r\n:1\r\n\$6\r\nreason\r\n\$4\r\nauth\r\n/);
     expect(reply).toMatch(/\$11\r\nage-seconds\r\n,[\d.e-]+\r\n/);
   });
 
   it('CAT, GENPASS, HELP and syntax errors', async () => {
     const cats = (await t.call('ACL', 'CAT')) as string[];
     expect(cats[0]).toBe('keyspace');
-    expect(cats).toHaveLength(22);
-    expect(cats[21]).toBe('timeseries');
+    expect(cats).toHaveLength(21);
+    expect(cats[20]).toBe('scripting');
     expect(await t.call('ACL', 'CAT', 'hyperloglog')).toEqual(expect.arrayContaining(['pfadd', 'pfcount', 'pfmerge']));
     expect(await errOf(t.call('ACL', 'CAT', 'nope'))).toBe("ERR Unknown category 'nope'");
     expect(await t.call('ACL', 'GENPASS', '128')).toMatch(/^[0-9a-f]{32}$/);
@@ -251,9 +251,9 @@ describe('ACL SAVE / LOAD with an aclfile', () => {
     expect(await r.send('ACL', 'SETUSER', 'extra', 'on', 'nopass', '+ping')).toBe('+OK\r\n');
     expect(await r.send('ACL', 'SAVE')).toBe('+OK\r\n');
     expect(readFileSync(join(dir, 'users.acl'), 'latin1')).toBe(
-      'user default on nopass sanitize-payload ~* &* +@all\n' +
-        'user extra on nopass sanitize-payload resetchannels -@all +ping\n' +
-        `user loaded on sanitize-payload #${sha('lpw')} ~* resetchannels +@all\n`,
+      'user default on nopass ~* &* +@all\n' +
+        'user extra on nopass resetchannels -@all +ping\n' +
+        `user loaded on #${sha('lpw')} ~* resetchannels +@all\n`,
     );
     r.close();
   });
@@ -265,7 +265,7 @@ describe('ACL SAVE / LOAD with an aclfile', () => {
     expect(await kept.send('AUTH', 'extra', 'x')).toBe('+OK\r\n');
     writeFileSync(
       join(dir, 'users.acl'),
-      'user default on nopass sanitize-payload ~* &* +@all\nuser extra on nopass sanitize-payload resetchannels -@all +ping\n',
+      'user default on nopass ~* &* +@all\nuser extra on nopass resetchannels -@all +ping\n',
     );
     const admin = await open();
     expect(await admin.send('ACL', 'LOAD')).toBe('+OK\r\n');

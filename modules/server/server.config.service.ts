@@ -26,7 +26,8 @@ export default class ServerConfigService {
    * The first unknown name, or the first immutable / duplicate one (Redis reports an unknown name first). A duplicate is
    * the same name twice (in any case); a parameter and its alias are two names, the later value wins.
    */
-  private static checkNames(cfg: ServerConfig, pairs: ConfigSetInput['pairs']): [string, string] | null {
+  private static checkNames(ctx: CommandContext, pairs: ConfigSetInput['pairs']): [string, string] | null {
+    const cfg = ctx.server.config;
     let unknown: string | null = null;
     let failure: [string, string] | null = null;
     const seen = new Set<string>();
@@ -38,11 +39,18 @@ export default class ServerConfigService {
       }
       if (unknown !== null || failure) continue;
       if (cfg.isImmutable(canonical)) failure = [name, ServerMessages.CONFIG_IMMUTABLE];
+      else if (cfg.isProtected(canonical) && !ServerConfigService.protectedAllowed(ctx)) failure = [name, ServerMessages.CONFIG_PROTECTED];
       else if (seen.has(name.toLowerCase())) failure = [name, ServerMessages.CONFIG_DUPLICATE];
       seen.add(name.toLowerCase());
     }
     if (unknown !== null) throw new AppError(formatMessage(ServerMessages.CONFIG_SET_UNKNOWN, { name: unknown }));
     return failure;
+  }
+
+  /** enable-protected-configs: `yes`, or `local` for a loopback / unix socket client. */
+  private static protectedAllowed(ctx: CommandContext): boolean {
+    const mode = ctx.server.config.get('enable-protected-configs');
+    return mode === 'yes' || (mode === 'local' && ctx.client.isLocal());
   }
 
   /** Validated values (the `dir` value resolved to an absolute path), or the first failure. */
@@ -68,7 +76,7 @@ export default class ServerConfigService {
 
   /**
    * CONFIG GET pattern […]: an exact name (or alias) answers under the name exactly as typed, a glob pattern under every
-   * matching parameter name (aliases are not listed by globs). A name already answered, in any case, is not repeated.
+   * matching parameter name and alias. A name already answered, in any case, is not repeated.
    */
   static get(ctx: CommandContext, { patterns }: ConfigGetInput): Reply {
     const cfg = ctx.server.config;
@@ -85,7 +93,7 @@ export default class ServerConfigService {
       }
       const glob = pattern.toLowerCase();
       for (const name of ServerConfig.allNames()) {
-        if (ServerConfig.canonical(name) === name && cfg.has(name) && matchGlob(glob, name)) add(name, name);
+        if (cfg.has(name) && matchGlob(glob, name)) add(name, ServerConfig.canonical(name));
       }
     }
     return new RespMap([...matched.values()]);
@@ -94,7 +102,7 @@ export default class ServerConfigService {
   /** CONFIG SET name value […]: every value is checked before any is applied; a failing side effect rolls back. */
   static set(ctx: CommandContext, { pairs }: ConfigSetInput): Reply {
     const cfg = ctx.server.config;
-    const failure = ServerConfigService.checkNames(cfg, pairs);
+    const failure = ServerConfigService.checkNames(ctx, pairs);
     if (failure) throw ServerConfigService.setFailed(failure[0], failure[1]);
     const values = ServerConfigService.validate(cfg, pairs);
     const previous = values.map(([name]) => [name, cfg.get(name) ?? ''] as const);

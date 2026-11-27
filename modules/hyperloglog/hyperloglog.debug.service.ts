@@ -4,6 +4,8 @@ import { OK, Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
 import type { CommandContext } from '@/modules/command/command.types';
+import MemoryService from '@/modules/memory/memory.service';
+import type { StringValue } from '@/modules/memory/memory.types';
 
 import type { PfDebugInput, PfSelfTestInput } from './hyperloglog.dto';
 import { HLL_DENSE, HLL_HDR_SIZE, HLL_REGISTERS, HLL_SPARSE, denseGet, denseSetReg, sparseRuns } from './hyperloglog.encoding';
@@ -31,7 +33,7 @@ export default class HyperLogLogDebugService {
   }
 
   private static write(ctx: CommandContext, key: string, hll: Hll): void {
-    ctx.db.set(key, { type: 'string', value: hll.toString(), raw: true }, true);
+    ctx.db.set(key, { type: 'string', value: hll.toString(), raw: true, sds: hll.sds }, true);
   }
 
   // ──────────────────────────────────────────────
@@ -46,6 +48,7 @@ export default class HyperLogLogDebugService {
     const hll = raw === undefined ? undefined : Hll.fromString(raw);
     if (raw !== undefined && !hll) throw new AppError(HyperLogLogMessages.WRONGTYPE);
     if (!hll) throw new AppError(HyperLogLogMessages.KEY_NOT_FOUND);
+    hll.sds = MemoryService.stringSds(ctx.db.raw(key) as StringValue);
     return hll;
   }
 

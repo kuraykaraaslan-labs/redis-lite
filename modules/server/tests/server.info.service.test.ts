@@ -23,7 +23,7 @@ describe('INFO', () => {
   it('INFO server', async () => {
     const info = String(await t.call('INFO', 'server'));
     expect.soft(info.startsWith('# Server\r\n')).toBe(true);
-    expect.soft(info).toMatch(/\r\nredis_version:8\.\d+\.\d+\r\n/);
+    expect.soft(info).toContain('\r\nredis_version:7.0.15\r\n');
     expect.soft(info).toContain('redis_mode:standalone\r\n');
     expect.soft(info).toContain(`tcp_port:${t.server.port}\r\n`);
     expect.soft(info).toMatch(/uptime_in_seconds:\d+\r\n/);
@@ -72,7 +72,7 @@ describe('INFO', () => {
     await r.send('SET', 'ks:b', '1', 'EX', '1000');
     const info = String(await t.call('INFO', 'keyspace'));
     expect.soft(info.startsWith('# Keyspace\r\n')).toBe(true);
-    expect.soft(info).toMatch(/\r\ndb5:keys=2,expires=1,avg_ttl=\d+,subexpiry=0\r\n/);
+    expect.soft(info).toMatch(/\r\ndb5:keys=2,expires=1,avg_ttl=\d+\r\n/);
     await r.send('FLUSHDB');
     expect.soft(String(await t.call('INFO', 'keyspace'))).not.toContain('db5:');
   });

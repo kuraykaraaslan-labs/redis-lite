@@ -17,19 +17,16 @@ describe('ACL LOG', () => {
     expect(entries[0]).toMatchObject({
       count: 2,
       clientInfo: 'c2',
-      entryId: 0,
-      timestampCreated: 1_000_000,
-      timestampLastUpdated: 1_001_000,
       ageSeconds: 0,
     });
     acl.log({ ...base, object: 'set', clientInfo: 'c3' });
     t += 61_000;
     acl.log({ ...base, clientInfo: 'c4' });
     entries = acl.logEntries();
-    expect(entries.map((e) => [e.object, e.count, e.entryId])).toEqual([
-      ['get', 1, 2],
-      ['set', 1, 1],
-      ['get', 2, 0],
+    expect(entries.map((e) => [e.object, e.count, e.clientInfo])).toEqual([
+      ['get', 1, 'c4'],
+      ['set', 1, 'c3'],
+      ['get', 2, 'c2'],
     ]);
     expect(entries[1].ageSeconds).toBe(61);
     expect(acl.logEntries(1)).toHaveLength(1);

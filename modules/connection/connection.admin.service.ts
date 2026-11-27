@@ -13,6 +13,13 @@ import type { ClientKillFilters } from './connection.types';
 /** Inspection and administration of connections: CLIENT INFO, LIST, KILL, UNBLOCK and the client info line. */
 export default class ConnectionAdminService {
   // ──────────────────────────────────────────────
+  // Constants
+  // ──────────────────────────────────────────────
+
+  /** The static reply buffer every client has (rbs). */
+  private static readonly REPLY_BUFFER = 16 * 1024;
+
+  // ──────────────────────────────────────────────
   // Private Helpers
   // ──────────────────────────────────────────────
 
@@ -23,14 +30,13 @@ export default class ConnectionAdminService {
     else if (c.monitor) f += 'O';
     if (c.isMaster) f += 'M';
     if (c.subscriptionCount) f += 'P';
-    if (c.multi) f += 'x';
+    if (c.multi || c.inExec) f += 'x';
     if (c.blocked) f += 'b';
     if (c.tracking) f += 't';
     if (c.trackingRedirectBroken) f += 'R';
     if (c.trackingBcast) f += 'B';
     if (c.closeAfterReply) f += 'c';
     if (c.noEvict) f += 'e';
-    if (c.noTouch) f += 'T';
     return f || 'N';
   }
 
@@ -53,13 +59,12 @@ export default class ConnectionAdminService {
   }
 
   /** Whether a connection passes every CLIENT KILL filter (`user` already resolved). */
-  private static matches(ctx: CommandContext, c: Client, filters: ClientKillFilters, user: Client['user'], now: number): boolean {
+  private static matches(ctx: CommandContext, c: Client, filters: ClientKillFilters, user: Client['user']): boolean {
     if (filters.id !== null && c.id !== filters.id) return false;
     if (filters.type !== null && ConnectionAdminService.clientType(c) !== filters.type) return false;
     if (filters.addr !== null && c.address !== filters.addr) return false;
     if (filters.laddr !== null && ConnectionAdminService.localAddress(ctx.server, c) !== filters.laddr) return false;
     if (user !== null && c.user !== user) return false;
-    if (filters.maxAge !== null && Math.floor((now - c.createdAt) / 1000) <= filters.maxAge) return false;
     return !(filters.skipMe && c === ctx.client);
   }
 
@@ -70,14 +75,14 @@ export default class ConnectionAdminService {
   /** One CLIENT LIST / CLIENT INFO line (Redis catClientInfoString). */
   static clientInfoLine(server: RedisLiteServer, c: Client): string {
     const now = Date.now();
-    const multiMem = c.multi ? c.multi.reduce((n, argv) => n + argv.reduce((m, a) => m + a.length, 0), 0) : 0;
+    const mem = server.memoryModel.clientMemory(c);
     return (
       `id=${c.id} addr=${c.address} laddr=${ConnectionAdminService.localAddress(server, c)} fd=${c.socket ? c.id + 7 : -1} name=${c.name} ` +
       `age=${Math.floor((now - c.createdAt) / 1000)} idle=${Math.floor((now - c.lastActiveAt) / 1000)} flags=${ConnectionAdminService.clientFlags(c)} ` +
-      `db=${c.dbIndex} sub=${c.channels.size} psub=${c.patterns.size} ssub=${c.shardChannels.size} multi=${c.multi ? c.multi.length : -1} ` +
-      `watch=${c.watched.size} qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=${multiMem} rbs=1024 rbp=0 obl=0 oll=0 omem=0 tot-mem=${1024 + multiMem} ` +
-      `events=r cmd=${c.lastCommand} user=${c.user ? c.user.name : '(superuser)'} redir=${c.tracking ? c.trackingRedirect : -1} resp=${c.resp} ` +
-      `lib-name=${c.libName} lib-ver=${c.libVer} io-thread=0 tot-net-in=${c.netIn} tot-net-out=${c.netOut} tot-cmds=${c.commandsProcessed}`
+      `db=${c.dbIndex} sub=${c.channels.size} psub=${c.patterns.size} ssub=${c.shardChannels.size} multi=${c.multi ? c.multi.length : c.inExec ? c.execQueued : -1} ` +
+      `qbuf=${mem.qbuf} qbuf-free=${mem.qbufFree} argv-mem=${mem.argvMem} multi-mem=${mem.multiMem} rbs=${ConnectionAdminService.REPLY_BUFFER} ` +
+      `rbp=${c.replyPeak(now)} obl=0 oll=0 omem=0 tot-mem=${mem.totMem} ` +
+      `events=r cmd=${c.lastCommand} user=${c.user ? c.user.name : '(superuser)'} redir=${c.tracking ? c.trackingRedirect : -1} resp=${c.resp}`
     );
   }
 
@@ -117,10 +122,9 @@ export default class ConnectionAdminService {
       if (!user) throw new AppError(formatMessage(ConnectionMessages.NO_SUCH_USER, { user: name }));
     }
     if (error !== null) return new RespError(error);
-    const now = Date.now();
     let killed = 0;
     for (const c of [...ctx.server.clients]) {
-      if (!ConnectionAdminService.matches(ctx, c, filters, user, now)) continue;
+      if (!ConnectionAdminService.matches(ctx, c, filters, user)) continue;
       ConnectionAdminService.close(ctx, c);
       killed++;
     }

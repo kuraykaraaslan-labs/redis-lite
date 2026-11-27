@@ -1,10 +1,10 @@
 import { AppError } from '@/libs/app-error';
 import { matchGlob } from '@/libs/glob';
 import { formatMessage } from '@/libs/message-format';
-import { RespPush, Status } from '@/libs/resp';
+import { RespPush } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { NO_REPLY } from '@/modules/command/command.service';
+import CommandService, { NO_REPLY } from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 import TransactionsService from '@/modules/transactions/transactions.service';
 
@@ -117,7 +117,7 @@ export default class PubSubService {
 
   /** PUBSUB CHANNELS | NUMSUB | NUMPAT | SHARDCHANNELS | SHARDNUMSUB | HELP. */
   static introspect(ctx: CommandContext, { subcommand, pattern, channels }: PubSubInput): Reply {
-    if (subcommand === 'help') return PubSubMessages.HELP.map((line) => new Status(line));
+    if (subcommand === 'help') return CommandService.helpReply('pubsub');
     if (subcommand === 'channels') return [...ctx.server.channels.keys()].filter((c) => matchGlob(pattern, c));
     // NUMSUB / SHARDNUMSUB are flat channel, count arrays in RESP3 too (Redis does not send them as maps)
     if (subcommand === 'numsub') return channels.flatMap((c) => [c, ctx.server.channels.get(c)?.size ?? 0]);

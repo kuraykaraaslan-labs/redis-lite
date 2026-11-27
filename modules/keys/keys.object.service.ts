@@ -1,12 +1,11 @@
 import { AppError } from '@/libs/app-error';
 import { formatMessage } from '@/libs/message-format';
-import { Status } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 import { RespMessages } from '@/libs/resp/messages';
 
+import CommandService from '@/modules/command/command.service';
 import type { CommandContext } from '@/modules/command/command.types';
 import DatabaseService from '@/modules/database/database.service';
-import HashesService from '@/modules/hashes/hashes.service';
 
 import type { ObjectInput } from './keys.dto';
 import KeysMessages from './keys.messages';
@@ -26,13 +25,13 @@ export default class KeysObjectService {
   // ──────────────────────────────────────────────
 
   static object(ctx: CommandContext, input: ObjectInput): Reply {
-    if (input.help) return KeysMessages.OBJECT_HELP.map((line) => new Status(line));
+    if (input.help) return CommandService.helpReply('object');
     const { key, subcommand, given } = input;
     const v = ctx.db.peek(key);
     const config = ctx.server.config;
     switch (subcommand) {
       case 'encoding':
-        return v ? DatabaseService.objectEncoding(v, config, v.type === 'hash' && HashesService.hashHasFieldTtl(v.value)) : null;
+        return v ? DatabaseService.objectEncoding(v, config) : null;
       case 'refcount': {
         if (!v) return null;
         // Shared unless an LRU/LFU maxmemory policy is set (maxmemory is then non-zero).

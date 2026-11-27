@@ -1,7 +1,41 @@
-import type { InfoMemoryExtras, MemoryReport, MemoryStatValue } from './memory.types';
+import type { DictTables, InfoMemoryExtras, MemoryReport, MemoryStatValue } from './memory.types';
 
 /** How memory figures are shown: MEMORY STATS (reply order and value kinds) and the INFO memory section. */
 export default class MemoryInfoService {
+  // ──────────────────────────────────────────────
+  // Constants
+  // ──────────────────────────────────────────────
+
+  /** DICT_STATS_VECTLEN: chain lengths counted one by one up to this. */
+  private static readonly STATS_VECTLEN = 50;
+
+  // ──────────────────────────────────────────────
+  // Private Helpers
+  // ──────────────────────────────────────────────
+
+  /** One table's block of dictGetStats: sizes, then the chain lengths of `elements` spread at random. */
+  private static tableStats(title: string, size: number, elements: number): string {
+    if (!size || !elements) return `${title}\nNo stats available for empty dictionaries\n`;
+    const chains = new Uint32Array(size);
+    for (let i = 0; i < elements; i++) chains[Math.floor(Math.random() * size)]++;
+    const vector = new Array<number>(MemoryInfoService.STATS_VECTLEN).fill(0);
+    let slots = 0;
+    let max = 0;
+    for (const len of chains) {
+      vector[Math.min(len, MemoryInfoService.STATS_VECTLEN - 1)]++;
+      if (len) slots++;
+      max = Math.max(max, len);
+    }
+    const avg = (elements / slots).toFixed(2);
+    let out =
+      `${title}\n table size: ${size}\n number of elements: ${elements}\n different slots: ${slots}\n max chain length: ${max}\n` +
+      ` avg chain length (counted): ${avg}\n avg chain length (computed): ${avg}\n Chain length distribution:\n`;
+    vector.forEach((n, len) => {
+      if (n) out += `   ${len}: ${n} (${((n / size) * 100).toFixed(2)}%)\n`;
+    });
+    return out;
+  }
+
   // ──────────────────────────────────────────────
   // Public Methods
   // ──────────────────────────────────────────────
@@ -17,6 +51,14 @@ export default class MemoryInfoService {
       i++;
     }
     return `${d.toFixed(2)}${units[i]}`;
+  }
+
+  /** DEBUG HTSTATS(-KEY) text of a dict: the main table, and the rehash target while rehashing. */
+  static htStats(t: DictTables & { rehashed: number }, used: number): string {
+    const S = MemoryInfoService;
+    let out = S.tableStats('Hash table 0 stats (main hash table):', t.size0, used - t.rehashed);
+    if (t.size1) out += S.tableStats('Hash table 1 stats (rehashing target):', t.size1, t.rehashed);
+    return out;
   }
 
   /** MEMORY STATS, in Redis's reply order. */
@@ -40,14 +82,12 @@ export default class MemoryInfoService {
         [
           ['overhead.hashtable.main', db.main],
           ['overhead.hashtable.expires', db.expiresOverhead],
+          ['overhead.hashtable.slot-to-keys', 0],
         ],
       ]);
     }
     out.push(
-      ['overhead.db.hashtable.lut', r.hashtableLut],
-      ['overhead.db.hashtable.rehashing', r.hashtableRehashing],
       ['overhead.total', r.overheadTotal],
-      ['db.dict.rehashing.count', r.dictRehashingCount],
       ['keys.count', r.keysCount],
       ['keys.bytes-per-key', r.bytesPerKey],
       ['dataset.bytes', r.dataset],
@@ -56,7 +96,6 @@ export default class MemoryInfoService {
       ['allocator.allocated', r.allocatorAllocated],
       ['allocator.active', r.allocatorActive],
       ['allocator.resident', r.allocatorResident],
-      ['allocator.muzzy', r.allocatorMuzzy],
       ['allocator-fragmentation.ratio', d(r.allocatorFragRatio)],
       ['allocator-fragmentation.bytes', r.allocatorFragBytes],
       ['allocator-rss.ratio', d(r.allocatorRssRatio)],
@@ -73,7 +112,7 @@ export default class MemoryInfoService {
   static infoMemory(r: MemoryReport, x: InfoMemoryExtras = {}): Array<[string, string | number]> {
     const pct = (v: number): string => `${v.toFixed(2)}%`;
     const ratio = (v: number): string => v.toFixed(2);
-    const luaVm = x.luaVmMemory ?? 32768;
+    const luaVm = x.luaVmMemory ?? 31744;
     const fnVm = x.functionsVmMemory ?? 32768;
     const scripts = r.luaCaches + r.functionsCaches;
     const sys = x.totalSystemMemory ?? 0;
@@ -84,7 +123,6 @@ export default class MemoryInfoService {
       ['used_memory_rss', r.rss],
       ['used_memory_rss_human', MemoryInfoService.bytesToHuman(r.rss)],
       ['used_memory_peak', r.peak],
-      ['used_memory_peak_time', x.peakTime ?? 0],
       ['used_memory_peak_human', MemoryInfoService.bytesToHuman(r.peak)],
       ['used_memory_peak_perc', pct(r.peakPercentage)],
       ['used_memory_overhead', r.overheadTotal],
@@ -94,7 +132,6 @@ export default class MemoryInfoService {
       ['allocator_allocated', r.allocatorAllocated],
       ['allocator_active', r.allocatorActive],
       ['allocator_resident', r.allocatorResident],
-      ['allocator_muzzy', r.allocatorMuzzy],
       ['total_system_memory', sys],
       ['total_system_memory_human', MemoryInfoService.bytesToHuman(sys)],
       ['used_memory_lua', luaVm],
@@ -129,7 +166,6 @@ export default class MemoryInfoService {
       ['mem_cluster_links', r.clusterLinks],
       ['mem_aof_buffer', r.aofBuffer],
       ['mem_allocator', x.allocator ?? 'jemalloc-5.3.0'],
-      ['mem_overhead_db_hashtable_rehashing', r.hashtableRehashing],
       ['active_defrag_running', x.activeDefragRunning ?? 0],
       ['lazyfree_pending_objects', x.lazyfreePendingObjects ?? 0],
       ['lazyfreed_objects', x.lazyfreedObjects ?? 0],

@@ -5,12 +5,12 @@ import { Stream } from '@/modules/streams/streams.structure';
 
 import { RDB_TYPE } from '../persistence.enums';
 import PersistenceService from '../persistence.service';
-import { binaryString, zsetOf, plain, roundTrip, makeStream } from './persistence.rdb_fixtures';
+import { binaryString, zsetOf, roundTrip, makeStream } from './persistence.rdb_fixtures';
 
-const { decodeObject, dumpPayload, encodeObject, listpackDecode, restorePayloadEx } = PersistenceService;
+const { encodeObject, listpackDecode } = PersistenceService;
 
 describe('object round-trips', () => {
-  it('lists: single listpack node, multiple nodes, plain nodes', () => {
+  it('lists: single listpack node, multiple nodes, a large element in a node of its own', () => {
     roundTrip({ type: 'list', value: ListDeque.from(['a', '1', '-200', binaryString(30, 1)]) }, RDB_TYPE.LIST_QUICKLIST_2);
     const small = encodeObject({ type: 'list', value: ListDeque.from(['a', 'b']) }).body;
     expect(small[0]).toBe(1); // one node
@@ -22,9 +22,9 @@ describe('object round-trips', () => {
     roundTrip({ type: 'list', value: ListDeque.from(['x', 'y'.repeat(9000), 'z']) }, RDB_TYPE.LIST_QUICKLIST_2);
   });
 
-  it('sets: intset, listpack, hashtable', () => {
+  it('sets: intset, hashtable (7.0 has no listpack sets)', () => {
     roundTrip({ type: 'set', value: new Set(['3', '1', '-2', '9223372036854775807']) }, RDB_TYPE.SET_INTSET);
-    roundTrip({ type: 'set', value: new Set(['a', '1', binaryString(10, 4)]) }, RDB_TYPE.SET_LISTPACK);
+    roundTrip({ type: 'set', value: new Set(['a', '1', binaryString(10, 4)]) }, RDB_TYPE.SET);
     roundTrip({ type: 'set', value: new Set(Array.from({ length: 600 }, (_, i) => String(i))) }, RDB_TYPE.SET);
     roundTrip({ type: 'set', value: new Set(Array.from({ length: 129 }, (_, i) => `m${i}`)) }, RDB_TYPE.SET);
     roundTrip({ type: 'set', value: new Set(['a', 'b'.repeat(65)]) }, RDB_TYPE.SET);
@@ -33,8 +33,9 @@ describe('object round-trips', () => {
   it('zsets: listpack and skiplist', () => {
     const small = zsetOf([['a', 1], ['b', 2.5], ['c', -0.125], ['d', 1e300], ['e', Infinity], ['f', -Infinity], ['g', 3e-7]]);
     roundTrip({ type: 'zset', value: small }, RDB_TYPE.ZSET_LISTPACK);
-    const items = listpackDecode(encodeObject({ type: 'zset', value: zsetOf([['m', 0.1], ['n', 2]]) }).body.subarray(1));
-    expect(items).toEqual(['m', '0.1', 'n', 2n]);
+    // Redis 7.0 stores a non-integral score as its %.17g text
+    const items = listpackDecode(encodeObject({ type: 'zset', value: zsetOf([['m', 0.1], ['n', 2]]) }, { rdbCompression: false }).body.subarray(1));
+    expect(items).toEqual(['m', '0.10000000000000001', 'n', 2n]);
     const big = zsetOf(Array.from({ length: 200 }, (_, i) => [`member:${i}`, i / 3] as [string, number]));
     roundTrip({ type: 'zset', value: big }, RDB_TYPE.ZSET_2);
     roundTrip({ type: 'zset', value: zsetOf([['x'.repeat(65), 1]]) }, RDB_TYPE.ZSET_2);
@@ -47,37 +48,19 @@ describe('object round-trips', () => {
     roundTrip({ type: 'hash', value: new Map([['f', 'v'.repeat(65)]]) }, RDB_TYPE.HASH);
   });
 
-  it('hashes with field TTLs', () => {
-    const h = new Map([['a', '1'], ['b', '2'], ['c', '3']]);
-    const ttl = new Map([['b', 1800000000000], ['c', 1700000000000]]);
-    const enc = encodeObject({ type: 'hash', value: h }, {}, ttl);
-    expect(enc.type).toBe(RDB_TYPE.HASH_LISTPACK_EX);
-    const dec = restorePayloadEx(dumpPayload({ type: 'hash', value: h }, {}, ttl));
-    expect(plain(dec.value)).toEqual(plain({ type: 'hash', value: h }));
-    expect(dec.fieldExpires).toEqual(ttl);
-
-    const big = new Map(Array.from({ length: 200 }, (_, i) => [`f${i}`, `v${i}`] as [string, string]));
-    const bigTtl = new Map([['f3', 1700000000500], ['f7', 1700000000000]]);
-    const encBig = encodeObject({ type: 'hash', value: big }, {}, bigTtl);
-    expect(encBig.type).toBe(RDB_TYPE.HASH_METADATA);
-    const decBig = decodeObject(encBig.type, encBig.body);
-    expect(decBig.fieldExpires).toEqual(bigTtl);
-    expect(plain(decBig.value)).toEqual(plain({ type: 'hash', value: big }));
-  });
-
   it('streams: empty, small, multi-node with groups', () => {
-    roundTrip({ type: 'stream', value: new Stream() }, RDB_TYPE.STREAM_LISTPACKS_3);
-    roundTrip({ type: 'stream', value: makeStream(5, true) }, RDB_TYPE.STREAM_LISTPACKS_3);
+    roundTrip({ type: 'stream', value: new Stream() }, RDB_TYPE.STREAM_LISTPACKS_2);
+    roundTrip({ type: 'stream', value: makeStream(5, true) }, RDB_TYPE.STREAM_LISTPACKS_2);
     const big = makeStream(450, true);
     const enc = encodeObject({ type: 'stream', value: big });
     expect(enc.body[0]).toBeGreaterThanOrEqual(5); // 100 entries per node
-    roundTrip({ type: 'stream', value: big }, RDB_TYPE.STREAM_LISTPACKS_3);
+    roundTrip({ type: 'stream', value: big }, RDB_TYPE.STREAM_LISTPACKS_2);
     const fat = new Stream();
     for (let i = 0; i < 20; i++) fat.entries.push({ id: { ms: BigInt(i + 1), seq: 0n }, fields: ['blob', 'x'.repeat(1000)] });
     fat.lastId = { ms: 20n, seq: 0n };
     fat.entriesAdded = 20;
     expect(encodeObject({ type: 'stream', value: fat }).body[0]).toBeGreaterThan(1); // byte limit split
-    roundTrip({ type: 'stream', value: fat }, RDB_TYPE.STREAM_LISTPACKS_3);
+    roundTrip({ type: 'stream', value: fat }, RDB_TYPE.STREAM_LISTPACKS_2);
   });
 
   it('stream node layout: master entry, SAMEFIELDS flag and lp-count', () => {

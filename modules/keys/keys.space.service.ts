@@ -6,10 +6,8 @@ import type { Reply } from '@/libs/resp';
 import type { CommandContext } from '@/modules/command/command.types';
 import type { Database } from '@/modules/database/database.service';
 import DatabaseService from '@/modules/database/database.service';
-import { ListDeque } from '@/modules/lists/lists.deque.structure';
+import MemoryService from '@/modules/memory/memory.service';
 import { Stream } from '@/modules/streams/streams.structure';
-import TimeseriesService from '@/modules/timeseries/timeseries.service';
-import { TSDB_TYPE_NAME } from '@/modules/timeseries/timeseries.structure';
 import { ZSet } from '@/modules/zsets/zsets.structure';
 import type { RedisValue } from '@/modules/database/database.types';
 
@@ -26,11 +24,14 @@ export default class KeysSpaceService {
   private static cloneValue(v: RedisValue): RedisValue {
     switch (v.type) {
       case 'string':
-        return { type: 'string', value: v.value };
+        // a copy keeps the encoding (a raw string stays raw even when it looks like an integer); a raw copy is a fresh
+        // allocation of the value's length
+        if (v.raw || v.value.length > MemoryService.EMBSTR_MAX) return { ...v, sds: MemoryService.sdsFresh(v.value.length) };
+        return { ...v };
       case 'hash':
         return { type: 'hash', value: new Map(v.value) };
       case 'list':
-        return { type: 'list', value: ListDeque.from(v.value) };
+        return { type: 'list', value: v.value.clone() };
       case 'set':
         return { type: 'set', value: new Set(v.value) };
       case 'zset': {
@@ -46,16 +47,12 @@ export default class KeysSpaceService {
         s.maxDeletedId = v.value.maxDeletedId;
         return { type: 'stream', value: s };
       }
-      case 'timeseries':
-        // the copy has the samples and labels, but is neither a compaction source nor a destination
-        return { type: 'timeseries', value: v.value.clone(false) };
     }
   }
 
-  /** TYPE's name of a value: the type, or the module type name for module values (`TSDB-TYPE`). */
+  /** TYPE's name of a value. */
   private static typeName(v: RedisValue | undefined): string {
-    if (!v) return 'none';
-    return v.type === 'timeseries' ? TSDB_TYPE_NAME : v.type;
+    return v ? v.type : 'none';
   }
 
   /** COPY's target database: each DB option must name an existing database, checked in argument order. */
@@ -106,7 +103,6 @@ export default class KeysSpaceService {
     ctx.db.remove(source);
     ctx.db.set(destination, v);
     if (at !== undefined) ctx.db.setExpire(destination, at);
-    if (v.type === 'timeseries') TimeseriesService.renamed(ctx.db, source, destination, v.value);
     return nx ? 1 : OK;
   }
 

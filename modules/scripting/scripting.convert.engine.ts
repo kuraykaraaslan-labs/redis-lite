@@ -1,4 +1,5 @@
 import { formatMessage } from '@/libs/message-format';
+import { formatG17 } from '@/libs/number';
 import {
   NULL_ARRAY,
   RespBigNumber,
@@ -15,7 +16,7 @@ import {
 } from '@/libs/resp';
 import type { Reply } from '@/libs/resp';
 
-import { LuaType } from './scripting.enums';
+import { IGNORE_ERROR_STATS, LuaType } from './scripting.enums';
 import ScriptingMessages from './scripting.messages';
 import type LuaStack from './scripting.stack.engine';
 import type { LuaState, ScriptState } from './scripting.types';
@@ -43,6 +44,8 @@ const TWO_POW_63 = 2 ** 63;
 /** What a C cast of NaN or of an out-of-range double to long long gives on x86. */
 const INTEGER_INDEFINITE = -(2n ** 63n);
 const LINE_BREAKS = /[\r\n]/g;
+/** Scratch space to read the sign bit of a NaN. */
+const NAN_VIEW = new DataView(new ArrayBuffer(8));
 
 /**
  * Conversions between Redis replies and Lua values, with Redis's rules: redis.call results become Lua values (RESP2
@@ -72,7 +75,10 @@ export default class LuaReplyConverter {
     lw.lua_checkstack(L, 6);
     const top = lw.lua_gettop(L);
     try {
-      if (stack.rawField(at, 'double') === LuaType.NUMBER) return new RespDouble(lw.lua_tonumberx(L, -1, null));
+      if (stack.rawField(at, 'double') === LuaType.NUMBER) {
+        const n = lw.lua_tonumberx(L, -1, null);
+        return Number.isNaN(n) ? new RespDouble(n, LuaReplyConverter.formatNumber(n)) : new RespDouble(n);
+      }
       lw.lua_settop(L, -2);
       if (stack.rawField(at, 'big_number') === LuaType.STRING) {
         const text = stack.readBytes(L, -1).replace(/[\r\n]/g, ' ');
@@ -127,6 +133,22 @@ export default class LuaReplyConverter {
     if (!(n >= -TWO_POW_63 && n < TWO_POW_63)) return INTEGER_INDEFINITE;
     const t = Math.trunc(n);
     return Number.isSafeInteger(t) ? t : BigInt(t);
+  }
+
+  // ──────────────────────────────────────────────
+  // Numbers
+  // ──────────────────────────────────────────────
+
+  /**
+   * A Lua number as Redis 7.0 writes it (redis.call arguments, {double=…} replies): Lua 5.1 numbers are doubles,
+   * printed with printf "%.17g", the sign of a NaN included (0/0 is -nan on x86).
+   */
+  static formatNumber(n: number): string {
+    if (Number.isNaN(n)) {
+      NAN_VIEW.setFloat64(0, n);
+      return (NAN_VIEW.getUint8(0) & 0x80) !== 0 ? '-nan' : 'nan';
+    }
+    return formatG17(n);
   }
 
   // ──────────────────────────────────────────────
@@ -236,7 +258,7 @@ export default class LuaReplyConverter {
         if (lw.lua_getfield(L, at, 'err') === LuaType.STRING) {
           const msg = stack.readBytes(L, -1);
           lw.lua_settop(L, -2);
-          return new RespError(msg);
+          return new RespError(msg, this.statsCounted(at));
         }
         lw.lua_settop(L, -2);
         if (lw.lua_getfield(L, at, 'ok') === LuaType.STRING) {
@@ -265,21 +287,36 @@ export default class LuaReplyConverter {
     }
   }
 
+  /** Whether the error table at `at` carries the `ignore_error_stats_update` mark of a redis.call error. */
+  private statsCounted(at: number): boolean {
+    const { lw, L } = this.stack;
+    lw.lua_getfield(L, at, IGNORE_ERROR_STATS);
+    const counted = Boolean(lw.lua_toboolean(L, -1));
+    lw.lua_settop(L, -2);
+    return counted;
+  }
+
   /**
-   * The message of the Lua error on top of the main stack, as Redis words it: the `err` field of an error table, else
-   * "ERR " and the error as text (Lua 5.1 wording; a library error raised inside the prelude takes `where` instead of
-   * its prelude position).
+   * The message of the Lua error on top of the main stack, as Redis words it: the `err` field of an error table (a
+   * string, or a number as Lua prints it), else "ERR " and the error as text (Lua 5.1 wording; a library error raised
+   * inside the prelude takes `where` instead of its prelude position). Null for a table without a usable `err` field
+   * (Redis 7.0 does not survive that one).
    */
-  errorMessage(where = ''): string {
+  errorMessage(where = ''): string | null {
     const { stack } = this;
     const { lw, L } = stack;
     const type = lw.lua_type(L, -1);
     if (type === LuaType.TABLE) {
-      const hasErr = lw.lua_getfield(L, -1, 'err') === LuaType.STRING;
-      const err = hasErr ? stack.readBytes(L, -1) : null;
+      const errType = lw.lua_getfield(L, -1, 'err');
+      let err: string | null = null;
+      if (errType === LuaType.STRING) err = stack.readBytes(L, -1);
+      else if (errType === LuaType.NUMBER) {
+        lw.luaL_tolstring(L, -1, null);
+        err = stack.readBytes(L, -1);
+        lw.lua_settop(L, -2);
+      }
       lw.lua_settop(L, -2);
-      if (err !== null) return err;
-      return formatMessage(ScriptingMessages.ERR_PREFIXED, { message: ScriptingMessages.UNKNOWN_ERROR });
+      return err;
     }
     let text: string;
     if (type === LuaType.STRING) text = LuaReplyConverter.toLua51(stack.readBytes(L, -1).replace(PRELUDE_POSITION, where));
@@ -293,10 +330,16 @@ export default class LuaReplyConverter {
     return formatMessage(ScriptingMessages.ERR_PREFIXED, { message: text });
   }
 
-  /** The error reply of a failed script or function `name` (error object on top of the main stack, raised at `line`). */
-  scriptError(name: string, chunk: string, line: number): RespError {
+  /**
+   * The error reply of a failed script or function `name` (error object on top of the main stack, raised at `line`);
+   * null when the error object is a table without a usable `err` field.
+   */
+  scriptError(name: string, chunk: string, line: number): RespError | null {
     const message = this.errorMessage(`${chunk}:${line}: `);
-    return new RespError(formatMessage(ScriptingMessages.SCRIPT_ERROR, { message, name, chunk, line: String(line) }));
+    if (message === null) return null;
+    const { lw, L } = this.stack;
+    const counted = lw.lua_type(L, -1) === LuaType.TABLE && this.statsCounted(lw.lua_gettop(L));
+    return new RespError(formatMessage(ScriptingMessages.SCRIPT_ERROR, { message, name, chunk, line: String(line) }), counted);
   }
 
   /**

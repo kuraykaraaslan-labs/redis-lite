@@ -5,12 +5,18 @@
  * values byte-exact (msgpack payloads, UTF-8 text, anything) while still letting us use them as Map keys.
  */
 
+import { formatG17 } from '@/libs/number';
+
 export class Status {
   constructor(readonly value: string) {}
 }
 
 export class RespError {
-  constructor(readonly message: string) {}
+  /** `counted`: already counted in INFO errorstats (a script's error that a redis.call counted when it failed). */
+  constructor(
+    readonly message: string,
+    readonly counted = false,
+  ) {}
 }
 
 /** RESP3 map (`%`); RESP2 sends it as a flat array of key, value, key, value… */
@@ -98,16 +104,7 @@ export const PONG = new Status('PONG');
 
 export type Protocol = 2 | 3;
 
-/** Doubles as Redis prints them: shortest round-trip form, inf / -inf / nan. */
+/** Doubles as Redis 7.0 prints them: C `%.17g` (17 significant digits, trailing zeros dropped), inf / -inf / nan. */
 export function formatDouble(n: number): string {
-  if (Number.isNaN(n)) return 'nan';
-  if (n === Infinity) return 'inf';
-  if (n === -Infinity) return '-inf';
-  if (Object.is(n, -0)) return '-0';
-  if (n === 0) return '0';
-  // shortest round-trip digits in the %.17g layout: exponent form below 1e-4 and from 1e17, two exponent digits at least
-  const [digits, exponent] = n.toExponential().split('e');
-  const e = Number(exponent);
-  if (e < -4 || e >= 17) return `${digits}e${e < 0 ? '-' : '+'}${String(Math.abs(e)).padStart(2, '0')}`;
-  return String(n);
+  return formatG17(n);
 }

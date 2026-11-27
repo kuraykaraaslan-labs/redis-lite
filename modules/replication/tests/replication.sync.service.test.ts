@@ -52,15 +52,11 @@ async function fillAllTypes(m: Node): Promise<void> {
   await m.call('SADD', 'intset', '1', '2', '3');
   await m.call('ZADD', 'zset', '1', 'one', '2.5', 'two');
   await m.call('HSET', 'hash', 'f1', 'v1', 'f2', 'v2');
-  await m.call('HPEXPIRE', 'hash', '3600000', 'FIELDS', '1', 'f2');
   await m.call('XADD', 'stream', '1-1', 'k', 'v');
   await m.call('XADD', 'stream', '2-1', 'k2', 'v2');
   await m.call('XGROUP', 'CREATE', 'stream', 'g', '0');
   await m.call('XREADGROUP', 'GROUP', 'g', 'alice', 'COUNT', '1', 'STREAMS', 'stream', '>');
   await m.call('PFADD', 'hll', 'a', 'b', 'c', 'd');
-  await m.call('TS.CREATE', 'ts', 'LABELS', 'sensor', 't1');
-  await m.call('TS.ADD', 'ts', '1000', '1.5');
-  await m.call('TS.ADD', 'ts', '2000', '2.5');
   await m.call('GEOADD', 'geo', '13.361389', '38.115556', 'Palermo');
   await m.call('FUNCTION', 'LOAD', LIB);
   await m.call('SELECT', '3');
@@ -81,9 +77,6 @@ async function expectAllTypes(r: Node): Promise<void> {
   expect(await r.call('ZRANGE', 'zset', '0', '-1', 'WITHSCORES')).toEqual(['one', '1', 'two', '2.5']);
   expect(await r.call('HGET', 'hash', 'f1')).toBe('v1');
   expect(await r.call('HGET', 'hash', 'f2')).toBe('v2');
-  expect(await r.call('HPTTL', 'hash', 'FIELDS', '1', 'f1')).toEqual([-1]);
-  const fieldTtl = (await r.call('HPTTL', 'hash', 'FIELDS', '1', 'f2')) as number[];
-  expect(fieldTtl[0]).toBeGreaterThan(3_000_000);
   expect(await r.call('XRANGE', 'stream', '-', '+')).toEqual([
     ['1-1', ['k', 'v']],
     ['2-1', ['k2', 'v2']],
@@ -92,15 +85,9 @@ async function expectAllTypes(r: Node): Promise<void> {
   expect(groups).toHaveLength(1);
   expect(groups[0].slice(0, 6)).toEqual(['name', 'g', 'consumers', 1, 'pending', 1]);
   expect(await r.call('PFCOUNT', 'hll')).toBe(4);
-  expect(await r.call('TS.RANGE', 'ts', '-', '+')).toEqual([
-    [1000, '1.5'],
-    [2000, '2.5'],
-  ]);
-  expect(await r.call('TS.QUERYINDEX', 'sensor=t1')).toEqual(['ts']);
   const pos = (await r.call('GEOPOS', 'geo', 'Palermo')) as string[][];
   expect(Number(pos[0][0])).toBeCloseTo(13.361389, 5);
   expect(await r.call('FCALL', 'answer', '0')).toBe(42);
-  expect(await r.call('TYPE', 'ts')).toBe('TSDB-TYPE');
   const db3 = r.client();
   await db3.select(3);
   expect(await db3.get('db3key')).toBe('in db 3');

@@ -1,5 +1,5 @@
 /**
- * WAIT / WAITAOF with real acknowledgements, and min-replicas-to-write / min-replicas-max-lag (NOREPLICAS).
+ * WAIT with real acknowledgements, and min-replicas-to-write / min-replicas-max-lag (NOREPLICAS).
  *
  * Written from the Redis documentation and observable behaviour; no Redis source code was consulted.
  */
@@ -46,21 +46,6 @@ describe('WAIT', () => {
     await expect(r.call('WAIT', '1', '10')).rejects.toThrow(
       'ERR WAIT cannot be used with replica instances. Please also note that since Redis 4.0 if a replica is configured to be writable (which is not the default) writes to replicas are just local and are not propagated.',
     );
-  });
-});
-
-describe('WAITAOF', () => {
-  it('counts replicas whose AOF fsynced the write', async () => {
-    const m = await startNode({ appendonly: 'yes' });
-    const withAof = await startReplica(m, { appendonly: 'yes' });
-    const without = await startReplica(m);
-    await waitReplicas(m, 2);
-    await waitSynced(m, withAof);
-    await waitSynced(m, without);
-    await m.call('SET', 'k', 'v');
-    expect(await m.call('WAITAOF', '1', '1', '5000')).toEqual([1, 1]);
-    // only one replica has an AOF: asking for two times out with one
-    expect(await m.call('WAITAOF', '0', '2', '300')).toEqual([0, 1]);
   });
 });
 

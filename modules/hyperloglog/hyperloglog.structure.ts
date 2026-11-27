@@ -1,3 +1,6 @@
+import MemoryService from '@/modules/memory/memory.service';
+import type { SdsAlloc } from '@/modules/memory/memory.types';
+
 import {
   HLL_DENSE,
   HLL_DENSE_SIZE,
@@ -33,6 +36,12 @@ import { hllPatLen } from './hyperloglog.hash';
  * the representation changes size.
  */
 export class Hll {
+  /**
+   * The string's allocation (memory accounting): a sparse update first makes room for 3 more bytes (greedy growth), a
+   * promotion to dense allocates a fresh dense string. Undefined: a fresh allocation of `bytes`.
+   */
+  sds: SdsAlloc | undefined;
+
   constructor(public bytes: Uint8Array) {}
 
   /** A new empty HLL: sparse, XZERO runs covering every register, valid cached cardinality 0. */
@@ -49,7 +58,9 @@ export class Hll {
       p += 2;
       left -= xz;
     }
-    return new Hll(b);
+    const hll = new Hll(b);
+    hll.sds = MemoryService.sdsFresh(b.length);
+    return hll;
   }
 
   /** Parses a stored string; undefined when it is not a valid HyperLogLog (the WRONGTYPE case). */
@@ -132,6 +143,7 @@ export class Hll {
     }
     if (idx !== HLL_REGISTERS) return false;
     this.bytes = dense;
+    this.sds = MemoryService.sdsFresh(dense.length);
     return true;
   }
 
@@ -142,6 +154,7 @@ export class Hll {
 
   private sparseSet(index: number, count: number, sparseMaxBytes: number): number {
     if (count > SPARSE_VAL_MAX_VALUE) return this.promote(index, count);
+    this.sds = MemoryService.sdsMakeRoom(this.sds ?? MemoryService.sdsFresh(this.bytes.length), this.bytes.length, 3);
     let b = this.bytes;
     let end = b.length;
 

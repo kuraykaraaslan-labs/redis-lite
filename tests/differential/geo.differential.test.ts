@@ -1,5 +1,6 @@
-import { differential, s, v } from './differential.harness';
+import { differential, s } from './differential.harness';
 import { sorted } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 
 /** Sicily example points plus a far one. */
 const SICILY = 'GEOADD g 13.361389 38.115556 Palermo 15.087269 37.502669 Catania 12.758489 38.788135 Edge';
@@ -47,7 +48,7 @@ differential('geo', [
     'GEOSEARCHSTORE d g FROMMEMBER Palermo BYRADIUS 300 mi STOREDIST COUNT 2', 'ZRANGE d 0 -1', 'ZCOUNT d 0 0', 'ZCOUNT d 103.3 103.4',
   ]),
   s('STOREDIST stores the exact distance double', [SICILY, 'GEOSEARCHSTORE d g FROMLONLAT 15 37 BYRADIUS 200 km ASC STOREDIST', 'ZCOUNT d 56.441257870158204 56.441257870158204', 'ZCOUNT d 190.44242984775784 190.44242984775784']),
-  s('STOREDIST scores printed in full', [SICILY, 'GEOSEARCHSTORE d g FROMLONLAT 15 37 BYRADIUS 200 km ASC STOREDIST', 'ZRANGE d 0 -1 WITHSCORES'], v('7.2 prints double replies in shortest round-trip form; 7.0 uses %.17g; the stored double is identical (exact ZCOUNT matches)', 'high')),
+  s('STOREDIST scores printed in full', [SICILY, 'GEOSEARCHSTORE d g FROMLONLAT 15 37 BYRADIUS 200 km ASC STOREDIST', 'ZRANGE d 0 -1 WITHSCORES']),
   s('GEOSEARCHSTORE empty result deletes destination', [SICILY, 'SET d x', 'GEOSEARCHSTORE d g FROMLONLAT -100 0 BYRADIUS 1 km', 'EXISTS d', 'GEOSEARCHSTORE d nokey FROMLONLAT 0 0 BYRADIUS 1 km']),
   s('GEOSEARCHSTORE errors', [SICILY, 'GEOSEARCHSTORE d g FROMLONLAT 0 0 BYRADIUS 1 km WITHDIST', 'GEOSEARCHSTORE d g FROMLONLAT 0 0 BYRADIUS 1 km WITHCOORD', 'GEOSEARCHSTORE d g', 'GEOSEARCHSTORE d g FROMLONLAT 0 0 BYRADIUS 1 km STORE x']),
 
@@ -61,4 +62,11 @@ differential('geo', [
     'GEORADIUS g 15 37 1 km ANY', 'GEORADIUS g 15 37 1 km FOO', 'GEORADIUS g 15 37 1 km COUNT -2', 'GEORADIUSBYMEMBER g Palermo', 'GEORADIUS g 15 37 1 km BYBOX 1 1 km',
   ]),
   s('geo over a plain sorted set', ['ZADD z 0 a 3471579339700058 b', 'GEOPOS z a b', 'GEOHASH z a b', 'GEODIST z a b km']),
+
+  // integer arguments at the int64 and int32 edges (see differential.probes)
+  ...intProbes('GEORADIUS_RO COUNT', ['GEOADD g 13.361389 38.115556 Palermo', 'GEORADIUS_RO g 15 37 200 km COUNT $N', 'GEOSEARCH g FROMLONLAT 15 37 BYRADIUS 200 km COUNT $N ANY']),
+  ...intProbes('GEO COUNT', [
+    'GEOADD g 13.361389 38.115556 Palermo', 'GEORADIUS g 15 37 200 km COUNT $N', 'GEORADIUSBYMEMBER g Palermo 10 km COUNT $N',
+    'GEOSEARCH g FROMLONLAT 15 37 BYRADIUS 200 km COUNT $N', 'GEOSEARCHSTORE d g FROMLONLAT 15 37 BYRADIUS 200 km COUNT $N',
+  ]),
 ]);

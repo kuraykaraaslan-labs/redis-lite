@@ -2,8 +2,9 @@ import { expect, it } from 'vitest';
 
 import type { DiffConnection } from './differential.connection';
 import { differential, s, v } from './differential.harness';
-import { sorted, sortedPairs } from './differential.normalizers';
+import { debugObject, pttlSeconds, sorted, sortedPairs } from './differential.normalizers';
 import type { Normalizer } from './differential.normalizers';
+import { intProbes } from './differential.probes';
 import { parseResp, payload as respPayload, show } from './differential.resp';
 
 const FAR_MS = '4102444800000';
@@ -46,10 +47,37 @@ const BAD_DATA = dumpOf('\x00\x40\x64v'); // claims 100 bytes, holds 1 (and 10 o
 const OVERRUN = dumpOf('\x00\x05v'); // claims 5 bytes: Redis reads the version and 2 CRC bytes as the value
 const BAD_TYPE = dumpOf('\xc8\x01v'); // object type 200
 
+/** A listpack of short strings (each at most 63 bytes). */
+function listpack(items: string[]): string {
+  const body = items.map((x) => String.fromCharCode(0x80 | x.length) + x + String.fromCharCode(x.length + 1)).join('');
+  return le(BigInt(6 + body.length + 1), 4) + le(BigInt(items.length), 2) + body + '\xff';
+}
+const lenByte = (s: string): string => String.fromCharCode(s.length);
+const SET_LISTPACK = dumpOf('\x14' + lenByte(listpack(['a', 'b', 'c'])) + listpack(['a', 'b', 'c'])); // RDB type 20 (7.2+)
+const STREAM_3 = dumpOf('\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'); // RDB type 21 (7.2+), empty stream
+const QUICKLIST_3 = dumpOf('\x12\x03' + ['a', 'b', 'c'].map((x) => '\x02' + lenByte(listpack([x])) + listpack([x])).join('')); // three 1-element nodes
+const PLAIN_LIST = dumpOf('\x01\x05\x01a\x01b\x01c\x01d\x01e'); // RDB type 1: laid out by the server's fill
+
 differential('keys dump', [
   // DUMP
   s('DUMP missing key', ['DUMP missing', 'DUMP', 'DUMP a b']),
-  s('DUMP payload of a string', ['SET k v', 'DUMP k'], v('DUMP payload ends with the RDB version: 10 in 7.0, 11 in 7.2, 12 in 7.4+')),
+  s('DUMP payload of a string', ['SET k v', 'DUMP k']),
+  s('DUMP payloads of strings', ['SET i 12345', 'DUMP i', 'SET big 123456789012', 'DUMP big', 'SET e ""', 'DUMP e', 'SET neg -7', 'DUMP neg']),
+  s('DUMP payloads of lists (quicklist nodes)', [
+    'RPUSH a x 1 -200 yy', 'DUMP a', 'LPUSH b 1 2 3', 'DUMP b',
+    'CONFIG SET list-max-listpack-size 3', 'RPUSH c 0 1 2 3 4 5 6 7', 'DUMP c', 'LPUSH d 0 1 2 3 4 5 6 7', 'DUMP d',
+    'LINSERT c BEFORE 4 x', 'DUMP c', 'LINSERT c AFTER 1 y', 'DUMP c', 'LREM c 0 6', 'DUMP c', 'LTRIM c 1 -2', 'DUMP c', 'LSET c 0 zzz', 'DUMP c',
+  ]),
+  s('DUMP payloads of intsets, listpack hashes and zsets', [
+    'SADD s 5 -3 1000000 7', 'DUMP s', 'SADD w 1 70000', 'DUMP w', 'HSET h f v n 12', 'DUMP h',
+    'ZADD z 1 a 2.5 b 0.1 c -0.0 d 1e17 e 4611686018427387904 f 4611686018427387905 g inf h', 'DUMP z',
+  ]),
+  // a hash table's member order is its own: compare the length and the RDB type byte only
+  s('DUMP of a set keeps its encoding', ['SADD s 1 2 3 x', 'SREM s x', 'OBJECT ENCODING s', { cmd: 'DUMP s', norm: (r) => r.slice(0, r.indexOf('\r\n') + 3) }]),
+  s('DUMP of a hash or zset keeps its encoding', [
+    'CONFIG SET hash-max-listpack-entries 1', 'HSET h a 1 b 2', 'HDEL h b', 'CONFIG SET hash-max-listpack-entries 128', 'OBJECT ENCODING h', 'DUMP h',
+    'CONFIG SET zset-max-listpack-entries 1', 'ZADD z 1 a 2 b', 'ZREM z b', 'CONFIG SET zset-max-listpack-entries 128', 'OBJECT ENCODING z', 'DUMP z',
+  ]),
 
   // RESTORE of hand-built payloads
   s('RESTORE a string payload', [{ cmd: ['RESTORE', 'k', '0', STR_V] }, 'GET k', 'TTL k', 'OBJECT ENCODING k', { cmd: ['RESTORE', 'n', '0', STR_INT] }, 'GET n', 'OBJECT ENCODING n']),
@@ -75,9 +103,20 @@ differential('keys dump', [
   ]),
   s('RESTORE payload whose string overruns into the footer', [{ cmd: ['RESTORE', 'k', '0', OVERRUN] }, 'STRLEN k']),
   s('RESTORE bad payload onto existing key', ['SET k v', { cmd: ['RESTORE', 'k', '0', BAD_CRC] }, { cmd: ['RESTORE', 'k', '0', BAD_CRC, 'REPLACE'] }, 'GET k']),
-  s('RESTORE payload with a newer RDB version', [{ cmd: ['RESTORE', 'k', '0', restamp(STR_V, 12)] }, 'GET k'], v('7.0 rejects RDB version > 10; 7.4+ writes and reads version 12')),
+  s('RESTORE payload with a newer RDB version', [{ cmd: ['RESTORE', 'k', '0', restamp(STR_V, 12)] }, 'GET k']),
+  s('RESTORE payload with RDB version 11', [{ cmd: ['RESTORE', 'k', '0', restamp(STR_V, 11)] }, 'EXISTS k']),
+  s('RESTORE of types added after 7.0', [{ cmd: ['RESTORE', 's', '0', SET_LISTPACK] }, { cmd: ['RESTORE', 'x', '0', STREAM_3] }, 'EXISTS s x']),
+  s('RESTORE keeps the quicklist nodes of the payload', [
+    { cmd: ['RESTORE', 'l', '0', QUICKLIST_3] }, { cmd: 'DEBUG OBJECT l', norm: debugObject }, 'RPUSH l d', 'DUMP l',
+    'CONFIG SET list-max-listpack-size 2', { cmd: ['RESTORE', 'p', '0', PLAIN_LIST] }, 'DUMP p',
+  ]),
   s('RESTORE payload with an unknown future RDB version', [{ cmd: ['RESTORE', 'k', '0', restamp(STR_V, 99)] }, 'EXISTS k']),
   s('RESTORE payload with an old RDB version', [{ cmd: ['RESTORE', 'k', '0', restamp(STR_V, 6)] }, 'GET k']),
+
+  // integer arguments at the int64 and int32 edges
+  ...intProbes('RESTORE ttl', [{ cmd: ['RESTORE', 'k', '$N', STR_V] }, 'EXISTS k', 'TTL k', { cmd: 'PTTL k', norm: pttlSeconds }]),
+  ...intProbes('RESTORE ABSTTL', [{ cmd: ['RESTORE', 'k', '$N', STR_V, 'ABSTTL'] }, 'EXISTS k', 'PEXPIRETIME k']),
+  ...intProbes('RESTORE IDLETIME and FREQ', [{ cmd: ['RESTORE', 'a', '0', STR_V, 'IDLETIME', '$N'] }, 'EXISTS a', { cmd: ['RESTORE', 'b', '0', STR_V, 'FREQ', '$N'] }, 'EXISTS b']),
 ]);
 
 /** Sends one command; the raw reply. */
@@ -115,10 +154,9 @@ const KINDS: Kind[] = [
   {
     name: 'large list',
     setup: [['RPUSH', 'k', ...range(1000, (i) => [`item-${i}`])]], read: [[['LRANGE', 'k', '0', '-1']], [['OBJECT', 'ENCODING', 'k']]],
-    body: 'quicklist node fill (size estimate per entry) was reworked in 7.2 with listpack lists; low confidence',
   },
   { name: 'intset', setup: [['SADD', 'k', '5', '-3', '1000000', '7']], read: [[['SMEMBERS', 'k']], [['OBJECT', 'ENCODING', 'k']]] },
-  { name: 'small string set', setup: [['SADD', 'k', 'a', 'b', 'c']], read: [[['SMEMBERS', 'k'], sorted]], newEncoding: 'small non-integer sets are dumped as set-listpack (RDB type 20) since 7.2' },
+  { name: 'small string set', setup: [['SADD', 'k', 'a', 'b', 'c']], read: [[['SMEMBERS', 'k'], sorted], [['OBJECT', 'ENCODING', 'k']]], body: false },
   { name: 'hashtable set', setup: [['SADD', 'k', ...range(600, (i) => [`m${i}`])]], read: [[['SMEMBERS', 'k'], sorted], [['SCARD', 'k']], [['OBJECT', 'ENCODING', 'k']]], body: false },
   { name: 'listpack hash', setup: [['HSET', 'k', 'f1', 'v1', 'f2', '2', 'f3', 'v3']], read: [[['HGETALL', 'k']], [['OBJECT', 'ENCODING', 'k']]] },
   { name: 'hashtable hash', setup: [['HSET', 'k', ...range(600, (i) => [`f${i}`, `v${i}`])]], read: [[['HGETALL', 'k'], sortedPairs], [['OBJECT', 'ENCODING', 'k']]], body: false },
@@ -131,7 +169,8 @@ const KINDS: Kind[] = [
       ['XGROUP', 'CREATE', 'k', 'g', '0'], ['XREADGROUP', 'GROUP', 'g', 'alice', 'COUNT', '1', 'STREAMS', 'k', '>'], ['XGROUP', 'CREATE', 'k', 'g2', '$'],
     ],
     read: [[['XRANGE', 'k', '-', '+']], [['XLEN', 'k']], [['XINFO', 'GROUPS', 'k']], [['XPENDING', 'k', 'g']]],
-    newEncoding: 'streams are dumped as RDB type 21 (consumer active-time) since 7.2',
+    // the bytes hold the consumer's seen-time (wall clock), so only the restored content is compared
+    body: false,
   },
   { name: 'sparse hll', setup: [['PFADD', 'k', 'a', 'b', 'c']], read: [[['PFCOUNT', 'k']], [['GET', 'k']]] },
   { name: 'dense hll', setup: [['PFADD', 'k', ...range(3000, (i) => [`e${i}`])]], read: [[['PFCOUNT', 'k']], [['GET', 'k']]] },
@@ -170,7 +209,7 @@ differential('keys dump cross-server', [], ({ env }) => {
       });
     }
 
-    // redis-lite writes RDB version 12, which 7.0 refuses: re-stamp it to the oracle's version to check the object bytes
+    // re-stamped to the oracle's RDB version, so a version mismatch does not hide the object bytes check
     const restoreTest = kind.newEncoding ? it.fails : it;
     restoreTest(`${kind.name}: redis-lite DUMP (re-stamped to the oracle's RDB version) restores into Redis${kind.newEncoding ? ` (version: ${kind.newEncoding})` : ''}`, async () => {
       const p = await env().pair(2);
@@ -204,7 +243,7 @@ differential('keys dump cross-server', [], ({ env }) => {
     });
   }
 
-  it.fails('unmodified redis-lite DUMP restores into Redis 7.0 (version: RDB version 12 since 7.4, 7.0 accepts <= 10)', async () => {
+  it('unmodified redis-lite DUMP restores into Redis 7.0 (both write RDB version 10)', async () => {
     const p = await env().pair(2);
     try {
       await call(p.lite, ['SET', 'k', 'v']);

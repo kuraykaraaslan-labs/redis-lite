@@ -2,9 +2,7 @@ import type { Reply } from '@/libs/resp';
 import { NULL_ARRAY, RespError } from '@/libs/resp';
 
 import PropagateBaseRules from './persistence.propagate_base.rules';
-import PropagateHashRules from './persistence.propagate_hashes.rules';
 import PropagateStreamRules from './persistence.propagate_streams.rules';
-import PropagateTimeseriesRules from './persistence.propagate_timeseries.rules';
 import type { PropagateContext, PropagatedOp } from './persistence.types';
 
 /**
@@ -194,22 +192,15 @@ export default class PersistencePropagateService {
         return [op(db, ['PEXPIREAT', key, at === undefined ? argv[2] : String(at), ...argv.slice(3)])];
       }
       case 'restore':
+      case 'restore-asking':
         return P.propagateRestore(argv, ctx);
+      case 'migrate':
+        // the keys MIGRATE deleted are propagated as one DEL by the command itself
+        return [];
 
       // ---- hashes ------------------------------------------------------------------------------------------------
       case 'hincrbyfloat':
         return [op(db, ['HSET', argv[1], argv[2], str(reply)])];
-      case 'hexpire':
-      case 'hpexpire':
-      case 'hexpireat':
-      case 'hpexpireat':
-        return PropagateHashRules.hexpire(argv, reply, ctx);
-      case 'hgetdel':
-        return PropagateHashRules.hgetdel(argv, reply, ctx);
-      case 'hgetex':
-        return PropagateHashRules.hgetex(argv, reply, ctx);
-      case 'hsetex':
-        return PropagateHashRules.hsetex(argv, reply, ctx);
 
       // ---- sets --------------------------------------------------------------------------------------------------
       case 'spop': {
@@ -276,15 +267,6 @@ export default class PersistencePropagateService {
         return PropagateStreamRules.xclaim(argv, reply, ctx);
       case 'xautoclaim':
         return PropagateStreamRules.xautoclaim(argv, reply, ctx);
-
-      // ---- time series -------------------------------------------------------------------------------------------
-      case 'ts.add':
-        return PropagateTimeseriesRules.add(argv, reply, ctx);
-      case 'ts.madd':
-        return PropagateTimeseriesRules.mAdd(argv, reply, ctx);
-      case 'ts.incrby':
-      case 'ts.decrby':
-        return PropagateTimeseriesRules.incrBy(argv, reply, ctx);
 
       default:
         return P.verbatim(argv, db);

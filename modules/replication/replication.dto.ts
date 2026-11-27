@@ -49,17 +49,13 @@ export const PsyncDTO = z.tuple([z.string(), z.string()], z.string()).transform(
 /** REPLCONF <option> <value> [<option> <value> …]: options in pairs, each one known. */
 export const ReplconfDTO = z.array(z.string()).transform((args, ctx) => {
   if (args.length % 2) return reject(ctx, RespMessages.SYNTAX);
-  const pairs: Array<{ option: z.infer<typeof ReplconfOptionEnum>; value: string; extra: string[] }> = [];
+  const pairs: Array<{ option: z.infer<typeof ReplconfOptionEnum>; value: string }> = [];
   for (let i = 0; i < args.length; i += 2) {
     const option = ReplconfOptionEnum.safeParse(args[i].toLowerCase());
     if (!option.success) return reject(ctx, formatMessage(ReplicationMessages.REPLCONF_UNKNOWN, { option: args[i] }));
-    // ACK <offset> [FACK <aofoffset>]: FACK is ACK's own pair
-    if (option.data === 'ack' && args[i + 2]?.toLowerCase() === 'fack' && i + 3 < args.length) {
-      pairs.push({ option: option.data, value: args[i + 1], extra: [args[i + 3]] });
-      i += 2;
-      continue;
-    }
-    pairs.push({ option: option.data, value: args[i + 1], extra: [] });
+    pairs.push({ option: option.data, value: args[i + 1] });
+    // ACK ends the command: whatever follows it is not looked at
+    if (option.data === 'ack') break;
   }
   return { pairs };
 });
@@ -83,7 +79,8 @@ export const FailoverDTO = z.array(z.string()).transform((args, ctx) => {
     if (seen.has(opt)) return reject(ctx, RespMessages.SYNTAX);
     seen.add(opt);
     if (opt === 'to' && i + 2 < args.length) {
-      const p = parseArg(PortSchema, args[i + 2]);
+      // any int64: FAILOVER does not range-check the port (an unknown one fails to match a replica)
+      const p = parseArg(IntegerSchema, args[i + 2]);
       if (!p.ok) return reject(ctx, p.error);
       host = args[i + 1];
       port = p.value;

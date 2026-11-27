@@ -1,11 +1,12 @@
 import KeysDatabaseService from './keys.database.service';
 import KeysDumpService from './keys.dump.service';
 import KeysExpireService from './keys.expire.service';
+import KeysMigrateService from './keys.migrate.service';
 import KeysObjectService from './keys.object.service';
 import KeysSortService from './keys.sort.service';
 import KeysSpaceService from './keys.space.service';
 
-export { KeysDatabaseService, KeysDumpService, KeysExpireService, KeysObjectService, KeysSortService, KeysSpaceService };
+export { KeysDatabaseService, KeysDumpService, KeysExpireService, KeysMigrateService, KeysObjectService, KeysSortService, KeysSpaceService };
 
 /** The keys module's public API: one flat facade over the sub-services (other modules import only this class). */
 export default class KeysService {
@@ -40,4 +41,7 @@ export default class KeysService {
   static rdbError = KeysDumpService.rdbError.bind(KeysDumpService);
   static dump = KeysDumpService.dump.bind(KeysDumpService);
   static restore = KeysDumpService.restore.bind(KeysDumpService);
+
+  // MIGRATE
+  static migrate = KeysMigrateService.migrate.bind(KeysMigrateService);
 }
